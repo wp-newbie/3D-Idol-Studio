@@ -1,0 +1,633 @@
+import * as THREE from 'three';
+import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
+import type { AvatarPosture, SleepingPosition } from '../types/studio';
+import type { EmotionBodyLanguage } from './emotionEngine';
+
+type PoseBoneName =
+  | 'hips'
+  | 'spine'
+  | 'chest'
+  | 'upperChest'
+  | 'leftUpperArm'
+  | 'rightUpperArm'
+  | 'leftLowerArm'
+  | 'rightLowerArm'
+  | 'leftHand'
+  | 'rightHand'
+  | 'leftUpperLeg'
+  | 'rightUpperLeg'
+  | 'leftLowerLeg'
+  | 'rightLowerLeg'
+  | 'leftFoot'
+  | 'rightFoot';
+
+const POSE_BONES: PoseBoneName[] = [
+  'hips',
+  'spine',
+  'chest',
+  'upperChest',
+  'leftUpperArm',
+  'rightUpperArm',
+  'leftLowerArm',
+  'rightLowerArm',
+  'leftHand',
+  'rightHand',
+  'leftUpperLeg',
+  'rightUpperLeg',
+  'leftLowerLeg',
+  'rightLowerLeg',
+  'leftFoot',
+  'rightFoot',
+];
+
+const FINGER_CURL_BONES: { name: VRMHumanBoneName; side: 'left' | 'right'; weight: number }[] = [
+  { name: 'leftIndexProximal', side: 'left', weight: 0.36 },
+  { name: 'leftIndexIntermediate', side: 'left', weight: 0.46 },
+  { name: 'leftIndexDistal', side: 'left', weight: 0.28 },
+  { name: 'leftMiddleProximal', side: 'left', weight: 0.42 },
+  { name: 'leftMiddleIntermediate', side: 'left', weight: 0.52 },
+  { name: 'leftMiddleDistal', side: 'left', weight: 0.32 },
+  { name: 'leftRingProximal', side: 'left', weight: 0.46 },
+  { name: 'leftRingIntermediate', side: 'left', weight: 0.56 },
+  { name: 'leftRingDistal', side: 'left', weight: 0.34 },
+  { name: 'leftLittleProximal', side: 'left', weight: 0.5 },
+  { name: 'leftLittleIntermediate', side: 'left', weight: 0.58 },
+  { name: 'leftLittleDistal', side: 'left', weight: 0.36 },
+  { name: 'leftThumbProximal', side: 'left', weight: 0.22 },
+  { name: 'leftThumbDistal', side: 'left', weight: 0.24 },
+  { name: 'rightIndexProximal', side: 'right', weight: 0.36 },
+  { name: 'rightIndexIntermediate', side: 'right', weight: 0.46 },
+  { name: 'rightIndexDistal', side: 'right', weight: 0.28 },
+  { name: 'rightMiddleProximal', side: 'right', weight: 0.42 },
+  { name: 'rightMiddleIntermediate', side: 'right', weight: 0.52 },
+  { name: 'rightMiddleDistal', side: 'right', weight: 0.32 },
+  { name: 'rightRingProximal', side: 'right', weight: 0.46 },
+  { name: 'rightRingIntermediate', side: 'right', weight: 0.56 },
+  { name: 'rightRingDistal', side: 'right', weight: 0.34 },
+  { name: 'rightLittleProximal', side: 'right', weight: 0.5 },
+  { name: 'rightLittleIntermediate', side: 'right', weight: 0.58 },
+  { name: 'rightLittleDistal', side: 'right', weight: 0.36 },
+  { name: 'rightThumbProximal', side: 'right', weight: 0.22 },
+  { name: 'rightThumbDistal', side: 'right', weight: 0.24 },
+];
+
+export const STUDIO_SEAT_HEIGHT = 0.45;
+
+/**
+ * Humanoid Pose Controller for `@pixiv/three-vrm` normalized bones.
+ * Smoothly blends between a grounded seated pose (hips lowered onto a y=0.45 studio stool,
+ * 90° forward knee bend, feet near y=0, hands resting on lap with relaxed finger curl)
+ * and a relaxed natural standing pose, while layering breathing and emotion body language.
+ */
+export class AvatarPoseController {
+  private restHipsY = 0.9;
+  private restHipsZ = 0;
+  private seatedHipDrop = 0.44;
+  private seatedHipsZOffset = -0.05;
+  private currentHipsY = 0.9;
+  private currentHipsZ = 0;
+  private currentFingerCurl = 0;
+  private hasBoundVrm = false;
+  private smoothRot: Record<PoseBoneName, { x: number; y: number; z: number }>;
+
+  constructor() {
+    this.smoothRot = {} as Record<PoseBoneName, { x: number; y: number; z: number }>;
+    for (const b of POSE_BONES) {
+      this.smoothRot[b] = { x: 0, y: 0, z: 0 };
+    }
+  }
+
+  /**
+   * Calibrates rest hip height and leg length from the loaded VRM so the seated hip drop
+   * lands cleanly on `STUDIO_SEAT_HEIGHT` (~0.45m) without floating or sinking into the floor.
+   */
+  public bindVrm(vrm: VRM, modelScale = 1, initialPosture: AvatarPosture = 'seated'): void {
+    const humanoid = vrm.humanoid;
+    if (!humanoid) return;
+
+    const hips = humanoid.getNormalizedBoneNode('hips');
+    const upperLeg =
+      humanoid.getNormalizedBoneNode('leftUpperLeg') ||
+      humanoid.getNormalizedBoneNode('rightUpperLeg');
+    const lowerLeg =
+      humanoid.getNormalizedBoneNode('leftLowerLeg') ||
+      humanoid.getNormalizedBoneNode('rightLowerLeg');
+    const foot =
+      humanoid.getNormalizedBoneNode('leftFoot') ||
+      humanoid.getNormalizedBoneNode('rightFoot');
+
+    this.restHipsY = hips ? hips.position.y : 0.9;
+    this.restHipsZ = hips ? hips.position.z : 0;
+
+    // Measure leg length in local VRM units (upperLeg -> lowerLeg -> foot)
+    const vHip = new THREE.Vector3();
+    const vKnee = new THREE.Vector3();
+    const vAnkle = new THREE.Vector3();
+    if (upperLeg && lowerLeg && foot) {
+      upperLeg.updateWorldMatrix(true, false);
+      lowerLeg.updateWorldMatrix(true, false);
+      foot.updateWorldMatrix(true, false);
+      upperLeg.getWorldPosition(vHip);
+      lowerLeg.getWorldPosition(vKnee);
+      foot.getWorldPosition(vAnkle);
+      const scaleSafe = Math.max(0.1, modelScale);
+      const thighLenLocal = vHip.distanceTo(vKnee) / scaleSafe;
+      const shinLenLocal = vKnee.distanceTo(vAnkle) / scaleSafe;
+      const totalLegLocal = thighLenLocal + shinLenLocal;
+
+      // Target seated hip height so thighs rest on STUDIO_SEAT_HEIGHT + slight thigh thickness (~0.04m)
+      // while shin hangs vertically to put soles right at y = 0.
+      const seatTopLocal = (STUDIO_SEAT_HEIGHT + 0.035) / scaleSafe;
+      const targetSeatedHipsY = Math.max(shinLenLocal + 0.04, seatTopLocal);
+      const computedDrop = this.restHipsY - targetSeatedHipsY;
+
+      // Clamp to realistic proportion of leg length (approx 0.42..0.50m in normalized 1.62m space)
+      const minDrop = Math.min(0.38, totalLegLocal * 0.44);
+      const maxDrop = Math.max(0.5, totalLegLocal * 0.56);
+      this.seatedHipDrop = THREE.MathUtils.clamp(computedDrop, minDrop, maxDrop);
+    } else {
+      this.seatedHipDrop = 0.44 / Math.max(0.25, modelScale);
+    }
+
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    // Shift hips slightly back over the stool center (character's -forward direction)
+    this.seatedHipsZOffset = (isVrm0 ? 0.055 : -0.055) / Math.max(0.25, modelScale);
+
+    this.currentHipsY =
+      initialPosture === 'seated' ? this.restHipsY - this.seatedHipDrop : this.restHipsY;
+    this.currentHipsZ =
+      initialPosture === 'seated' ? this.restHipsZ + this.seatedHipsZOffset : this.restHipsZ;
+    this.currentFingerCurl =
+      initialPosture === 'seated' ? 1 : initialPosture === 'sleeping' ? 0.72 : 0.45;
+    this.hasBoundVrm = true;
+
+    // Snap immediately on first bind so the avatar never flashes a stiff A-pose frame on load
+    if (hips) {
+      hips.position.y = this.currentHipsY;
+      hips.position.z = this.currentHipsZ;
+    }
+  }
+
+  public getSeatedHipDropWorld(modelScale = 1): number {
+    return this.seatedHipDrop * modelScale;
+  }
+
+  public restoreStandingHips(vrm: VRM, dt: number): void {
+    if (!this.hasBoundVrm) return;
+    const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+    if (!hips) return;
+    const alpha = Math.min(1, dt * 8.5);
+    this.currentHipsY = THREE.MathUtils.lerp(this.currentHipsY, this.restHipsY, alpha);
+    this.currentHipsZ = THREE.MathUtils.lerp(this.currentHipsZ, this.restHipsZ, alpha);
+    hips.position.y = this.currentHipsY;
+    hips.position.z = this.currentHipsZ;
+  }
+
+  /**
+   * Drives normalized humanoid bones for the seated pose (or instant snap when `snap = true`).
+   * Must be called BEFORE `vrm.update(dt)`.
+   */
+  public applySeatedPose(params: {
+    vrm: VRM;
+    dt: number;
+    elapsed: number;
+    bodyLang: EmotionBodyLanguage;
+    musicBass: number;
+    musicBeat: number;
+    isMusicPlaying: boolean;
+    isSleeping: boolean;
+    snap?: boolean;
+  }): void {
+    const {
+      vrm,
+      dt,
+      elapsed,
+      bodyLang,
+      musicBass,
+      musicBeat,
+      isMusicPlaying,
+      isSleeping,
+      snap = false,
+    } = params;
+
+    const humanoid = vrm.humanoid;
+    if (!humanoid) return;
+
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    // Normalized bone right-handed convention in @pixiv/three-vrm v3:
+    // - VRM 1.0 faces +Z in normalized bone space:
+    //   * Raising thigh forward (+Z) is NEGATIVE X rotation (-Math.PI * 0.48)
+    //   * Bending knee downward back to -Y is POSITIVE X rotation (+Math.PI * 0.48)
+    //   * Lowering left arm (+X -> -Y) is NEGATIVE Z rotation (-1.18)
+    // - VRM 0.x faces -Z in normalized bone space (rotated 180° on vrm.scene by rotateVRM0):
+    //   * Raising thigh forward (-Z) is POSITIVE X rotation (+Math.PI * 0.48)
+    //   * Bending knee downward back to -Y is NEGATIVE X rotation (-Math.PI * 0.48)
+    //   * Lowering left arm (-X -> -Y) is POSITIVE Z rotation (+1.18)
+    const forwardSign = isVrm0 ? 1 : -1;
+    const armDownSign = isVrm0 ? 1 : -1;
+
+    const breath = Math.sin(elapsed * Math.max(1.4, bodyLang.breathingRate || 2.0));
+    const gentleSway = Math.sin(elapsed * (isMusicPlaying ? 2.4 : 0.75));
+    const alpha = snap ? 1 : Math.min(1, dt * 7.5);
+
+    // 1. Lower hips bone cleanly onto studio stool height
+    const hipsNode = humanoid.getNormalizedBoneNode('hips');
+    if (hipsNode && this.hasBoundVrm) {
+      const targetHipsY = this.restHipsY - this.seatedHipDrop;
+      const targetHipsZ = this.restHipsZ + this.seatedHipsZOffset;
+      this.currentHipsY = THREE.MathUtils.lerp(this.currentHipsY, targetHipsY, alpha);
+      this.currentHipsZ = THREE.MathUtils.lerp(this.currentHipsZ, targetHipsZ, alpha);
+      hipsNode.position.y = this.currentHipsY;
+      hipsNode.position.z = this.currentHipsZ;
+    }
+
+    // 2. Seated bone target rotations (relative normalized offsets only — never overrides avatarRoot.rotation.y)
+    const thighBendX = forwardSign * (Math.PI * 0.48); // ~86° forward toward knees
+    const kneeBendX = -forwardSign * (Math.PI * 0.48); // ~86° downward so calves hang vertically
+    const footLevelX = forwardSign * 0.05; // keep soles parallel to floor
+
+    const targets: Record<PoseBoneName, { x: number; y: number; z: number }> = {
+      hips: {
+        x: 0,
+        y: Math.sin(elapsed * 0.65) * 0.014,
+        z: bodyLang.hipWeightShift * 0.45,
+      },
+      spine: {
+        // Subtle relaxed upright posture + emotion lean
+        x:
+          forwardSign * 0.06 +
+          bodyLang.spineLeanX * 0.75 +
+          (isMusicPlaying ? musicBeat * 0.045 : 0),
+        y: gentleSway * (isMusicPlaying ? 0.06 : 0.018),
+        z: isMusicPlaying ? Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
+      },
+      chest: {
+        // Gentle counter-curve + breathing sine wave
+        x: -forwardSign * 0.04 + breath * 0.015 + bodyLang.spineLeanX * 0.35,
+        y: 0,
+        z: 0,
+      },
+      upperChest: {
+        x: breath * 0.01,
+        y: 0,
+        z: 0,
+      },
+      // Legs: 90° forward seated bend with slight natural thigh splay
+      leftUpperLeg: {
+        x: thighBendX,
+        y: 0,
+        z: -armDownSign * 0.04,
+      },
+      rightUpperLeg: {
+        x: thighBendX,
+        y: 0,
+        z: armDownSign * 0.04,
+      },
+      leftLowerLeg: {
+        x: kneeBendX,
+        y: 0,
+        z: 0,
+      },
+      rightLowerLeg: {
+        x: kneeBendX,
+        y: 0,
+        z: 0,
+      },
+      leftFoot: {
+        x: footLevelX,
+        y: 0,
+        z: 0,
+      },
+      rightFoot: {
+        x: footLevelX,
+        y: 0,
+        z: 0,
+      },
+      // Arms & hands resting naturally down on thighs/lap (eliminates stiff A-pose & floating elbows)
+      leftUpperArm: {
+        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.2) + bodyLang.shoulderFidget * 0.4,
+        y: armDownSign * 0.18,
+        z: armDownSign * (1.32 + bodyLang.shoulderDroop * 0.12 + breath * 0.01),
+      },
+      rightUpperArm: {
+        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.2) - bodyLang.shoulderFidget * 0.4,
+        y: -armDownSign * 0.18,
+        z: -armDownSign * (1.32 + bodyLang.shoulderDroop * 0.12 - breath * 0.01),
+      },
+      leftLowerArm: {
+        x: -forwardSign * 0.45,
+        y: armDownSign * 0.56,
+        z: armDownSign * 0.22,
+      },
+      rightLowerArm: {
+        x: -forwardSign * 0.45,
+        y: -armDownSign * 0.56,
+        z: -armDownSign * 0.22,
+      },
+      leftHand: {
+        x: -forwardSign * 0.16,
+        y: -armDownSign * 0.1,
+        z: armDownSign * 0.12,
+      },
+      rightHand: {
+        x: -forwardSign * 0.16,
+        y: armDownSign * 0.1,
+        z: -armDownSign * 0.12,
+      },
+    };
+
+    // Subtle seated posture modulation (keeps hands grounded near lap instead of floating mid-air)
+    if (!isSleeping && bodyLang.coldRubArms > 0.35) {
+      const c = bodyLang.coldRubArms * 0.55;
+      const rub = Math.sin(elapsed * 5.2) * 0.04 * c;
+      targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armDownSign * 1.24, c);
+      targets.rightUpperArm.z = THREE.MathUtils.lerp(
+        targets.rightUpperArm.z,
+        -armDownSign * 1.24,
+        c
+      );
+      targets.leftLowerArm.y = THREE.MathUtils.lerp(
+        targets.leftLowerArm.y,
+        armDownSign * (0.72 + rub),
+        c
+      );
+      targets.rightLowerArm.y = THREE.MathUtils.lerp(
+        targets.rightLowerArm.y,
+        -armDownSign * (0.72 + rub),
+        c
+      );
+    } else if (!isSleeping && bodyLang.armsCrossTension > 0.48) {
+      const t = (bodyLang.armsCrossTension - 0.45) * 0.65;
+      targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armDownSign * 1.18, t);
+      targets.rightUpperArm.z = THREE.MathUtils.lerp(
+        targets.rightUpperArm.z,
+        -armDownSign * 1.18,
+        t
+      );
+      targets.leftLowerArm.y = THREE.MathUtils.lerp(targets.leftLowerArm.y, armDownSign * 0.82, t);
+      targets.rightLowerArm.y = THREE.MathUtils.lerp(
+        targets.rightLowerArm.y,
+        -armDownSign * 0.82,
+        t
+      );
+    }
+
+    for (const boneName of POSE_BONES) {
+      const s = this.smoothRot[boneName];
+      const tgt = targets[boneName];
+      s.x = THREE.MathUtils.lerp(s.x, tgt.x, alpha);
+      s.y = THREE.MathUtils.lerp(s.y, tgt.y, alpha);
+      s.z = THREE.MathUtils.lerp(s.z, tgt.z, alpha);
+
+      const node = humanoid.getNormalizedBoneNode(boneName as VRMHumanBoneName);
+      if (node) {
+        node.rotation.set(s.x, s.y, s.z);
+      }
+    }
+
+    // 3. Relaxed natural finger curl (0.25..0.42 rad) so hands rest softly on lap
+    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 1, alpha);
+    for (const f of FINGER_CURL_BONES) {
+      const node = humanoid.getNormalizedBoneNode(f.name);
+      if (!node) continue;
+      const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+      if (f.name.includes('Thumb')) {
+        node.rotation.y = sideSign * f.weight * this.currentFingerCurl;
+      } else {
+        node.rotation.z = sideSign * f.weight * this.currentFingerCurl;
+      }
+    }
+  }
+
+  /**
+   * Applies subtle relaxed finger curl during standing posture so fingers never look stiff.
+   */
+  public applyStandingFingerRelax(vrm: VRM, dt: number): void {
+    const humanoid = vrm.humanoid;
+    if (!humanoid) return;
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    const armDownSign = isVrm0 ? 1 : -1;
+    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 0.42, Math.min(1, dt * 6));
+    for (const f of FINGER_CURL_BONES) {
+      const node = humanoid.getNormalizedBoneNode(f.name);
+      if (!node) continue;
+      const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+      if (f.name.includes('Thumb')) {
+        node.rotation.y = sideSign * f.weight * this.currentFingerCurl;
+      } else {
+        node.rotation.z = sideSign * f.weight * this.currentFingerCurl;
+      }
+    }
+  }
+
+  /**
+   * Drives normalized humanoid bones for a peaceful resting / sleeping pose on the bed.
+   * Supports multiple positions: 'back_relaxed', 'side_curled_right', 'side_curled_left',
+   * 'hugging_pillow', and 'sprawled'.
+   * Fixes arms and hands to lie naturally against the mattress / pillow with no floating or tension.
+   */
+  public applySleepingPose(params: {
+    vrm: VRM;
+    dt: number;
+    elapsed: number;
+    bodyLang: EmotionBodyLanguage;
+    position?: SleepingPosition;
+    snap?: boolean;
+  }): void {
+    const {
+      vrm,
+      dt,
+      elapsed,
+      bodyLang,
+      position = 'back_relaxed',
+      snap = false,
+    } = params;
+    const humanoid = vrm.humanoid;
+    if (!humanoid) return;
+
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    const forwardSign = isVrm0 ? 1 : -1;
+    const armDownSign = isVrm0 ? 1 : -1;
+
+    // Slow peaceful breathing: ~0.8 Hz
+    const breath = Math.sin(elapsed * Math.max(0.7, bodyLang.breathingRate || 0.95));
+    const alpha = snap ? 1 : Math.min(1, dt * 6.5);
+
+    // Keep hips level with minimal motion
+    const hipsNode = humanoid.getNormalizedBoneNode('hips');
+    if (hipsNode && this.hasBoundVrm) {
+      this.currentHipsY = THREE.MathUtils.lerp(this.currentHipsY, this.restHipsY, alpha);
+      this.currentHipsZ = THREE.MathUtils.lerp(this.currentHipsZ, this.restHipsZ, alpha);
+      hipsNode.position.y = this.currentHipsY;
+      hipsNode.position.z = this.currentHipsZ;
+    }
+
+    const targets: Record<PoseBoneName, { x: number; y: number; z: number }> = {
+      hips: { x: 0, y: 0, z: 0 },
+      spine: {
+        x: forwardSign * (0.02 + breath * 0.015),
+        y: 0,
+        z: 0,
+      },
+      chest: {
+        x: -forwardSign * (0.03 + breath * 0.028),
+        y: 0,
+        z: 0,
+      },
+      upperChest: {
+        x: breath * 0.018,
+        y: 0,
+        z: 0,
+      },
+      leftUpperLeg: {
+        x: forwardSign * 0.04,
+        y: 0,
+        z: -armDownSign * 0.04,
+      },
+      rightUpperLeg: {
+        x: forwardSign * 0.04,
+        y: 0,
+        z: armDownSign * 0.04,
+      },
+      leftLowerLeg: {
+        x: -forwardSign * 0.06,
+        y: 0,
+        z: 0,
+      },
+      rightLowerLeg: {
+        x: -forwardSign * 0.06,
+        y: 0,
+        z: 0,
+      },
+      leftFoot: {
+        x: forwardSign * 0.12,
+        y: 0,
+        z: -armDownSign * 0.06,
+      },
+      rightFoot: {
+        x: forwardSign * 0.12,
+        y: 0,
+        z: armDownSign * 0.06,
+      },
+      // Arms grounded flat on mattress at sides by default
+      leftUpperArm: {
+        x: -forwardSign * 0.05,
+        y: armDownSign * 0.04,
+        z: armDownSign * (1.36 + breath * 0.01),
+      },
+      rightUpperArm: {
+        x: -forwardSign * 0.05,
+        y: -armDownSign * 0.04,
+        z: -armDownSign * (1.36 - breath * 0.01),
+      },
+      leftLowerArm: {
+        x: 0,
+        y: armDownSign * 0.14,
+        z: 0,
+      },
+      rightLowerArm: {
+        x: 0,
+        y: -armDownSign * 0.14,
+        z: 0,
+      },
+      leftHand: {
+        x: 0,
+        y: 0,
+        z: 0,
+      },
+      rightHand: {
+        x: 0,
+        y: 0,
+        z: 0,
+      },
+    };
+
+    if (position === 'side_curled_right') {
+      // Curled comfortably on right side facing camera/Producer
+      targets.spine.x = forwardSign * 0.08;
+      targets.spine.z = 0.06;
+      // Knees bent cozily
+      targets.leftUpperLeg.x = forwardSign * 0.72;
+      targets.leftUpperLeg.z = -armDownSign * 0.08;
+      targets.leftLowerLeg.x = -forwardSign * 0.95;
+      targets.rightUpperLeg.x = forwardSign * 0.58;
+      targets.rightLowerLeg.x = -forwardSign * 0.85;
+      // Arms tucked near cheek / pillow
+      targets.leftUpperArm.x = forwardSign * 0.35;
+      targets.leftUpperArm.y = armDownSign * 0.12;
+      targets.leftUpperArm.z = armDownSign * 1.08;
+      targets.leftLowerArm.y = armDownSign * 1.25;
+      targets.rightUpperArm.x = forwardSign * 0.28;
+      targets.rightUpperArm.y = -armDownSign * 0.12;
+      targets.rightUpperArm.z = -armDownSign * 0.98;
+      targets.rightLowerArm.y = -armDownSign * 1.35;
+    } else if (position === 'side_curled_left') {
+      // Curled on left side facing nightstand
+      targets.spine.x = forwardSign * 0.08;
+      targets.spine.z = -0.06;
+      targets.rightUpperLeg.x = forwardSign * 0.72;
+      targets.rightUpperLeg.z = armDownSign * 0.08;
+      targets.rightLowerLeg.x = -forwardSign * 0.95;
+      targets.leftUpperLeg.x = forwardSign * 0.58;
+      targets.leftLowerLeg.x = -forwardSign * 0.85;
+      targets.rightUpperArm.x = forwardSign * 0.35;
+      targets.rightUpperArm.y = -armDownSign * 0.12;
+      targets.rightUpperArm.z = -armDownSign * 1.08;
+      targets.rightLowerArm.y = -armDownSign * 1.25;
+      targets.leftUpperArm.x = forwardSign * 0.28;
+      targets.leftUpperArm.y = armDownSign * 0.12;
+      targets.leftUpperArm.z = armDownSign * 0.98;
+      targets.leftLowerArm.y = armDownSign * 1.35;
+    } else if (position === 'hugging_pillow') {
+      // Cozy semi-side hug around pillow
+      targets.spine.x = forwardSign * 0.05;
+      targets.leftUpperLeg.x = forwardSign * 0.42;
+      targets.leftLowerLeg.x = -forwardSign * 0.55;
+      targets.leftUpperArm.x = forwardSign * 0.38;
+      targets.leftUpperArm.y = armDownSign * 0.22;
+      targets.leftUpperArm.z = armDownSign * 1.15;
+      targets.leftLowerArm.y = armDownSign * 1.15;
+      targets.rightUpperArm.x = forwardSign * 0.28;
+      targets.rightUpperArm.y = -armDownSign * 0.22;
+      targets.rightUpperArm.z = -armDownSign * 1.18;
+      targets.rightLowerArm.y = -armDownSign * 1.05;
+    } else if (position === 'sprawled') {
+      // Relaxed deep sprawl with one arm above head and asymmetrical legs
+      targets.leftUpperArm.x = -forwardSign * 0.04;
+      targets.leftUpperArm.y = armDownSign * 0.35;
+      targets.leftUpperArm.z = armDownSign * 0.45; // stretched up near pillow
+      targets.leftLowerArm.y = armDownSign * 0.45;
+      targets.rightUpperArm.x = -forwardSign * 0.05;
+      targets.rightUpperArm.z = -armDownSign * 1.38;
+      targets.leftUpperLeg.z = -armDownSign * 0.24;
+      targets.leftLowerLeg.x = -forwardSign * 0.38;
+    }
+
+    for (const boneName of POSE_BONES) {
+      const s = this.smoothRot[boneName];
+      const tgt = targets[boneName];
+      s.x = THREE.MathUtils.lerp(s.x, tgt.x, alpha);
+      s.y = THREE.MathUtils.lerp(s.y, tgt.y, alpha);
+      s.z = THREE.MathUtils.lerp(s.z, tgt.z, alpha);
+
+      const node = humanoid.getNormalizedBoneNode(boneName as VRMHumanBoneName);
+      if (node) {
+        node.rotation.set(s.x, s.y, s.z);
+      }
+    }
+
+    // Soft, relaxed sleeping finger curl (tucked naturally, thumb rested alongside index)
+    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 0.28, alpha);
+    for (const f of FINGER_CURL_BONES) {
+      const node = humanoid.getNormalizedBoneNode(f.name);
+      if (!node) continue;
+      const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+      if (f.name.includes('Thumb')) {
+        node.rotation.y = sideSign * 0.06 * this.currentFingerCurl;
+        node.rotation.z = sideSign * 0.05 * this.currentFingerCurl;
+      } else {
+        node.rotation.z = sideSign * f.weight * 0.55 * this.currentFingerCurl;
+      }
+    }
+  }
+}

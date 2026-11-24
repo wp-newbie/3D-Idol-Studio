@@ -1,0 +1,73 @@
+{
+  "name": "zeta-idol-studio-3d",
+  "version": "1.0.0",
+  "description": "Standalone Desktop Widescreen 3D Anime Roleplay & Virtual Idol Studio",
+  "author": "Zeta 3D Idol Studio",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev:vite": "vite",
+    "dev:electron": "wait-on tcp:5173 && node electron/launch.cjs",
+    "dev:desktop": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm run dev:vite\" \"npm run dev:electron\"",
+    "typecheck": "tsc --noEmit",
+    "build:web": "tsc --noEmit && vite build",
+    "build:win": "npm run build:web && electron-builder --win",
+    "build": "npm run build:web && electron-builder",
+    "build:dir": "npm run build:web && electron-builder --dir",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@pixiv/three-vrm": "^3.3.6",
+    "@pixiv/three-vrm-animation": "^3.6.0",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.173.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.173.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.zeta.idolstudio3d",
+    "productName": "Zeta 3D Idol Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}

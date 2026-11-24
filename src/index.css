@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #07070c;
+    color: #f4f4f8;
+    font-family: 'Plus Jakarta Sans', 'Noto Sans JP', system-ui, sans-serif;
+  }
+
+  html.desktop-roam-active,
+  body.desktop-roam-active,
+  body.desktop-roam-active #root,
+  body.desktop-roam-active canvas {
+    background: transparent !important;
+    background-color: transparent !important;
+  }
+}
+
+.electron-drag {
+  -webkit-app-region: drag;
+}
+.electron-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Custom sleek dark scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(11, 11, 20, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(167, 139, 250, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(167, 139, 250, 0.48);
+}
+
+/* Range input styling */
+input[type='range'] {
+  accent-color: #8b5cf6;
+}
+
+/* Hide scrollbar for clean horizontal mobile toolbar */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

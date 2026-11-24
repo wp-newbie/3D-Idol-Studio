@@ -1,0 +1,537 @@
+import * as THREE from 'three';
+import type { ClothingCategory, MaterialMod, MeshDescriptor } from '../types/studio';
+import { getTextureFromVault } from '../storage/modelVault';
+
+export const CLOTHING_CATEGORY_ORDER: ClothingCategory[] = [
+  'Tops',
+  'Bottoms',
+  'Footwear',
+  'Accessories',
+  'Hair',
+];
+
+export const CLOTHING_CATEGORY_META: Record<
+  ClothingCategory,
+  { title: string; shortTitle: string; emoji: string; badgeClass: string }
+> = {
+  Tops: {
+    title: 'Tops / Outerwear',
+    shortTitle: 'Tops',
+    emoji: '👚',
+    badgeClass: 'border-violet-400/30 bg-violet-500/20 text-violet-200',
+  },
+  Bottoms: {
+    title: 'Bottoms',
+    shortTitle: 'Bottoms',
+    emoji: '👖',
+    badgeClass: 'border-indigo-400/30 bg-indigo-500/20 text-indigo-200',
+  },
+  Footwear: {
+    title: 'Footwear & Socks',
+    shortTitle: 'Footwear',
+    emoji: '👟',
+    badgeClass: 'border-sky-400/30 bg-sky-500/20 text-sky-200',
+  },
+  Accessories: {
+    title: 'Accessories & Neckwear',
+    shortTitle: 'Accessories',
+    emoji: '🎀',
+    badgeClass: 'border-rose-400/30 bg-rose-500/20 text-rose-200',
+  },
+  Hair: {
+    title: 'Hair & Twin-Tails',
+    shortTitle: 'Hair',
+    emoji: '💇‍♀️',
+    badgeClass: 'border-amber-400/30 bg-amber-500/20 text-amber-200',
+  },
+};
+
+// Explicitly filter out core face, skin, eye, brow, lash, mouth, and stage meshes
+const CORE_SKIN_OR_FACE_REGEX =
+  /(_(skin|face|eye|brow|lash|mouth|teeth|tooth|tongue)\b|faceskin|bodyskin|eyeiris|eyewhite|eyehighlight|eyeline|eyebrow|eyelash|facemouth|faceeyeline|facebrow|faceblush|sclera|cornea|iris|stage_pedestal|stage_ring|headrig)/i;
+
+const GENERIC_BODY_OR_FACE_NODE_REGEX =
+  /(^|[_\-\s.])(body|face|skin|head|eye|iris|sclera|cornea|eyeline|eyebrow|eyelash|brow|lash|mouth|teeth|tooth|tongue|blush|cheek|stage_pedestal|stage_ring|headrig)([_\-\s.\d()]|$)/i;
+
+// Ordered carefully: Hair -> Accessories -> Footwear -> Bottoms -> Tops
+const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = [
+  {
+    category: 'Hair',
+    patterns: [
+      /_hair\b/i,
+      /\bhair\d*\b/i,
+      /hair[_\-\s]?\d+/i,
+      /twintail/i,
+      /ponytail/i,
+      /ahoge/i,
+      /bangs/i,
+      /backhair/i,
+      /sidehair/i,
+      /fronthair/i,
+    ],
+  },
+  {
+    category: 'Accessories',
+    patterns: [
+      /accessory/i,
+      /necktie/i,
+      /(^|[_\-\s])tie([_\-\s\d]|$)/i,
+      /ribbon/i,
+      /(^|[_\-\s])bow([_\-\s\d]|$)/i,
+      /neckwear/i,
+      /(^|[_\-\s])neck([_\-\s\d]|$)/i,
+      /choker/i,
+      /scarf/i,
+      /(^|[_\-\s])hat([_\-\s\d]|$)/i,
+      /beret/i,
+      /headset/i,
+      /headphone/i,
+      /earpiece/i,
+      /visor/i,
+      /glasses/i,
+      /eyewear/i,
+      /catears/i,
+      /cat[_\-\s]?ear/i,
+      /hairpin/i,
+      /earring/i,
+      /glove/i,
+      /bracelet/i,
+      /wings/i,
+      /halo/i,
+      /belt/i,
+      /bag/i,
+    ],
+  },
+  {
+    category: 'Footwear',
+    patterns: [
+      /shoes?/i,
+      /boots?/i,
+      /socks?/i,
+      /stockings?/i,
+      /tights/i,
+      /heels?/i,
+      /sneakers?/i,
+      /loafers?/i,
+      /sandals?/i,
+      /footwear/i,
+    ],
+  },
+  {
+    category: 'Bottoms',
+    patterns: [
+      /bottoms?/i,
+      /skirts?/i,
+      /pants?/i,
+      /shorts?/i,
+      /trousers?/i,
+      /leggings?/i,
+      /jeans/i,
+      /culottes?/i,
+      /pleat/i,
+    ],
+  },
+  {
+    category: 'Tops',
+    patterns: [
+      /tops?/i,
+      /coats?/i,
+      /jackets?/i,
+      /shirts?/i,
+      /inner/i,
+      /onepiece/i,
+      /one[_\-\s]?piece/i,
+      /dress/i,
+      /blouse/i,
+      /hoodie/i,
+      /sweater/i,
+      /cardigan/i,
+      /blazer/i,
+      /bolero/i,
+      /vest/i,
+      /bodice/i,
+      /outer/i,
+      /cloak/i,
+      /cape/i,
+      /trench/i,
+      /mantle/i,
+      /tee/i,
+      /sleeve/i,
+      /sailor/i,
+      /uniform/i,
+    ],
+  },
+];
+
+interface OriginalMaterialSnapshot {
+  colorHex: string | null;
+  shadeColorHex: string | null;
+  map: THREE.Texture | null;
+}
+
+const originalMaterialMap = new WeakMap<THREE.Material, OriginalMaterialSnapshot>();
+const originalVisibleMap = new WeakMap<THREE.Object3D, boolean>();
+
+function snapshotMaterial(mat: THREE.Material): OriginalMaterialSnapshot {
+  const existing = originalMaterialMap.get(mat);
+  if (existing) return existing;
+
+  const anyMat = mat as unknown as {
+    color?: THREE.Color;
+    shadeColorFactor?: THREE.Color;
+    map?: THREE.Texture | null;
+  };
+
+  const snap: OriginalMaterialSnapshot = {
+    colorHex: anyMat.color ? `#${anyMat.color.getHexString()}` : null,
+    shadeColorHex: anyMat.shadeColorFactor ? `#${anyMat.shadeColorFactor.getHexString()}` : null,
+    map: anyMat.map ?? null,
+  };
+  originalMaterialMap.set(mat, snap);
+  return snap;
+}
+
+function snapshotOriginalVisible(obj: THREE.Object3D): boolean {
+  const existing = originalVisibleMap.get(obj);
+  if (existing !== undefined) return existing;
+  originalVisibleMap.set(obj, obj.visible);
+  return obj.visible;
+}
+
+function isCoreSkinOrFaceMaterial(matName: string): boolean {
+  if (!matName) return false;
+  if (/_CLOTH\b/i.test(matName) || /_HAIR\b/i.test(matName)) return false;
+  return CORE_SKIN_OR_FACE_REGEX.test(matName);
+}
+
+function classifyName(raw: string): ClothingCategory | null {
+  if (!raw) return null;
+  for (const matcher of CATEGORY_MATCHERS) {
+    if (matcher.patterns.some((p) => p.test(raw))) {
+      return matcher.category;
+    }
+  }
+  return null;
+}
+
+function titleCaseWords(input: string): string {
+  return input
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (/^\d+$/.test(w) ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ');
+}
+
+/**
+ * Formats VRoid Studio material IDs (e.g., `N00_002_04_Tops_01_CLOTH`,
+ * `N00_007_01_Accessory_Tie_01_CLOTH`, `N00_000_Hair_00_HAIR_01`) into clean,
+ * accurate display titles (e.g., `"Tops 01"`, `"Tie / Neckwear"`, `"Hair 01"`).
+ */
+function buildPrettyDisplayTitle(
+  materialName: string,
+  meshName: string,
+  category: ClothingCategory
+): string {
+  const cleanMat = materialName
+    .replace(/\s*\(Instance\)\s*/gi, '')
+    .trim();
+
+  // Decide whether materialName carries meaningful VRoid/semantic info vs generic fallback
+  const matIsGeneric =
+    !cleanMat ||
+    /^material(\.\d+)?$/i.test(cleanMat) ||
+    cleanMat.endsWith('_Material') ||
+    /^body[_\s(]*merged/i.test(cleanMat);
+
+  const source = !matIsGeneric ? cleanMat : meshName;
+
+  // Strip VRoid Studio leading slot prefix: e.g. N00_002_04_, F00_000_00_, N00_000_
+  let core = source
+    .replace(/^[A-Za-z]\d{2}(?:_\d{2,3}){1,2}_/, '')
+    .replace(/^(cloth|acc)_/i, '')
+    .replace(/_(CLOTH|HAIR|SKIN|EYE|MAT|MATERIAL)(?:_\d+)?$/i, '')
+    .replace(/_(00)$/i, '')
+    .trim();
+
+  // Extract optional trailing variant number (e.g., _01, 001 -> "01")
+  let numSuffix = '';
+  const numMatch = /(?:[_\-\s]|(?<=[A-Za-z]))(\d{1,3})$/.exec(core);
+  if (numMatch) {
+    const parsedNum = Number.parseInt(numMatch[1], 10);
+    core = core.slice(0, numMatch.index).replace(/[_\-\s]+$/, '');
+    if (!Number.isNaN(parsedNum) && parsedNum > 0) {
+      numSuffix = String(parsedNum).padStart(2, '0');
+    }
+  }
+
+  // Strip leading "Accessory_" so "Accessory_Tie" becomes "Tie", and split CamelCase ("HairBack" -> "Hair Back")
+  core = core
+    .replace(/^accessory[_\-\s]*/i, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .trim();
+
+  // Map common VRoid item tokens cleanly (never turning "Bottoms" into "Shorts"!)
+  const lower = core.toLowerCase().replace(/[_\-\s]+/g, ' ').trim();
+  if (!lower || /^body\s*\(?merged\)?/.test(lower)) {
+    return numSuffix ? `${CLOTHING_CATEGORY_META[category].shortTitle} ${numSuffix}` : CLOTHING_CATEGORY_META[category].shortTitle;
+  }
+
+  let baseTitle = '';
+  if (/^(tie|necktie|neck\s*tie)$/.test(lower)) {
+    baseTitle = 'Tie / Neckwear';
+  } else if (/^neck(wear)?$/.test(lower)) {
+    baseTitle = 'Neckwear';
+  } else if (/^one\s*piece$/.test(lower)) {
+    baseTitle = 'One-Piece Dress';
+  } else if (/^cat\s*ears?$/.test(lower)) {
+    baseTitle = 'Cat Ears';
+  } else if (/^twin\s*tails?$/.test(lower)) {
+    baseTitle = 'Twin-Tails';
+  } else if (/^hair(\s*back|\s*front|\s*side)?$/.test(lower)) {
+    baseTitle = titleCaseWords(lower);
+  } else {
+    baseTitle = titleCaseWords(lower);
+  }
+
+  // Keep Tie / Neckwear concise when it's just slot 01, include number for clothing pieces like "Tops 01", "Bottoms 01", "Shoes 01"
+  if (baseTitle === 'Tie / Neckwear' && (!numSuffix || numSuffix === '01')) {
+    return baseTitle;
+  }
+  return numSuffix ? `${baseTitle} ${numSuffix}` : baseTitle;
+}
+
+function extractPrimaryMaterialInfo(mesh: THREE.Mesh): {
+  colorHex: string;
+  materialName: string;
+  allMaterialNames: string[];
+} {
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const allMaterialNames = mats
+    .map((m) => (m?.name || '').replace(/\s*\(Instance\)\s*/gi, '').trim())
+    .filter(Boolean);
+
+  for (const mat of mats) {
+    if (!mat) continue;
+    const anyMat = mat as unknown as { color?: THREE.Color; name?: string };
+    const materialName =
+      anyMat.name?.replace(/\s*\(Instance\)\s*/gi, '').trim() || `${mesh.name}_Material`;
+    const colorHex = anyMat.color ? `#${anyMat.color.getHexString()}` : '#6d28d9';
+    return { colorHex, materialName, allMaterialNames };
+  }
+  return { colorHex: '#6d28d9', materialName: `${mesh.name}_Material`, allMaterialNames };
+}
+
+/**
+ * Traverses scene.traverse() to auto-detect VRoid Studio & generic VRM/GLB clothing,
+ * footwear, accessories, and hair meshes—reading VRoid material names (`N00_...`)
+ * first so merged body sub-meshes classify accurately while core face/skin stay hidden.
+ */
+export function detectClothingMeshes(
+  root: THREE.Object3D,
+  materialMods: Record<string, MaterialMod>
+): MeshDescriptor[] {
+  const found: MeshDescriptor[] = [];
+  const seenNames = new Set<string>();
+
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const name = obj.name?.trim();
+    if (!name || seenNames.has(name)) return;
+
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const { colorHex, materialName, allMaterialNames } = extractPrimaryMaterialInfo(obj);
+    const joinedMatNames = allMaterialNames.join(' ');
+    const isSkinned = obj instanceof THREE.SkinnedMesh;
+
+    // 1. Exclude explicit core skin, face, eye, brow, lash, mouth materials immediately
+    if (allMaterialNames.length > 0 && allMaterialNames.every((m) => isCoreSkinOrFaceMaterial(m))) {
+      return;
+    }
+
+    // 2. Classify primarily by MATERIAL name (VRoid `N00_...` convention), then mesh name, then parent
+    const category =
+      classifyName(joinedMatNames) ||
+      classifyName(name) ||
+      (obj.parent?.name ? classifyName(obj.parent.name) : null);
+
+    if (!category) {
+      // Filter out uncategorized body/face/eye meshes
+      if (
+        GENERIC_BODY_OR_FACE_NODE_REGEX.test(name) ||
+        CORE_SKIN_OR_FACE_REGEX.test(joinedMatNames)
+      ) {
+        return;
+      }
+      // Keep additional non-body SkinnedMeshes as Accessories
+      if (!isSkinned) return;
+    }
+
+    seenNames.add(name);
+    snapshotOriginalVisible(obj);
+    mats.forEach((m) => m && snapshotMaterial(m));
+
+    const resolvedCategory: ClothingCategory = category ?? 'Accessories';
+    const mod = materialMods[name];
+    const label = buildPrettyDisplayTitle(materialName, name, resolvedCategory);
+
+    found.push({
+      name,
+      label,
+      category: resolvedCategory,
+      visible: obj.visible,
+      materialName,
+      isSkinned,
+      currentColorHex: mod?.colorHex || colorHex,
+      hasCustomTexture: Boolean(mod?.textureDataUrl || mod?.textureVaultId),
+    });
+  });
+
+  // Deduplicate identical labels cleanly (e.g. two "Hair" meshes -> "Hair 01", "Hair 02")
+  const labelCounts = new Map<string, number>();
+  for (const item of found) {
+    labelCounts.set(item.label, (labelCounts.get(item.label) || 0) + 1);
+  }
+  const labelSeen = new Map<string, number>();
+  for (const item of found) {
+    if ((labelCounts.get(item.label) || 0) > 1) {
+      const idx = (labelSeen.get(item.label) || 0) + 1;
+      labelSeen.set(item.label, idx);
+      item.label = `${item.label} #${idx}`;
+    }
+  }
+
+  // Sort consistently by category order, then label
+  found.sort((a, b) => {
+    const catDiff =
+      CLOTHING_CATEGORY_ORDER.indexOf(a.category) -
+      CLOTHING_CATEGORY_ORDER.indexOf(b.category);
+    if (catDiff !== 0) return catDiff;
+    return a.label.localeCompare(b.label);
+  });
+
+  return found;
+}
+
+export function applyOutfitModsToScene(params: {
+  root: THREE.Object3D;
+  meshVisibility: Record<string, boolean>;
+  materialMods: Record<string, MaterialMod>;
+  isImportedModel: boolean;
+  textureCache: Map<string, THREE.Texture>;
+  onTextureLoaded?: () => void;
+}): void {
+  const { root, meshVisibility, materialMods, isImportedModel, textureCache, onTextureLoaded } =
+    params;
+  const loader = new THREE.TextureLoader();
+
+  const applyTextureUrl = (
+    cacheKey: string,
+    dataUrl: string,
+    mat: {
+      color?: THREE.Color;
+      map?: THREE.Texture | null;
+      needsUpdate: boolean;
+    },
+    hasColorTint: boolean
+  ) => {
+    const cached = textureCache.get(cacheKey);
+    if (cached) {
+      mat.map = cached;
+      if (!hasColorTint && mat.color) mat.color.set('#ffffff');
+      mat.needsUpdate = true;
+      return;
+    }
+    loader.load(dataUrl, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.flipY = !isImportedModel;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      textureCache.set(cacheKey, tex);
+      mat.map = tex;
+      if (!hasColorTint && mat.color) mat.color.set('#ffffff');
+      mat.needsUpdate = true;
+      onTextureLoaded?.();
+    });
+  };
+
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const name = obj.name?.trim();
+    if (!name) return;
+
+    // 1. Visibility toggle (restores original visibility cleanly on Reset Default!)
+    const origVisible = snapshotOriginalVisible(obj);
+    if (name in meshVisibility) {
+      obj.visible = meshVisibility[name];
+    } else if (obj.visible !== origVisible) {
+      obj.visible = origVisible;
+    }
+
+    // 2. Material color / MToon shadeColorFactor / custom PNG texture overlay
+    const mod = materialMods[name];
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+
+    for (const mat of mats) {
+      if (!mat) continue;
+      const snap = snapshotMaterial(mat);
+      const anyMat = mat as unknown as {
+        color?: THREE.Color;
+        shadeColorFactor?: THREE.Color;
+        uniforms?: {
+          litFactor?: { value?: THREE.Color };
+          shadeColorFactor?: { value?: THREE.Color };
+        };
+        map?: THREE.Texture | null;
+        needsUpdate: boolean;
+      };
+
+      if (mod?.colorHex) {
+        const tint = new THREE.Color(mod.colorHex);
+        if (anyMat.color) anyMat.color.copy(tint);
+        if (anyMat.uniforms?.litFactor?.value) {
+          anyMat.uniforms.litFactor.value.copy(tint);
+        }
+        const shade = tint.clone().multiplyScalar(0.68);
+        if (anyMat.shadeColorFactor) {
+          anyMat.shadeColorFactor.copy(shade);
+        }
+        if (anyMat.uniforms?.shadeColorFactor?.value) {
+          anyMat.uniforms.shadeColorFactor.value.copy(shade);
+        }
+      } else {
+        if (anyMat.color && snap.colorHex) anyMat.color.set(snap.colorHex);
+        if (anyMat.shadeColorFactor && snap.shadeColorHex) {
+          anyMat.shadeColorFactor.set(snap.shadeColorHex);
+        }
+      }
+
+      // Custom .PNG Texture Overlay (from IndexedDB textureVaultId or inline dataUrl)
+      if (mod?.textureDataUrl) {
+        applyTextureUrl(
+          mod.textureVaultId || mod.textureDataUrl,
+          mod.textureDataUrl,
+          anyMat,
+          Boolean(mod.colorHex)
+        );
+      } else if (mod?.textureVaultId) {
+        const vaultId = mod.textureVaultId;
+        const cached = textureCache.get(vaultId);
+        if (cached) {
+          anyMat.map = cached;
+          if (!mod.colorHex && anyMat.color) anyMat.color.set('#ffffff');
+          anyMat.needsUpdate = true;
+        } else {
+          void getTextureFromVault(vaultId).then((rec) => {
+            if (rec?.dataUrl) {
+              applyTextureUrl(vaultId, rec.dataUrl, anyMat, Boolean(mod.colorHex));
+            }
+          });
+        }
+      } else if (anyMat.map !== snap.map) {
+        anyMat.map = snap.map;
+        anyMat.needsUpdate = true;
+      }
+    }
+  });
+}

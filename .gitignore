@@ -1,0 +1,8 @@
+node_modules/
+dist/
+release/
+.env
+.studio-sync.json
+public/vault-sync/
+*.log
+.DS_Store
