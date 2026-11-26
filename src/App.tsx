@@ -1,14 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Sparkles, X } from 'lucide-react';
 import type {
+  AccessoryAttachTarget,
   AutonomousNeedTrigger,
   AutonomousToolLocation,
+  AvatarPosture,
   BrainThought,
   CareActivityId,
   ChatMessage,
   CustomBackdropKind,
+  DisplayInfo,
+  EquippedAccessory,
   IdleCheckInMinutes,
   InteractionZone,
+  MaterialMod,
   MemoryEntry,
   MeshDescriptor,
   MicroTellCommand,
@@ -23,6 +28,7 @@ import type {
   SleepingPosition,
   StageEnvironmentId,
   StudioSettings,
+  VaultAccessoryMeta,
   VaultModelMeta,
   VaultVrmaMeta,
   VocalArchetype,
@@ -42,15 +48,20 @@ import {
 } from './storage/workspaceSync';
 import {
   deleteTextureFromVault,
+  deleteVaultAccessory,
   deleteVaultModel,
   deleteVaultVrma,
+  listVaultAccessories,
   listVaultModels,
   listVaultVrmas,
+  saveAccessoryToVault,
   saveEnvironmentToVault,
   saveModelToVault,
   saveTextureToVault,
   saveVrmaToVault,
 } from './storage/modelVault';
+import { extractPlayableGlbFromBuffer } from './stage/xwearParser';
+import { resolveAiDrivenArchetype } from './services/voiceToneDirector';
 import { parseDialogueResponse } from './services/dialogueParser';
 import {
   GeminiApiError,
@@ -76,6 +87,7 @@ import {
   buildCareActivityEffect,
   deriveDefaultNuancedFeeling,
   detectUserEmpathyCue,
+  getCircadianContext,
   pickMoodInnerThought,
   tickBrainNeeds,
 } from './services/aiBrainService';
@@ -100,8 +112,13 @@ export const App: React.FC = () => {
   const [hydrated, setHydrated] = useState(false);
   const [storageBackend, setStorageBackend] = useState<string>('indexeddb');
   const [vaultModels, setVaultModels] = useState<VaultModelMeta[]>([]);
+  const vaultModelsRef = useRef<VaultModelMeta[]>([]);
+  vaultModelsRef.current = vaultModels;
   const [vaultVrmas, setVaultVrmas] = useState<VaultVrmaMeta[]>([]);
+  const [vaultAccessories, setVaultAccessories] = useState<VaultAccessoryMeta[]>([]);
   const [detectedMeshes, setDetectedMeshes] = useState<MeshDescriptor[]>([]);
+  const detectedMeshesRef = useRef<MeshDescriptor[]>([]);
+  detectedMeshesRef.current = detectedMeshes;
 
   const [isWardrobeOpen, setIsWardrobeOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
@@ -115,12 +132,22 @@ export const App: React.FC = () => {
 
   // Desktop Roam Mode (🪟), Auto-Roam & Autonomous Brain State
   const [desktopRoamMode, setDesktopRoamMode] = useState(false);
+  const [connectedDisplays, setConnectedDisplays] = useState<DisplayInfo[]>([]);
+  const [activeDisplayTarget, setActiveDisplayTarget] = useState<number | string | 'all'>('primary');
   const [freeRoamEnabled, setFreeRoamEnabled] = useState(true);
   const [autoRoamEnabled, setAutoRoamEnabled] = useState(true);
   const [roamCommand, setRoamCommand] = useState<RoamCommand | null>(null);
   const [emoteCommand, setEmoteCommand] = useState<{
     id: number;
     emoteId: ProceduralEmoteId;
+  } | null>(null);
+  const [gazeCommand, setGazeCommand] = useState<{
+    id: number;
+    target: 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen';
+  } | null>(null);
+  const [expressionCommand, setExpressionCommand] = useState<{
+    id: number;
+    expression: string;
   } | null>(null);
   const [microTellCommand, setMicroTellCommand] = useState<MicroTellCommand | null>(null);
   const [isUserTyping, setIsUserTyping] = useState(false);
@@ -143,8 +170,11 @@ export const App: React.FC = () => {
   const hoveringRoamUiRef = useRef(false);
   const roamCommandSeqRef = useRef(1);
   const emoteCommandSeqRef = useRef(1);
+  const gazeCommandSeqRef = useRef(1);
+  const expressionCommandSeqRef = useRef(1);
   const microTellSeqRef = useRef(1);
   const sessionStartAtRef = useRef<number>(Date.now());
+  const lastProactiveSpeechAtRef = useRef<number>(Date.now());
   const roamBehaviorRef = useRef<RoamBehavior>('idle');
   roamBehaviorRef.current = roamBehavior;
   const lastCursorActiveAtRef = useRef<number>(Date.now());
@@ -178,6 +208,7 @@ export const App: React.FC = () => {
   const lastFailedTurnRef = useRef<{ promptText: string; role: 'user' | 'system_event' } | null>(
     null
   );
+  const handleCareActivityRef = useRef<(activity: CareActivityId) => void>(() => {});
 
   // Sync Electron Smart Click-Through state whenever cursor enters/leaves VRM character or floating bubble
   const syncClickThrough = useCallback(() => {
@@ -201,10 +232,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     let active = true;
     const init = async () => {
-      const [{ state, backend }, models, vrmas] = await Promise.all([
+      const [{ state, backend }, models, vrmas, accessories] = await Promise.all([
         loadStudioState(),
         listVaultModels(),
         listVaultVrmas(),
+        listVaultAccessories(),
       ]);
       if (!active) return;
 
@@ -215,18 +247,19 @@ export const App: React.FC = () => {
       const nextState: PersistedStudioState =
         !usingBuiltIn && resolvedKey.apiKey
           ? {
-              ...state,
-              settings: {
-                ...state.settings,
-                apiKey: resolvedKey.apiKey,
-              },
-            }
+            ...state,
+            settings: {
+              ...state.settings,
+              apiKey: resolvedKey.apiKey,
+            },
+          }
           : state;
 
       setStudio(nextState);
       setStorageBackend(backend);
       setVaultModels(models);
       setVaultVrmas(vrmas);
+      setVaultAccessories(accessories);
       setHasAiStudioBridge(resolvedKey.hasAiStudioBridge);
 
       const effectiveKey = resolveEffectiveApiKey(nextState.settings);
@@ -374,6 +407,124 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const isDesktopApp =
+    typeof window !== 'undefined' &&
+    Boolean(window.desktopBridge?.isElectron || window.studioAPI?.isElectron);
+
+  const activePersona = useMemo(() => {
+    return (
+      studio.personas.find((p) => p.id === studio.activePersonaId) || studio.personas[0]
+    );
+  }, [studio.personas, studio.activePersonaId]);
+
+  const activeSlot = useMemo(() => {
+    return (
+      activePersona.outfitSlots.find((s) => s.id === activePersona.activeOutfitSlotId) ||
+      activePersona.outfitSlots[0]
+    );
+  }, [activePersona]);
+
+  const refreshDisplays = useCallback(async () => {
+    if (!isDesktopApp) return;
+    try {
+      let res: { displays?: DisplayInfo[]; currentDisplayId?: number | string | null } | undefined;
+      if (window.desktopBridge?.getDisplays) {
+        res = await window.desktopBridge.getDisplays();
+      } else if (window.studioAPI?.getDisplays) {
+        res = await window.studioAPI.getDisplays();
+      }
+      if (res?.displays && res.displays.length > 0) {
+        setConnectedDisplays(res.displays);
+        if (res.currentDisplayId !== undefined && res.currentDisplayId !== null) {
+          setActiveDisplayTarget(res.currentDisplayId);
+        }
+      }
+    } catch {
+      // browser preview fallback
+    }
+  }, [isDesktopApp]);
+
+  useEffect(() => {
+    void refreshDisplays();
+  }, [refreshDisplays]);
+
+  const handleMoveToDisplay = useCallback(
+    async (target: number | string | 'all') => {
+      if (!isDesktopApp) return;
+      setActiveDisplayTarget(target);
+      try {
+        let res:
+          | {
+            displays?: DisplayInfo[];
+            currentDisplayId?: number | string | null;
+          }
+          | undefined;
+        if (window.desktopBridge?.moveToDisplay) {
+          res = await window.desktopBridge.moveToDisplay(target);
+        } else if (window.studioAPI?.moveToDisplay) {
+          res = await window.studioAPI.moveToDisplay(target);
+        }
+        if (res?.displays) {
+          setConnectedDisplays(res.displays);
+        }
+        const dispObj = connectedDisplays.find((d) => d.id === target);
+        const label =
+          target === 'all'
+            ? 'spanning all screens'
+            : dispObj
+              ? dispObj.label
+              : `Display ${target}`;
+        setAutonomousActionToast(`🖥️ Strolling to ${label}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 3500);
+      } catch {
+        // fallback
+      }
+    },
+    [connectedDisplays, isDesktopApp]
+  );
+
+  const handleCrossDisplayEdge = useCallback(
+    (direction: 'left' | 'right') => {
+      if (!isDesktopApp) return;
+      if (connectedDisplays.length <= 1) return;
+      if (activeDisplayTarget === 'all') return;
+
+      const current =
+        connectedDisplays.find((d) => d.id === activeDisplayTarget) ||
+        connectedDisplays.find((d) => d.isPrimary) ||
+        connectedDisplays[0];
+      if (!current) return;
+
+      let candidate: DisplayInfo | null = null;
+      if (direction === 'left') {
+        const leftCandidates = connectedDisplays
+          .filter((d) => d.bounds.x < current.bounds.x)
+          .sort((a, b) => b.bounds.x - a.bounds.x);
+        candidate = leftCandidates[0] || null;
+      } else {
+        const rightCandidates = connectedDisplays
+          .filter((d) => d.bounds.x > current.bounds.x)
+          .sort((a, b) => a.bounds.x - b.bounds.x);
+        candidate = rightCandidates[0] || null;
+      }
+
+      if (candidate) {
+        void handleMoveToDisplay(candidate.id);
+        const cmdId = roamCommandSeqRef.current++;
+        setRoamCommand({
+          id: cmdId,
+          startFromX: direction === 'left' ? 0.88 : -0.88,
+          targetX: 0,
+          targetY: 0,
+          behavior: 'walk',
+        });
+        setAutonomousActionToast(`🚶 ${activePersona.name} strolled onto ${candidate.label}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 3500);
+      }
+    },
+    [connectedDisplays, activeDisplayTarget, handleMoveToDisplay, activePersona.name, isDesktopApp]
+  );
+
   // Toggle Transparent Desktop Companion / Shimeji Roam Mode (🪟)
   const toggleDesktopRoamMode = useCallback(async (forceValue?: boolean) => {
     const next = typeof forceValue === 'boolean' ? forceValue : !desktopRoamRef.current;
@@ -384,6 +535,7 @@ export const App: React.FC = () => {
       setIsMemoryOpen(false);
       document.documentElement.classList.add('desktop-roam-active');
       document.body.classList.add('desktop-roam-active');
+      void refreshDisplays();
     } else {
       document.documentElement.classList.remove('desktop-roam-active');
       document.body.classList.remove('desktop-roam-active');
@@ -399,20 +551,7 @@ export const App: React.FC = () => {
     } catch {
       // browser preview fallback
     }
-  }, []);
-
-  const activePersona = useMemo(() => {
-    return (
-      studio.personas.find((p) => p.id === studio.activePersonaId) || studio.personas[0]
-    );
-  }, [studio.personas, studio.activePersonaId]);
-
-  const activeSlot = useMemo(() => {
-    return (
-      activePersona.outfitSlots.find((s) => s.id === activePersona.activeOutfitSlotId) ||
-      activePersona.outfitSlots[0]
-    );
-  }, [activePersona]);
+  }, [refreshDisplays]);
 
   const updateActivePersona = useCallback((updater: (persona: Persona) => Persona) => {
     setStudio((prev) => ({
@@ -459,6 +598,13 @@ export const App: React.FC = () => {
         `Live Gemini (${patch.textModel || studioRef.current.settings.textModel}) · built-in default key`
       );
     }
+    if (patch.preferLocalAi === true) {
+      hasAutoPromptedAuthRef.current = false;
+      setConnectionMode('live');
+      setApiErrorToast(null);
+      setValidationMessage('Prioritizing Local Offline AI (LM Studio & VOICEVOX).');
+      setProviderStatus('Offline Local AI · LM Studio (Qwen 2.5 7B)');
+    }
     setStudio((prev) => ({
       ...prev,
       settings: {
@@ -474,19 +620,26 @@ export const App: React.FC = () => {
     async (overrideKey?: string): Promise<boolean> => {
       const currentSettings = studioRef.current.settings;
       const keyToTest = sanitizeApiKey(overrideKey ?? currentSettings.apiKey);
-      if (!keyToTest) {
+      const isLocal =
+        currentSettings.preferLocalAi ||
+        keyToTest.toLowerCase() === 'local' ||
+        keyToTest.toLowerCase() === 'lm-studio';
+
+      if (!keyToTest && !isLocal) {
         setConnectionMode('demo');
         setValidationMessage(null);
         return false;
       }
 
-      saveKeyToLocalStorage(keyToTest);
+      if (keyToTest && !isLocal) {
+        saveKeyToLocalStorage(keyToTest);
+      }
       setIsValidatingKey(true);
       setValidationMessage(null);
 
       try {
         const result = await validateGeminiApiKey({
-          apiKey: keyToTest,
+          apiKey: isLocal ? 'local' : keyToTest,
           keyMode: currentSettings.keyMode,
           model: currentSettings.textModel || 'gemini-flash-latest',
         });
@@ -499,12 +652,20 @@ export const App: React.FC = () => {
           setConnectionMode('live');
           setApiErrorToast(null);
           setValidationMessage(`Verified! Connected to ${result.endpoint} (${result.model}).`);
-          setProviderStatus(`Live Gemini (${result.model})`);
+          setProviderStatus(
+            isLocal
+              ? `Offline Local AI · ${result.model}`
+              : `Live Gemini (${result.model})`
+          );
           return true;
         }
 
         setConnectionMode('error');
-        const errMsg = result.error || 'Gemini API key validation failed.';
+        const errMsg =
+          result.error ||
+          (isLocal
+            ? 'LM Studio server is not running on http://localhost:1234. Please click "Start Server" in LM Studio.'
+            : 'Gemini API key validation failed.');
         setApiErrorToast(errMsg);
         setValidationMessage(errMsg);
         setProviderStatus(`API Error — ${errMsg}`);
@@ -513,7 +674,7 @@ export const App: React.FC = () => {
         setIsValidatingKey(false);
       }
     },
-    []
+    [handleUpdateSettings]
   );
 
   const triggerMemorySummary = useCallback(async (personaId: string) => {
@@ -633,16 +794,103 @@ export const App: React.FC = () => {
         window.setTimeout(() => setAutonomousActionToast(null), 3500);
         return summary;
       },
+      changePosture: ({ posture, reason }: { posture: string; reason: string }) => {
+        const validPosture = (['seated', 'standing', 'sleeping'].includes(posture)
+          ? posture
+          : 'seated') as AvatarPosture;
+        handleUpdateSettings({ defaultPosture: validPosture });
+        const labels: Record<AvatarPosture, string> = {
+          seated: 'sat down on the studio stool',
+          standing: 'stood up freely',
+          sleeping: 'laid down to rest in bed',
+        };
+        const summary = `Switched posture to ${validPosture} (${reason})`;
+        setAutonomousActionToast(`🧍 ${labels[validPosture]}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        return summary;
+      },
+      moveToDisplay: ({ targetDisplay, reason }: { targetDisplay: string; reason: string }) => {
+        let chosen: number | string | 'all' = targetDisplay;
+        if (targetDisplay === 'next') {
+          const currentIdx = connectedDisplays.findIndex((d) => d.id === activeDisplayTarget);
+          if (connectedDisplays.length > 1) {
+            const nextIdx = (currentIdx + 1) % connectedDisplays.length;
+            chosen = connectedDisplays[nextIdx].id;
+          }
+        } else if (targetDisplay === 'primary') {
+          const prim = connectedDisplays.find((d) => d.isPrimary);
+          if (prim) chosen = prim.id;
+        } else if (targetDisplay === 'secondary') {
+          const sec = connectedDisplays.find((d) => !d.isPrimary);
+          if (sec) chosen = sec.id;
+        }
+        void handleMoveToDisplay(chosen);
+        const summary = `Moved to display "${chosen}" (${reason})`;
+        setAutonomousActionToast(`🖥️ Strolling to Display: ${chosen}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        return summary;
+      },
+      takeSelfCare: ({ activity, reason }: { activity: CareActivityId; reason: string }) => {
+        handleCareActivityRef.current(activity);
+        const summary = `Engaged in self-care activity "${activity}" (${reason})`;
+        return summary;
+      },
     };
-  }, [updateActivePersona]);
+  }, [
+    activeDisplayTarget,
+    connectedDisplays,
+    handleMoveToDisplay,
+    handleUpdateSettings,
+    updateActivePersona,
+  ]);
 
-  // Core AI Turn Runner (with Gemini Autonomous Tools + Real API Error Surfacing)
+  // Desktop screen capture helper for multimodal vision
+  const handleCaptureScreen = useCallback(async (): Promise<{
+    mimeType: string;
+    base64: string;
+  } | null> => {
+    try {
+      const api = window.studioAPI?.captureScreen || window.desktopBridge?.captureScreen;
+      if (api) {
+        const res = await api();
+        if (res.ok && res.base64) {
+          return {
+            mimeType: res.mimeType || 'image/jpeg',
+            base64: res.base64,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[Screen Vision] Capture error:', err);
+    }
+    return null;
+  }, []);
+
+  // Core AI Turn Runner (with Gemini Autonomous Tools + Multimodal Vision)
   const runAiTurn = useCallback(
-    async (promptText: string, role: 'user' | 'system_event') => {
+    async (
+      promptText: string,
+      role: 'user' | 'system_event',
+      options?: { attachedImage?: { mimeType: string; base64: string } }
+    ) => {
       const currentState = studioRef.current;
       const persona =
         currentState.personas.find((p) => p.id === currentState.activePersonaId) ||
         currentState.personas[0];
+
+      let effectiveAttachedImage = options?.attachedImage;
+      if (
+        !effectiveAttachedImage &&
+        role === 'user' &&
+        /(look at.*(screen|monitor|display)|what('s| is) on my screen|see this|画面見て)/i.test(promptText)
+      ) {
+        const captured = await handleCaptureScreen();
+        if (captured) {
+          effectiveAttachedImage = captured;
+          setAutonomousActionToast('👁️ Screen Attached to Vision');
+          window.setTimeout(() => setAutonomousActionToast(null), 2500);
+        }
+      }
 
       const queuedHiddenNotes =
         role === 'user' && persona.pendingSystemEvents?.length
@@ -674,15 +922,15 @@ export const App: React.FC = () => {
         personas: prev.personas.map((p) =>
           p.id === personaId
             ? {
-                ...p,
-                brain:
-                  role === 'user' && p.brain.isSleeping
-                    ? { ...p.brain, isSleeping: false }
-                    : p.brain,
-                messages: [...p.messages, outgoingMsg],
-                pendingSystemEvents: role === 'user' ? [] : p.pendingSystemEvents,
-                updatedAt: Date.now(),
-              }
+              ...p,
+              brain:
+                role === 'user' && p.brain.isSleeping
+                  ? { ...p.brain, isSleeping: false }
+                  : p.brain,
+              messages: [...p.messages, outgoingMsg],
+              pendingSystemEvents: role === 'user' ? [] : p.pendingSystemEvents,
+              updatedAt: Date.now(),
+            }
             : p
         ),
       }));
@@ -696,6 +944,9 @@ export const App: React.FC = () => {
           userPrompt: promptText,
           hiddenSystemNotes: queuedHiddenNotes,
           toolExecutor: buildToolExecutor(),
+          detectedMeshes: detectedMeshesRef.current,
+          overrideVaultModels: vaultModelsRef.current,
+          attachedImage: effectiveAttachedImage,
         });
 
         lastFailedTurnRef.current = null;
@@ -707,6 +958,127 @@ export const App: React.FC = () => {
         }
 
         const parsed = parseDialogueResponse(reply.rawText, persona.mood);
+
+        // AI-triggered Wardrobe change action tag: [EQUIP_OUTFIT: ...]
+        if (parsed.outfitAction) {
+          const target = parsed.outfitAction.slotTarget.trim().toLowerCase();
+          const targetIndexMatch = /(?:slot\s*#?|#)?(\d+)/i.exec(target);
+          let matchedSlot: OutfitSlot | undefined;
+          if (targetIndexMatch) {
+            const num = parseInt(targetIndexMatch[1], 10);
+            if (num >= 1 && num <= persona.outfitSlots.length) {
+              matchedSlot = persona.outfitSlots[num - 1];
+            } else if (num >= 0 && num < persona.outfitSlots.length) {
+              matchedSlot = persona.outfitSlots[num];
+            }
+          }
+          if (!matchedSlot) {
+            matchedSlot = persona.outfitSlots.find(
+              (s) =>
+                s.id.toLowerCase() === target ||
+                s.name.toLowerCase().includes(target) ||
+                target.includes(s.name.toLowerCase())
+            );
+          }
+          if (matchedSlot && matchedSlot.id !== persona.activeOutfitSlotId) {
+            updateActivePersona((p) => ({
+              ...p,
+              activeOutfitSlotId: matchedSlot!.id,
+              updatedAt: Date.now(),
+            }));
+            setAutonomousActionToast(`👗 Equipped Outfit: ${matchedSlot.name}`);
+            window.setTimeout(() => setAutonomousActionToast(null), 3500);
+          }
+        }
+
+        // AI-triggered Clothing layer toggle action tags: [TOGGLE_LAYER: <name>=on|off]
+        if (parsed.layerActions && parsed.layerActions.length > 0) {
+          for (const act of parsed.layerActions) {
+            const nameLower = act.layerName.trim().toLowerCase();
+            if (
+              nameLower.includes('cycling') ||
+              nameLower.includes('spat') ||
+              nameLower.includes('safety short')
+            ) {
+              updateActiveSlot((slot) => ({
+                ...slot,
+                cyclingShorts: act.visible,
+              }));
+              setAutonomousActionToast(
+                `🚴‍♀️ Cycling Shorts: ${act.visible ? 'Equipped' : 'Removed'}`
+              );
+              window.setTimeout(() => setAutonomousActionToast(null), 3500);
+            } else {
+              const currentMeshes = detectedMeshesRef.current;
+              const matchedMesh = currentMeshes.find(
+                (m) =>
+                  m.name.toLowerCase() === nameLower ||
+                  m.label.toLowerCase() === nameLower ||
+                  m.label.toLowerCase().includes(nameLower) ||
+                  nameLower.includes(m.label.toLowerCase())
+              );
+              if (matchedMesh) {
+                updateActiveSlot((slot) => ({
+                  ...slot,
+                  meshVisibility: {
+                    ...slot.meshVisibility,
+                    [matchedMesh.name]: act.visible,
+                  },
+                }));
+                setAutonomousActionToast(
+                  `✨ ${matchedMesh.label}: ${act.visible ? 'ON' : 'OFF'}`
+                );
+                window.setTimeout(() => setAutonomousActionToast(null), 3500);
+              }
+            }
+          }
+        }
+
+        // AI-triggered physical posture change tag: [POSTURE: seated | standing | sleeping]
+        if (parsed.postureAction) {
+          handleUpdateSettings({ defaultPosture: parsed.postureAction });
+          const postureLabels = {
+            seated: 'sat down on the studio stool',
+            standing: 'stood up gracefully',
+            sleeping: 'lay down on the cozy bed',
+          };
+          setAutonomousActionToast(`🧘 ${persona.name} ${postureLabels[parsed.postureAction]}`);
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        }
+
+        // AI-triggered 3D Stage / Desktop Roam move tag: [MOVE: walk | peek | sit_taskbar | approach_user]
+        if (parsed.moveAction) {
+          const id = roamCommandSeqRef.current++;
+          const targetX =
+            parsed.moveAction === 'peek'
+              ? Math.random() < 0.5
+                ? -0.85
+                : 0.85
+              : parsed.moveAction === 'approach_user'
+              ? 0.12
+              : (Math.random() - 0.5) * 0.65;
+          const targetY = parsed.moveAction === 'sit_taskbar' ? -0.18 : 0;
+          setRoamCommand({ id, targetX, targetY, behavior: parsed.moveAction });
+        }
+
+        // AI-triggered procedural expressive emote / pose tag: [POSE: ...] or [EMOTE: ...]
+        if (parsed.poseAction || parsed.emoteAction) {
+          const emoteId = (parsed.poseAction || parsed.emoteAction) as ProceduralEmoteId;
+          const id = emoteCommandSeqRef.current++;
+          setEmoteCommand({ id, emoteId });
+        }
+
+        // AI-triggered autonomous eye & head gaze tracking tag: [GAZE: camera | mouse | look_away | shy_down | screen]
+        if (parsed.gazeAction) {
+          const id = gazeCommandSeqRef.current++;
+          setGazeCommand({ id, target: parsed.gazeAction });
+        }
+
+        // AI-triggered autonomous facial blendshape expression tag: [EXPRESSION: ...]
+        if (parsed.expressionAction) {
+          const id = expressionCommandSeqRef.current++;
+          setExpressionCommand({ id, expression: parsed.expressionAction });
+        }
         const toolEventsMsgs: ChatMessage[] = reply.toolEvents.map((ev, idx) => ({
           id: `msg-tool-${Date.now()}-${idx}`,
           role: 'system_event',
@@ -775,11 +1147,26 @@ export const App: React.FC = () => {
               nextCarryover?.feeling ||
               deriveDefaultNuancedFeeling(parsed.mood, nextBrainBase);
 
+            const nextArchetype = resolveAiDrivenArchetype({
+              baseArchetype: p.voice.archetype,
+              mood: parsed.mood,
+              gender: p.voice.gender,
+              isSleeping: nextBrainBase.isSleeping,
+              sleepiness: nextBrainBase.sleepiness,
+              nuancedFeeling: resolvedFeeling,
+              traits: p.traits,
+              explicitTag: parsed.archetype,
+            });
+
             return {
               ...p,
               mood: parsed.mood,
               emotionIntensity: parsed.emotionIntensity,
               affinity: nextAffinity,
+              voice: {
+                ...p.voice,
+                archetype: nextArchetype,
+              },
               brain: {
                 ...nextBrainBase,
                 nuancedFeeling: resolvedFeeling,
@@ -825,8 +1212,8 @@ export const App: React.FC = () => {
           err instanceof GeminiApiError
             ? err.message
             : err instanceof Error
-            ? err.message
-            : String(err);
+              ? err.message
+              : String(err);
 
         lastFailedTurnRef.current = { promptText, role };
         setConnectionMode('error');
@@ -846,8 +1233,16 @@ export const App: React.FC = () => {
         setIsGenerating(false);
       }
     },
-    [buildToolExecutor, triggerMemorySummary]
+    [buildToolExecutor, handleCaptureScreen, triggerMemorySummary]
   );
+
+  const handleInspectScreen = useCallback(async () => {
+    setAutonomousActionToast('👁️ Capturing Desktop Screen for AI Vision...');
+    const captured = await handleCaptureScreen();
+    window.setTimeout(() => setAutonomousActionToast(null), 2500);
+    const prompt = 'Look at my screen right now! What am I working on, looking at, or doing?';
+    void runAiTurn(prompt, 'user', { attachedImage: captured || undefined });
+  }, [handleCaptureScreen, runAiTurn]);
 
   // Opt-In Active-Window Awareness Polling (👁️ PC Context — strictly local, off by default)
   const triggerPcContextReaction = useCallback(
@@ -924,6 +1319,7 @@ export const App: React.FC = () => {
       const now = Date.now();
       lastUserActivityAtRef.current = now;
       lastCursorActiveAtRef.current = now;
+      void voiceEngine.unlockAudio();
     };
     window.addEventListener('mousemove', bumpActivity, { passive: true });
     window.addEventListener('keydown', bumpActivity, { passive: true });
@@ -1056,6 +1452,7 @@ export const App: React.FC = () => {
   // Interactive Care & Activities Bar Handler (☕)
   const handleCareActivity = useCallback(
     (activity: CareActivityId) => {
+      handleCareActivityRef.current = handleCareActivity;
       if (isGeneratingRef.current) return;
       const currentState = studioRef.current;
       const persona =
@@ -1080,11 +1477,11 @@ export const App: React.FC = () => {
           carryover:
             activity === 'comfort_blanket' || activity === 'rest_nap'
               ? {
-                  feeling: effect.nuancedFeeling,
-                  mood: effect.moodOverride,
-                  turnsRemaining: 3,
-                  empathySoftening: true,
-                }
+                feeling: effect.nuancedFeeling,
+                mood: effect.moodOverride,
+                turnsRemaining: 3,
+                empathySoftening: true,
+              }
               : p.brain.carryover,
           currentThought: effect.thoughtText,
           thoughtStream: [
@@ -1108,6 +1505,7 @@ export const App: React.FC = () => {
     },
     [fireMicroTell, runAiTurn, updateActivePersona]
   );
+  handleCareActivityRef.current = handleCareActivity;
 
   const handleWakeFromSleep = useCallback(() => {
     handleCareActivity('wake_up');
@@ -1157,6 +1555,31 @@ export const App: React.FC = () => {
         fireMicroTell(suggestedTell);
       }
 
+      // Autonomous Character Self-Care: AI character manages her own needs without requiring user clicks
+      if (nextBrain.isSleeping && nextBrain.energy >= 96) {
+        handleCareActivity('wake_up');
+        setAutonomousActionToast(`🌅 ${persona.name} felt refreshed and woke up gently.`);
+        window.setTimeout(() => setAutonomousActionToast(null), 3500);
+      } else if (
+        !nextBrain.isSleeping &&
+        !isGeneratingRef.current &&
+        !isSpeakingRef.current
+      ) {
+        if (nextBrain.sleepiness > 92) {
+          handleCareActivity('rest_nap');
+          setAutonomousActionToast(`💤 ${persona.name} felt sleepy and laid down to rest.`);
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        } else if (nextBrain.hunger > 92) {
+          handleCareActivity('snack_tea');
+          setAutonomousActionToast(`🍱 ${persona.name} felt hungry and enjoyed a warm tea & snack.`);
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        } else if (nextBrain.comfort < 25) {
+          handleCareActivity('comfort_blanket');
+          setAutonomousActionToast(`🧣 ${persona.name} felt chilly and wrapped in a cozy blanket.`);
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        }
+      }
+
       if (
         shouldTriggerAutonomousImpulse &&
         !isGeneratingRef.current &&
@@ -1164,11 +1587,49 @@ export const App: React.FC = () => {
         !current.settings.doNotDisturb
       ) {
         triggerBrainImpulse(shouldTriggerAutonomousImpulse, false);
+      } else {
+        // Spontaneous Proactive Dialogue Chime-In (late night, deep work, or high boredom)
+        const proactiveCooldown = 210000; // 3.5 minutes
+        const minUserSilence = 90000; // 1.5 minutes
+        const canSpeakProactively =
+          !isGeneratingRef.current &&
+          !isSpeakingRef.current &&
+          !current.settings.doNotDisturb &&
+          !nextBrain.isSleeping &&
+          now - lastProactiveSpeechAtRef.current > proactiveCooldown &&
+          now - lastUserActivityAtRef.current > minUserSilence;
+
+        if (canSpeakProactively) {
+          const circadian = getCircadianContext();
+          let proactiveCue: string | null = null;
+
+          if (circadian.isLateNight) {
+            proactiveCue = `[PROACTIVE DIALOGUE: Real-world time is ${circadian.clockText} (late night). Producer is still up at their PC. Proactively speak up in character—scold them for staying up so late, tell them they need sleep for tomorrow, or grumble that you're getting tired too.]`;
+          } else if (sessionMinutes >= 45 && now - lastUserActivityAtRef.current > 180000) {
+            proactiveCue = `[PROACTIVE DIALOGUE: Producer has been in a deep focus session on their PC for ${Math.round(sessionMinutes)} minutes. Chime in with natural companion concern—tell them to rest their eyes, stretch, take a sip of water, and ask how their work is going.]`;
+          } else if (nextBrain.boredom > 68) {
+            proactiveCue = `[PROACTIVE DIALOGUE: You are feeling restless and bored (${Math.round(nextBrain.boredom)}% boredom) while Producer is busy. Speak up autonomously—demand attention, peek from the corner of the screen, or tease them for ignoring your company.]`;
+          }
+
+          if (proactiveCue) {
+            lastProactiveSpeechAtRef.current = now;
+            const roamId = roamCommandSeqRef.current++;
+            setRoamCommand({
+              id: roamId,
+              targetX: Math.random() < 0.5 ? 0.35 : -0.35,
+              targetY: 0,
+              behavior: 'approach_user',
+            });
+            setAutonomousActionToast(`💬 ${persona.name} spoke up spontaneously`);
+            window.setTimeout(() => setAutonomousActionToast(null), 3500);
+            void runAiTurn(proactiveCue, 'system_event');
+          }
+        }
       }
     }, 4000);
 
     return () => window.clearInterval(intervalId);
-  }, [hydrated, fireMicroTell, triggerBrainImpulse]);
+  }, [hydrated, fireMicroTell, triggerBrainImpulse, runAiTurn]);
 
   // 1-Click Google AI Studio Bridge Connect
   const handleConnectAiStudioKey = useCallback(async () => {
@@ -1273,6 +1734,14 @@ export const App: React.FC = () => {
     [runAiTurn, updateActivePersona]
   );
 
+  const handleTriggerAiStylist = useCallback(() => {
+    const userName = studioRef.current.settings.userName.trim() || 'Producer';
+    const envMeta = STAGE_ENVIRONMENTS[activePersona.stageEnvironment];
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const prompt = `[AI STYLIST: Please inspect your complete wardrobe inventory and style the perfect outfit ensemble for right now (${timeStr}, stage environment: ${envMeta?.name || 'Studio'}). Tell ${userName} with pride why you chose this look, and equip it using [EQUIP_OUTFIT: <slot>] and [TOGGLE_LAYER: <piece>=on|off]!]`;
+    void runAiTurn(prompt, 'user');
+  }, [activePersona.stageEnvironment, runAiTurn]);
+
   const handleSelectSlot = (slotId: string) => {
     if (slotId === activeSlot.id) return;
     const targetSlot = activePersona.outfitSlots.find((s) => s.id === slotId);
@@ -1308,43 +1777,121 @@ export const App: React.FC = () => {
   };
 
   const handleImportModelFile = async (file: File, customSlotName?: string) => {
-    const buffer = await file.arrayBuffer();
-    const meta = await saveModelToVault({ fileName: file.name, buffer });
-    setVaultModels(await listVaultModels());
+    try {
+      const buffer = await file.arrayBuffer();
+      const meta = await saveModelToVault({ fileName: file.name, buffer });
+      setVaultModels(await listVaultModels());
 
-    const slotName =
-      customSlotName ||
-      `Slot ${activePersona.outfitSlots.length + 1}: ${file.name
-        .replace(/\.(vrm|glb)$/i, '')
-        .replace(/[_-]+/g, ' ')}`;
-    const newSlot: OutfitSlot = {
-      id: `slot-${Date.now()}`,
-      name: slotName,
-      modelVaultId: meta.id,
-      meshVisibility: {},
-      materialMods: {},
-      yawOffset: 0,
-      createdAt: Date.now(),
-    };
+      const isVroidItem =
+        meta.format === 'vroidcustomitem' || file.name.toLowerCase().endsWith('.vroidcustomitem');
+      let materialMods: Record<string, MaterialMod> = {};
 
-    updateActivePersona((p) => ({
-      ...p,
-      outfitSlots: [...p.outfitSlots, newSlot],
-      activeOutfitSlotId: newSlot.id,
-      updatedAt: Date.now(),
-    }));
+      if (isVroidItem) {
+        try {
+          const extracted = await extractPlayableGlbFromBuffer(buffer, file.name);
+          if (extracted.vroidMetadata) {
+            const { category, primaryTextureDataUrl, primaryTextureMime, primaryTextureBuffer } =
+              extracted.vroidMetadata;
+            const savedTex = await saveTextureToVault({
+              fileName: `${file.name.replace(/\.[^.]+$/, '')}_texture.png`,
+              mimeType: primaryTextureMime,
+              dataUrl: primaryTextureDataUrl,
+              sizeBytes: primaryTextureBuffer.byteLength,
+            });
 
-    triggerOutfitReaction(
-      slotName,
-      `imported and equipped new 3D ${meta.format.toUpperCase()} model "${file.name}"`
-    );
+            const cat = (category || '').toLowerCase();
+            const target =
+              detectedMeshes.find((m) => {
+                if (
+                  cat.includes('dress') ||
+                  cat.includes('top') ||
+                  /dress|top|shirt/i.test(file.name)
+                ) {
+                  return m.category === 'Tops' || /top|dress|cloth/i.test(m.name);
+                }
+                if (
+                  cat.includes('bottom') ||
+                  cat.includes('skirt') ||
+                  cat.includes('pants') ||
+                  /skirt|pant/i.test(file.name)
+                ) {
+                  return m.category === 'Bottoms' || /bottom|skirt/i.test(m.name);
+                }
+                if (cat.includes('shoe') || cat.includes('foot') || /shoe/i.test(file.name)) {
+                  return m.category === 'Footwear' || /shoe/i.test(m.name);
+                }
+                if (cat.includes('hair') || /hair/i.test(file.name)) {
+                  return m.category === 'Hair' || /hair/i.test(m.name);
+                }
+                return false;
+              }) ||
+              detectedMeshes.find((m) => m.category === 'Tops') ||
+              detectedMeshes[0];
+
+            if (target) {
+              materialMods[target.name] = {
+                textureVaultId: savedTex.id,
+                textureDataUrl: primaryTextureDataUrl,
+                textureFileName: file.name,
+              };
+            }
+          }
+        } catch (err) {
+          console.warn('[VROID] Auto-texture extraction failed:', err);
+        }
+      }
+
+      const cleanItemName = file.name
+        .replace(/\.(vrm|glb|xavatar|xwear|vroidcustomitem)$/i, '')
+        .replace(/[_-]+/g, ' ')
+        .trim();
+      const slotName =
+        customSlotName ||
+        (isVroidItem
+          ? `✨ ${cleanItemName}`
+          : `Slot ${activePersona.outfitSlots.length + 1}: ${cleanItemName}`);
+
+      const newSlot: OutfitSlot = {
+        id: `slot-${Date.now()}`,
+        name: slotName,
+        modelVaultId: isVroidItem ? (activeSlot.modelVaultId || meta.id) : meta.id,
+        meshVisibility: isVroidItem ? { ...activeSlot.meshVisibility } : {},
+        materialMods,
+        yawOffset: isVroidItem ? (activeSlot.yawOffset ?? 0) : 0,
+        accessories: isVroidItem ? [...(activeSlot.accessories || [])] : [],
+        createdAt: Date.now(),
+      };
+
+      updateActivePersona((p) => ({
+        ...p,
+        outfitSlots: [...p.outfitSlots, newSlot],
+        activeOutfitSlotId: newSlot.id,
+        updatedAt: Date.now(),
+      }));
+
+      if (isVroidItem) {
+        setAutonomousActionToast(`👗 Imported VRoid Custom Item "${cleanItemName}" and applied to outfit!`);
+        window.setTimeout(() => setAutonomousActionToast(null), 4000);
+      }
+
+      triggerOutfitReaction(
+        slotName,
+        isVroidItem
+          ? `imported and put on VRoid custom outfit "${file.name}"`
+          : `imported and equipped new 3D ${meta.format.toUpperCase()} model "${file.name}"`
+      );
+    } catch (err) {
+      setApiErrorToast(
+        err instanceof Error ? err.message : `Failed to import "${file.name}".`
+      );
+    }
   };
 
   const handleLinkVaultModelAsSlot = (model: VaultModelMeta, customSlotName?: string) => {
     const slotName =
       customSlotName ||
       `Slot ${activePersona.outfitSlots.length + 1}: ${model.fileName
-        .replace(/\.(vrm|glb)$/i, '')
+        .replace(/\.(vrm|glb|xavatar|xwear)$/i, '')
         .replace(/[_-]+/g, ' ')}`;
     const newSlot: OutfitSlot = {
       id: `slot-${Date.now()}`,
@@ -1353,6 +1900,7 @@ export const App: React.FC = () => {
       meshVisibility: {},
       materialMods: {},
       yawOffset: 0,
+      accessories: [],
       createdAt: Date.now(),
     };
 
@@ -1367,6 +1915,95 @@ export const App: React.FC = () => {
       slotName,
       `equipped saved 3D model "${model.fileName}" from IndexedDB vault`
     );
+  };
+
+  const handleEquipVaultAccessory = (
+    meta: VaultAccessoryMeta,
+    attachTarget?: AccessoryAttachTarget
+  ) => {
+    const target = attachTarget ?? meta.defaultTarget;
+    const equipped: EquippedAccessory = {
+      id: `eq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      vaultAccessoryId: meta.id,
+      name: meta.name,
+      fileName: meta.fileName,
+      format: meta.format,
+      visible: true,
+      attachTarget: target,
+      position: [0, 0, 0],
+      rotationDeg: [0, 0, 0],
+      scale: 1,
+    };
+
+    updateActiveSlot((slot) => ({
+      ...slot,
+      accessories: [...(slot.accessories || []), equipped],
+    }));
+
+    setAutonomousActionToast(`🎀 Equipped: ${meta.name}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 3200);
+    triggerOutfitReaction(
+      activeSlot.name,
+      `added 3D ${meta.format.toUpperCase()} accessory "${meta.name}" (${target})`
+    );
+  };
+
+  const handleImportAccessoryFile = async (
+    file: File,
+    customName?: string,
+    attachTarget?: AccessoryAttachTarget
+  ) => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const meta = await saveAccessoryToVault({
+        fileName: file.name,
+        name: customName,
+        buffer,
+        defaultTarget: attachTarget,
+      });
+      setVaultAccessories(await listVaultAccessories());
+      handleEquipVaultAccessory(meta, attachTarget ?? meta.defaultTarget);
+    } catch (err) {
+      setApiErrorToast(
+        err instanceof Error
+          ? err.message
+          : `Failed to import accessory "${file.name}".`
+      );
+    }
+  };
+
+  const handleUpdateEquippedAccessory = (
+    accessoryId: string,
+    patch: Partial<EquippedAccessory>
+  ) => {
+    updateActiveSlot((slot) => ({
+      ...slot,
+      accessories: (slot.accessories || []).map((acc) =>
+        acc.id === accessoryId ? { ...acc, ...patch } : acc
+      ),
+    }));
+  };
+
+  const handleRemoveEquippedAccessory = (accessoryId: string) => {
+    updateActiveSlot((slot) => ({
+      ...slot,
+      accessories: (slot.accessories || []).filter((acc) => acc.id !== accessoryId),
+    }));
+  };
+
+  const handleDeleteVaultAccessory = async (vaultAccessoryId: string) => {
+    await deleteVaultAccessory(vaultAccessoryId);
+    setVaultAccessories(await listVaultAccessories());
+    updateActivePersona((p) => ({
+      ...p,
+      outfitSlots: p.outfitSlots.map((slot) => ({
+        ...slot,
+        accessories: (slot.accessories || []).filter(
+          (acc) => acc.vaultAccessoryId !== vaultAccessoryId
+        ),
+      })),
+      updatedAt: Date.now(),
+    }));
   };
 
   const handleDeleteSlot = (slotId: string) => {
@@ -1386,6 +2023,17 @@ export const App: React.FC = () => {
   const handleDeleteVaultModel = async (modelId: string) => {
     await deleteVaultModel(modelId);
     setVaultModels(await listVaultModels());
+  };
+
+  const handleToggleCyclingShorts = (enabled: boolean) => {
+    updateActiveSlot((slot) => ({
+      ...slot,
+      cyclingShorts: enabled,
+    }));
+    triggerOutfitReaction(
+      activeSlot.name,
+      enabled ? 'equipped cycling safety shorts' : 'removed cycling safety shorts'
+    );
   };
 
   const handleToggleMeshVisibility = (
@@ -1455,6 +2103,48 @@ export const App: React.FC = () => {
     displayLabel?: string
   ) => {
     const pieceName = displayLabel || meshName;
+    const isVroid = file.name.toLowerCase().endsWith('.vroidcustomitem');
+
+    if (isVroid) {
+      void (async () => {
+        try {
+          const buffer = await file.arrayBuffer();
+          const extracted = await extractPlayableGlbFromBuffer(buffer, file.name);
+          const dataUrl =
+            extracted.vroidMetadata?.primaryTextureDataUrl || extracted.thumbnailDataUrl;
+          if (dataUrl) {
+            const savedTex = await saveTextureToVault({
+              fileName: `${file.name.replace(/\.[^.]+$/, '')}_texture.png`,
+              mimeType: extracted.vroidMetadata?.primaryTextureMime || 'image/png',
+              dataUrl,
+              sizeBytes: extracted.vroidMetadata?.primaryTextureBuffer.byteLength || file.size,
+            });
+
+            updateActiveSlot((slot) => ({
+              ...slot,
+              materialMods: {
+                ...slot.materialMods,
+                [meshName]: {
+                  ...slot.materialMods[meshName],
+                  textureVaultId: savedTex.id,
+                  textureDataUrl: dataUrl,
+                  textureFileName: file.name,
+                },
+              },
+            }));
+            triggerOutfitReaction(
+              activeSlot.name,
+              `extracted and applied VRoid custom outfit texture "${file.name}" onto ${pieceName}`
+            );
+            return;
+          }
+        } catch (err) {
+          console.warn('Failed to extract texture from vroidcustomitem in texture uploader:', err);
+        }
+      })();
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async () => {
       const dataUrl = typeof reader.result === 'string' ? reader.result : '';
@@ -1527,8 +2217,8 @@ export const App: React.FC = () => {
     const kind: CustomBackdropKind = lower.endsWith('.hdr')
       ? 'hdr'
       : lower.endsWith('.glb')
-      ? 'glb'
-      : 'image';
+        ? 'glb'
+        : 'image';
     const buffer = await file.arrayBuffer();
     const rec = await saveEnvironmentToVault({
       fileName: file.name,
@@ -1875,22 +2565,21 @@ export const App: React.FC = () => {
           ? -0.92
           : 0.92
         : behavior === 'walk'
-        ? (Math.random() - 0.5) * 1.4
-        : behavior === 'sit_taskbar'
-        ? roamNormX
-        : 0;
+          ? (Math.random() - 0.5) * 1.4
+          : behavior === 'sit_taskbar'
+            ? roamNormX
+            : 0;
     const targetY = behavior === 'sit_taskbar' ? -0.18 : 0;
     setRoamCommand({ id, targetX, targetY, behavior });
   };
 
   return (
     <div
-      className={`relative flex h-screen w-screen flex-col overflow-hidden text-zinc-100 ${
-        desktopRoamMode ? 'bg-transparent' : 'bg-[#07070c]'
-      }`}
+      className={`relative flex h-screen w-screen flex-col overflow-hidden text-zinc-100 ${desktopRoamMode ? 'bg-transparent' : 'bg-[#07070c]'
+        }`}
     >
       {/* Real API Error Toast Banner */}
-      {apiErrorToast && (
+      {apiErrorToast && !studio.settings.preferLocalAi && (
         <div
           role="alert"
           className="fixed left-1/2 top-16 z-[60] flex max-w-2xl -translate-x-1/2 items-center gap-3 rounded-2xl border border-rose-500/50 bg-[#1a0b12]/95 px-4 py-2.5 text-xs text-rose-100 shadow-glass backdrop-blur-xl"
@@ -1956,11 +2645,10 @@ export const App: React.FC = () => {
       {/* Main Stage: Full-Screen Transparent Roam Overlay OR Responsive Split-Pane Studio */}
       <main className="flex flex-col md:flex-row flex-1 min-h-0 w-full overflow-hidden">
         <section
-          className={`relative min-w-0 transition-all duration-300 ${
-            desktopRoamMode
-              ? 'w-full h-full'
-              : 'w-full h-[45vh] md:h-full md:w-[65%]'
-          }`}
+          className={`relative min-w-0 transition-all duration-300 ${desktopRoamMode
+            ? 'w-full h-full'
+            : 'w-full h-[45vh] md:h-full md:w-[65%]'
+            }`}
         >
           <StageViewport
             persona={activePersona}
@@ -1974,9 +2662,21 @@ export const App: React.FC = () => {
             autoRoamEnabled={autoRoamEnabled}
             posture={studio.settings.defaultPosture ?? 'seated'}
             onChangePosture={(next) => handleUpdateSettings({ defaultPosture: next })}
+            onChangeSleepingPosition={(next) =>
+              updateActivePersona((p) => ({
+                ...p,
+                brain: {
+                  ...p.brain,
+                  sleepingPosition: next,
+                },
+              }))
+            }
+            onCrossDisplayEdge={isDesktopApp ? handleCrossDisplayEdge : undefined}
             roamBehavior={roamBehavior}
             roamCommand={roamCommand}
             emoteCommand={emoteCommand}
+            gazeCommand={gazeCommand}
+            expressionCommand={expressionCommand}
             microTellCommand={microTellCommand}
             onToggleAutoRoam={() => setAutoRoamEnabled((v) => !v)}
             onTriggerBrainImpulse={(reason) => triggerBrainImpulse(reason, true)}
@@ -2010,6 +2710,7 @@ export const App: React.FC = () => {
             }}
             onMeshesDetected={setDetectedMeshes}
             onImportModelFile={(file) => void handleImportModelFile(file)}
+            onImportAccessoryFile={(file) => void handleImportAccessoryFile(file)}
             onImportVrmaFile={handleImportVrmaFile}
             onDeleteVrma={(id) => void handleDeleteVrma(id)}
             onSelectEnvironment={handleSelectEnvironment}
@@ -2020,6 +2721,8 @@ export const App: React.FC = () => {
             }}
             onOpenWardrobe={() => setIsWardrobeOpen(true)}
             onAvatarInteraction={handleAvatarInteraction}
+            onUpdateYawOffset={handleUpdateSlotYawOffset}
+            onUpdateEquippedAccessory={handleUpdateEquippedAccessory}
           />
 
           {!desktopRoamMode && (
@@ -2047,6 +2750,16 @@ export const App: React.FC = () => {
               onUpdateMaterialColor={handleUpdateMaterialColor}
               onUploadMaterialTexture={handleUploadMaterialTexture}
               onResetMaterialMod={handleResetMaterialMod}
+              onToggleCyclingShorts={handleToggleCyclingShorts}
+              vaultAccessories={vaultAccessories}
+              onImportAccessoryFile={(file, name, target) =>
+                void handleImportAccessoryFile(file, name, target)
+              }
+              onEquipVaultAccessory={handleEquipVaultAccessory}
+              onUpdateEquippedAccessory={handleUpdateEquippedAccessory}
+              onRemoveEquippedAccessory={handleRemoveEquippedAccessory}
+              onDeleteVaultAccessory={(id) => void handleDeleteVaultAccessory(id)}
+              onTriggerAiStylist={handleTriggerAiStylist}
             />
           )}
         </section>
@@ -2068,6 +2781,7 @@ export const App: React.FC = () => {
               onOpenMemoryJournal={() => setIsMemoryOpen(true)}
               onConnectAiStudioKey={() => void handleConnectAiStudioKey()}
               onOpenSettings={() => setIsSettingsOpen(true)}
+              onInspectScreen={handleInspectScreen}
             />
           </section>
         )}
@@ -2088,6 +2802,10 @@ export const App: React.FC = () => {
           bubbleRequestedAt={widgetBubbleRequestedAt}
           noticeActiveWindow={studio.settings.noticeActiveWindow}
           activePcApp={activePcApp}
+          isDesktopApp={isDesktopApp}
+          displays={connectedDisplays}
+          currentDisplayTarget={activeDisplayTarget}
+          onMoveToDisplay={handleMoveToDisplay}
           onToggleFreeRoam={() => setFreeRoamEnabled((v) => !v)}
           onCommandBehavior={triggerManualRoamBehavior}
           onExitRoamMode={() => void toggleDesktopRoamMode(false)}

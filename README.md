@@ -1,86 +1,142 @@
 # Zeta 3D Idol Studio — Desktop Anime Roleplay & Virtual Idol Stage
 
-A standalone widescreen desktop **3D Anime Roleplay & Virtual Idol Studio** built with **Electron**, **React**, **TypeScript**, **Tailwind CSS**, **Three.js**, **`@pixiv/three-vrm`**, and **`@google/genai`**, styled after Zeta AI's sleek dark-mode visual novel interface.
+A standalone widescreen desktop **3D Anime Roleplay & Virtual Idol Studio** built with **Electron**, **React**, **TypeScript**, **Tailwind CSS**, **Three.js**, **`@pixiv/three-vrm`**, and dual **Cloud & Local Offline AI** support.
 
 ---
 
-## Features
+## 🌟 Highlights
 
-### 1. Desktop Widescreen Architecture & Layout
-- **Split-Pane Widescreen Stage:**
-  - **Left Pane (65% width):** Full-bleed interactive 3D WebGL stage (`Three.js` + `OrbitControls`), soft studio rim lighting, reflective stage pedestal, subtle floating particle dust, camera presets (`Portrait`, `Bust`, `Full`, `Reset`), drag-and-drop `.vrm`/`.glb` import, and an on-screen floating **Live Mood Badge** (`[MOOD: Deadpan | Flustered | Annoyed | Shy | Amused | Warm]`).
-  - **Right Pane (35% width):** Translucent dark-glass visual novel chat sidebar with structured dialogue cards separating `*italicized micro-actions*`, `"spoken Japanese/English dialogue"`, and smaller `(English subtitle translations)` underneath.
-- **Top Control Toolbar:** Instant toggles for **Persona Switcher**, **Persona Roster & Builder**, **3D Wardrobe (`👗`)**, **Voice Language (`日本語` / `English`)**, **Voice Gender (`Female` / `Male`)**, **Vocal Archetype**, **Auto-Speak (`🔊`)**, and **Settings (`⚙️`)**.
-
-### 2. Persistent Local Storage (IndexedDB + Electron Local Disk JSON)
-- **3D Model & Outfit Vault (IndexedDB):** Imported `.vrm` and `.glb` models are stored as binary `ArrayBuffer` blobs alongside filenames, format metadata, and auto-captured WebGL preview thumbnails in IndexedDB (`zeta-idol-studio-model-vault`)—bypassing `localStorage` size limits and surviving desktop restarts.
-- **Persistent Persona Roster:**
-  - Pre-seeded with three complete presets:
-    1. **Tachibana Yoshiko (`橘 佳子`)** — Deadpan / tsundere casual girl
-    2. **Hatsune Miku (`初音ミク — 紅の夜想曲`)** — Crimson Nocturne Vampire Virtual Diva
-    3. **Kurogane Ren (`黒鉄 蓮`)** — Cool guarded male tsundere vocalist
-  - Full **Persona Roster & Builder Modal** to create, edit, duplicate, export/import JSON, and delete unlimited custom personas—each with isolated chat history, active `[MOOD]`, default voice settings, and linked 3D outfit slots.
-  - Persists simultaneously to IndexedDB (`zeta-idol-studio-state-db`) and Electron's local disk (`<userData>/zeta-studio-state.json`).
-
-### 3. Three-Way 3D Wardrobe & Outfit Switcher (`👗`)
-- **Per-Persona Outfit Slots:** Link multiple `.vrm` / `.glb` files (or built-in studio rigs) as named Outfit Slots per persona. Clicking a slot hot-swaps the 3D model **without resetting camera angle, `[MOOD]`, or active chat history**.
-- **Live In-Model Clothing & Texture Modding:**
-  - **Mesh Layer Toggles:** Automatically runs `scene.traverse()` to detect removable clothing & accessory layers (`Top`, `Jacket`, `Skirt`, `Shorts`, `Shoes`, `Headset`, `Ribbon`, `Coat`) with live `mesh.visible` switches saved per Outfit Slot.
-  - **Recolor & Custom `.png` Texture Overlay:** Tint clothing materials (`material.color` & VRM MToon `shadeColorFactor`) with quick swatches or a custom color picker, or upload any `.png` texture live via `THREE.TextureLoader`.
-- **Live Outfit-to-Tsundere AI Reaction:** Every outfit swap, layer toggle, or color/texture edit injects `[SYSTEM EVENT: {{user}} just changed your outfit to "${outfitName}" (${changeSummary}). React immediately in character!]` and triggers an immediate in-character reaction turn.
-
-### 4. Japanese Tsundere Dialogue, Gemini TTS & Real-Time 3D VRM Lip-Sync
-- **Dual-Key Gemini Client (`@google/genai` + Vertex AI Express):**
-  - Supports both standard **`AIza...`** Gemini API keys (`generativelanguage.googleapis.com`) and **`AQ...`** Vertex AI Express keys (`aiplatform.googleapis.com`), configured via `.env` (`GEMINI_API_KEY=...`) or in-app **Settings (`⚙️`)**.
-  - Works out of the box with an offline in-character demo fallback before an API key is entered.
-- **Japanese Visual Novel Dialogue Format:** Concise 2–4 sentence responses with English `*micro-actions*`, natural conversational Japanese `"dialogue"`, `(English subtitle translation)`, and trailing `[MOOD: ...]`.
-- **Voice Acting (`gemini-3.8-flash-tts`) + `ja-JP` Fallback:**
-  - Strips `*actions*`, `(translations)`, and `[MOOD]` tags—reading **only** text inside `"quotation marks"`.
-  - **Female** (`Aoede` / `Leda`) and **Male** (`Fenrir` / `Charon`) voices across four anime archetypes (*Sharp Classic Tsundere*, *Theatrical Gothic Diva*, *Deadpan & Sleepy*, *Cool Guarded Tsundere*) with **Pitch (`0.85x–1.45x`)** and **Speed (`0.90x–1.25x`)** sliders, plus automatic `ja-JP` / `en-US` `window.speechSynthesis` fallback.
-- **Real-Time VRM Lip-Sync & Tsundere Head-Turn:** Connects audio playback to a Web Audio `AnalyserNode` to drive VRM mouth blendshapes (`aa`, `ih`, `ou`) in real time, and smoothly applies a blushing tsundere head turn (`head.rotation.y = -0.18`) when `[MOOD]` shifts to `Flustered` or `Annoyed`.
+* **3D Virtual Idol Stage:** Real-time WebGL rendering with `@pixiv/three-vrm`, dynamic lighting, customizable cameras, and audio-reactive lip-syncing.
+* **Dual AI Modes:**
+  * 🌐 **Cloud AI:** Google Gemini API (`gemini-flash-latest` / `gemini-3.8-flash`) + Gemini TTS.
+  * ⚡ **Local Offline AI:** **LM Studio (Qwen 2.5 7B)** + **VOICEVOX (Japanese Anime Voice)** with zero API keys and no quota limits.
+* **Real-Time 3D Lip-Sync:** Web Audio `AnalyserNode` maps synthesized audio directly to VRM vowel blendshapes (`aa`, `ih`, `ou`) in real time.
+* **3D Wardrobe & Layer Modding:** Detects removable outfit layers, custom texture overlays, and recoloring with live in-character reactions.
+* **Desktop Roam Mode:** Pop Zeta out of the studio onto your Windows desktop with click-through transparency and idle check-ins.
 
 ---
 
-## Quick Start
+## 🚀 Getting Started & Setup
 
 ### Prerequisites
-- **Node.js 20+ (LTS)** and **npm**
+1. **Node.js 20+ (LTS)** and **npm**
+2. *(Optional for Offline Mode)*:
+   * **[LM Studio](https://lmstudio.ai/)** (Local LLM Server)
+   * **[VOICEVOX](https://voicevox.hiroshiba.jp/)** (Japanese Anime Speech Engine)
 
-### 1. Install Dependencies
+---
+
+### Step 1: Install Dependencies
+Open a terminal in the project directory and run:
+
 ```bash
 npm install
 ```
 
-### 2. Optional: Configure API Key via `.env`
-Copy `.env.example` to `.env` and add either a Gemini API key (`AIza...`) or a Vertex AI Express key (`AQ...`):
-```env
-GEMINI_API_KEY=AIza...
-```
-*(You can also enter or switch keys anytime inside the app's **Settings (`⚙️`)** modal.)*
+---
 
-### 3. Run Desktop App in Development Mode
-Launches the Vite dev server and Electron desktop widescreen window together:
+### Step 2: Choose Your AI Backend
+
+You can run Zeta in **Cloud Mode**, **Local Offline Mode**, or seamlessly switch between both anytime.
+
+#### Option A: Local Offline AI Mode (100% Free, Zero Quotas)
+
+1. **Set up LM Studio:**
+   * Download and install **[LM Studio](https://lmstudio.ai/)**.
+   * In the Search tab, search for and download:
+     ```text
+     qwen2.5-7b-instruct-1m
+     ```
+     *(Quantization: `Q4_K_M` recommended)*
+   * Go to the **Model Server (`<->`)** tab:
+     * Select `Qwen 2.5 7B` at the top.
+     * Turn on **CORS** in the right-hand Server Settings.
+     * Click **Start Server** (runs at `http://127.0.0.1:1234`).
+
+2. **Set up VOICEVOX (Voice Engine):**
+   * Download and run **VOICEVOX** (runs local engine at `http://127.0.0.1:50021`).
+   * Default idol voice: **Kasukabe Tsumugi (ID: 8)**.
+
+3. **Activate in App:**
+   * Open the app's **Settings (`⚙️`)**.
+   * Turn **ON** the switch: **`⚡ Prioritize Local Offline AI`**.
+   * Click **Test Local Connection** to confirm connectivity.
+
+---
+
+#### Option B: Cloud Mode (Google Gemini)
+
+1. Create a `.env` file in the project root:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key_here
+   ```
+   *(Or paste your key into the app's in-game **Settings (`⚙️`)** modal).*
+2. Supports standard `AIza...` Gemini keys and `AQ...` Vertex AI Express keys.
+
+---
+
+### Step 3: Run the Studio
+
+Run the desktop widescreen app (launches Vite + Electron together):
+
 ```bash
 npm run dev
 ```
 
-To run the web preview only (browser mode):
+To run only the web interface in your browser:
 ```bash
 npm run dev:vite
 ```
 
-### 4. Type-Check & Build Production Desktop Package
-Verify TypeScript compilation with zero errors:
-```bash
-npm run typecheck
+---
+
+## 🛠️ Project Architecture
+
+```
+F:\Personal
+├── electron/                 # Electron desktop wrapper
+│   ├── main.cjs              # Main process, window lifecycle, native IPC proxy
+│   ├── preload.cjs           # Secure context bridge API
+│   └── launch.cjs            # Desktop hot-reloading orchestrator
+├── src/
+│   ├── components/           # UI components (Settings, Wardrobe, Toolbar, Viewport)
+│   ├── data/                 # Character presets and vocal archetypes
+│   ├── services/
+│   │   ├── aiBrainService.ts # Context, circadian clock & environmental drift
+│   │   ├── geminiClient.ts   # Dual Gemini & LM Studio (Qwen 2.5) brain client
+│   │   ├── ttsService.ts     # Audio engine, VOICEVOX bridge & lip-sync analyser
+│   │   └── apiKeyResolver.ts # Multi-source key resolver & offline mode detection
+│   ├── stage/                # Three.js 3D VRM stage, lighting, and animation
+│   └── storage/              # IndexedDB model vault & state persistence
+├── package.json
+└── vite.config.ts
 ```
 
-Build the production web bundle + standalone desktop Electron installer/portable binary (outputs to `release/`):
-```bash
-npm run build
-```
+---
 
-Build an unpacked desktop directory (fast local test without creating an installer):
-```bash
-npm run build:dir
-```
+## 📦 Build & Release
+
+| Command | Description |
+| :--- | :--- |
+| `npm run typecheck` | Type-checks all TypeScript files with zero errors. |
+| `npm run build:web` | Compiles the production React/Three.js bundle to `dist/`. |
+| `npm run build:dir` | Builds an unpacked desktop test package in `release/win-unpacked/`. |
+| `npm run build` | Builds full desktop installer & portable `.exe` in `release/`. |
+
+---
+
+## 🔧 Troubleshooting
+
+* **LM Studio Connection Error:**
+  * Ensure LM Studio has **Model Server** turned ON (green toggle).
+  * Ensure the server port is set to `1234` and **CORS** is enabled.
+* **VOICEVOX Audio Error:**
+  * Verify VOICEVOX is running in the background (`http://127.0.0.1:50021`).
+  * If the port is not active, run `VOICEVOX.exe` or `vv-engine/run.exe --host 127.0.0.1 --port 50021`.
+* **IPv6 / Localhost Resolution:**
+  * The studio binds directly to IPv4 `127.0.0.1` to avoid Windows IPv6 resolution drops.
+
+---
+
+## 📄 License
+Private & Proprietary — Zeta 3D Idol Studio.

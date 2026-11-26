@@ -14,7 +14,7 @@
     "build:web": "tsc --noEmit && vite build",
     "build:win": "npm run build:web && electron-builder --win",
     "build": "npm run build:web && electron-builder",
-    "build:dir": "npm run build:web && electron-builder --dir",
+    "build:dir": "npm run build:web && electron-builder --dir && node -e \"if(require('fs').existsSync('.env')) require('fs').copyFileSync('.env', 'release/win-unpacked/.env')\"",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -51,6 +51,12 @@
     "files": [
       "dist/**/*",
       "electron/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
     ],
     "win": {
       "signAndEditExecutable": false,

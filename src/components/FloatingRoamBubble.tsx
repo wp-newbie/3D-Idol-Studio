@@ -4,13 +4,14 @@ import {
   Footprints,
   Maximize2,
   MessageCircle,
+  Monitor,
   Send,
   Settings,
   Sparkles,
   Volume2,
   X,
 } from 'lucide-react';
-import type { ChatMessage, Persona, RoamBehavior } from '../types/studio';
+import type { ChatMessage, DisplayInfo, Persona, RoamBehavior } from '../types/studio';
 import { MOOD_META } from '../data/presets';
 import { ROAM_BEHAVIOR_LABELS } from '../stage/roamController';
 
@@ -27,6 +28,10 @@ interface FloatingRoamBubbleProps {
   bubbleRequestedAt: number;
   noticeActiveWindow: boolean;
   activePcApp: string | null;
+  isDesktopApp?: boolean;
+  displays?: DisplayInfo[];
+  currentDisplayTarget?: number | string | 'all';
+  onMoveToDisplay?: (target: number | string | 'all') => void;
   onToggleFreeRoam: () => void;
   onCommandBehavior: (behavior: RoamBehavior) => void;
   onExitRoamMode: () => void;
@@ -49,8 +54,12 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
   bubbleRequestedAt,
   noticeActiveWindow,
   activePcApp,
+  isDesktopApp = false,
+  displays,
+  currentDisplayTarget,
+  onMoveToDisplay,
   onToggleFreeRoam,
-  onCommandBehavior,
+  onCommandBehavior: _onCommandBehavior,
   onExitRoamMode,
   onSendMessage,
   onSpeakMessage,
@@ -145,6 +154,19 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  setHoveringDock(false);
+                  setHoveringBubble(false);
+                  onExitRoamMode();
+                }}
+                className="flex items-center gap-1 rounded-lg border border-violet-400/50 bg-gradient-to-r from-violet-600/85 to-fuchsia-600/85 px-2 py-1 text-[10px] font-semibold text-white shadow-sm transition hover:brightness-115"
+                title="Resume Full Studio Mode"
+              >
+                <Maximize2 className="h-3 w-3" />
+                <span>Full Studio</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setBubbleVisible(false);
                   setHoveringBubble(false);
                 }}
@@ -184,9 +206,15 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
                   );
                 }
                 return (
-                  <p key={i} className="pl-2 text-[10px] text-zinc-400">
-                    ({seg.text})
-                  </p>
+                  <div
+                    key={i}
+                    className="flex items-start gap-1 rounded-lg border border-violet-500/25 bg-violet-950/30 px-2 py-1 text-[10.5px] text-violet-200"
+                  >
+                    <span className="shrink-0 rounded bg-violet-500/35 px-1 font-mono text-[8.5px] font-bold text-violet-300">
+                      EN
+                    </span>
+                    <span className="leading-tight">{seg.text}</span>
+                  </div>
                 );
               })}
             </div>
@@ -212,31 +240,61 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
           </form>
 
           {/* Subtle behavior footer inside bubble */}
-          <div className="mt-2 flex items-center justify-between gap-1 border-t border-white/[0.06] pt-1.5 text-[10px] text-zinc-400">
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 border-t border-white/[0.08] pt-2 text-[10px] text-zinc-400">
             <span className="truncate">
               {ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior} · Drag her to move!
             </span>
             <div className="flex items-center gap-1">
-              {(
-                [
-                  ['walk', 'Stroll'],
-                  ['sit_taskbar', 'Sit'],
-                  ['peek', 'Peek'],
-                ] as [RoamBehavior, string][]
-              ).map(([beh, label]) => (
-                <button
-                  key={beh}
-                  type="button"
-                  onClick={() => onCommandBehavior(beh)}
-                  className={`rounded-md px-1.5 py-0.5 text-[9.5px] transition ${
-                    roamBehavior === beh
-                      ? 'bg-violet-500/30 text-violet-100'
-                      : 'hover:bg-white/10 hover:text-white'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+              {isDesktopApp && displays && displays.length > 1 && onMoveToDisplay && (
+                <div className="flex items-center gap-0.5 rounded-lg border border-sky-400/30 bg-sky-950/60 p-0.5">
+                  <Monitor className="mx-1 h-2.5 w-2.5 text-sky-300" />
+                  {displays.map((disp, i) => {
+                    const isSelected =
+                      currentDisplayTarget === disp.id ||
+                      (currentDisplayTarget === 'primary' && disp.isPrimary);
+                    return (
+                      <button
+                        key={disp.id}
+                        type="button"
+                        onClick={() => onMoveToDisplay(disp.id)}
+                        className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold transition ${
+                          isSelected
+                            ? 'bg-sky-500/40 text-sky-100'
+                            : 'text-zinc-400 hover:text-zinc-200'
+                        }`}
+                        title={`Move to ${disp.label}`}
+                      >
+                        M{i + 1}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => onMoveToDisplay('all')}
+                    className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold transition ${
+                      currentDisplayTarget === 'all'
+                        ? 'bg-sky-500/40 text-sky-100'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="Span All Monitors"
+                  >
+                    All
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setHoveringDock(false);
+                  setHoveringBubble(false);
+                  onExitRoamMode();
+                }}
+                className="flex items-center gap-1 rounded-lg border border-violet-400/50 bg-violet-500/25 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/40 hover:text-white"
+                title="Resume Full Widescreen Studio Mode"
+              >
+                <Maximize2 className="h-3 w-3" />
+                <span>Resume Full Studio</span>
+              </button>
             </div>
           </div>
         </div>
@@ -247,7 +305,7 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
         onPointerEnter={() => setHoveringDock(true)}
         onPointerLeave={() => setHoveringDock(false)}
         className={`pointer-events-auto fixed bottom-4 right-4 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#0b0b15]/90 px-2.5 py-1.5 text-xs text-zinc-100 shadow-glass backdrop-blur-2xl transition-opacity duration-300 ${
-          showQuickControls ? 'opacity-100' : 'opacity-45 hover:opacity-100'
+          showQuickControls ? 'opacity-100' : 'opacity-85 hover:opacity-100'
         }`}
       >
         {!bubbleVisible && (
@@ -284,6 +342,47 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
             <Eye className="h-3 w-3" />
             <span className="max-w-[80px] truncate">{activePcApp || 'PC'}</span>
           </span>
+        )}
+
+        {isDesktopApp && displays && displays.length > 1 && onMoveToDisplay && (
+          <div
+            className="flex items-center gap-0.5 rounded-full border border-sky-400/30 bg-sky-950/60 p-0.5"
+            title="Multi-Monitor Display Switcher"
+          >
+            <Monitor className="mx-1 h-3 w-3 text-sky-300" />
+            {displays.map((disp, i) => {
+              const isSelected =
+                currentDisplayTarget === disp.id ||
+                (currentDisplayTarget === 'primary' && disp.isPrimary);
+              return (
+                <button
+                  key={disp.id}
+                  type="button"
+                  onClick={() => onMoveToDisplay(disp.id)}
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                    isSelected
+                      ? 'bg-sky-500/40 text-sky-100 ring-1 ring-sky-400/60 shadow-sm'
+                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+                  }`}
+                  title={`Move character to ${disp.label} (${disp.bounds.width}x${disp.bounds.height} at X=${disp.bounds.x})`}
+                >
+                  M{i + 1}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => onMoveToDisplay('all')}
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                currentDisplayTarget === 'all'
+                  ? 'bg-sky-500/40 text-sky-100 ring-1 ring-sky-400/60 shadow-sm'
+                  : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+              }`}
+              title="Span Across All Monitors (Walk freely across all screens)"
+            >
+              All
+            </button>
+          </div>
         )}
 
         <button

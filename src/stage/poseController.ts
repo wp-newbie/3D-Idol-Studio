@@ -272,26 +272,26 @@ export class AvatarPoseController {
         y: 0,
         z: 0,
       },
-      // Legs: 90° forward seated bend with slight natural thigh splay
+      // Legs: 90° forward seated bend with knees together (modest anime posture)
       leftUpperLeg: {
         x: thighBendX,
-        y: 0,
-        z: -armDownSign * 0.04,
+        y: forwardSign * 0.035,
+        z: armDownSign * 0.09,
       },
       rightUpperLeg: {
         x: thighBendX,
-        y: 0,
-        z: armDownSign * 0.04,
+        y: -forwardSign * 0.035,
+        z: -armDownSign * 0.09,
       },
       leftLowerLeg: {
         x: kneeBendX,
         y: 0,
-        z: 0,
+        z: -armDownSign * 0.02,
       },
       rightLowerLeg: {
         x: kneeBendX,
         y: 0,
-        z: 0,
+        z: armDownSign * 0.02,
       },
       leftFoot: {
         x: footLevelX,
@@ -543,54 +543,78 @@ export class AvatarPoseController {
     };
 
     if (position === 'side_curled_right') {
-      // Curled comfortably on right side facing camera/Producer
+      // Curled comfortably on right side in bed center facing camera/Producer
       targets.spine.x = forwardSign * 0.08;
-      targets.spine.z = 0.06;
-      // Knees bent cozily
-      targets.leftUpperLeg.x = forwardSign * 0.72;
+      targets.spine.z = 0.04;
+      // Knees tucked (upperLeg.rotation.x ≈ 1.1, lowerLeg.rotation.x ≈ -1.35)
+      targets.leftUpperLeg.x = forwardSign * 1.10;
       targets.leftUpperLeg.z = -armDownSign * 0.08;
-      targets.leftLowerLeg.x = -forwardSign * 0.95;
-      targets.rightUpperLeg.x = forwardSign * 0.58;
-      targets.rightLowerLeg.x = -forwardSign * 0.85;
-      // Arms tucked near cheek / pillow
-      targets.leftUpperArm.x = forwardSign * 0.35;
-      targets.leftUpperArm.y = armDownSign * 0.12;
-      targets.leftUpperArm.z = armDownSign * 1.08;
-      targets.leftLowerArm.y = armDownSign * 1.25;
-      targets.rightUpperArm.x = forwardSign * 0.28;
-      targets.rightUpperArm.y = -armDownSign * 0.12;
-      targets.rightUpperArm.z = -armDownSign * 0.98;
-      targets.rightLowerArm.y = -armDownSign * 1.35;
+      targets.leftLowerLeg.x = -forwardSign * 1.35;
+      targets.rightUpperLeg.x = forwardSign * 0.95;
+      targets.rightUpperLeg.z = armDownSign * 0.04;
+      targets.rightLowerLeg.x = -forwardSign * 1.25;
+      targets.leftFoot.x = forwardSign * 0.22;
+      targets.rightFoot.x = forwardSign * 0.22;
+      // Hands tucked near chest / pillow
+      targets.leftUpperArm.x = forwardSign * 0.42;
+      targets.leftUpperArm.y = armDownSign * 0.18;
+      targets.leftUpperArm.z = armDownSign * 0.95;
+      targets.leftLowerArm.y = armDownSign * 1.45;
+      targets.leftHand.y = armDownSign * 0.30;
+      targets.rightUpperArm.x = forwardSign * 0.32;
+      targets.rightUpperArm.y = -armDownSign * 0.15;
+      targets.rightUpperArm.z = -armDownSign * 1.05;
+      targets.rightLowerArm.y = -armDownSign * 1.42;
+      targets.rightHand.y = -armDownSign * 0.25;
     } else if (position === 'side_curled_left') {
-      // Curled on left side facing nightstand
+      // Curled on left side facing away / nightstand
       targets.spine.x = forwardSign * 0.08;
-      targets.spine.z = -0.06;
-      targets.rightUpperLeg.x = forwardSign * 0.72;
+      targets.spine.z = -0.04;
+      targets.rightUpperLeg.x = forwardSign * 1.10;
       targets.rightUpperLeg.z = armDownSign * 0.08;
-      targets.rightLowerLeg.x = -forwardSign * 0.95;
-      targets.leftUpperLeg.x = forwardSign * 0.58;
-      targets.leftLowerLeg.x = -forwardSign * 0.85;
-      targets.rightUpperArm.x = forwardSign * 0.35;
-      targets.rightUpperArm.y = -armDownSign * 0.12;
-      targets.rightUpperArm.z = -armDownSign * 1.08;
-      targets.rightLowerArm.y = -armDownSign * 1.25;
-      targets.leftUpperArm.x = forwardSign * 0.28;
-      targets.leftUpperArm.y = armDownSign * 0.12;
-      targets.leftUpperArm.z = armDownSign * 0.98;
-      targets.leftLowerArm.y = armDownSign * 1.35;
+      targets.rightLowerLeg.x = -forwardSign * 1.35;
+      targets.leftUpperLeg.x = forwardSign * 0.95;
+      targets.leftUpperLeg.z = -armDownSign * 0.04;
+      targets.leftLowerLeg.x = -forwardSign * 1.25;
+      targets.rightFoot.x = forwardSign * 0.22;
+      targets.leftFoot.x = forwardSign * 0.22;
+      targets.rightUpperArm.x = forwardSign * 0.42;
+      targets.rightUpperArm.y = -armDownSign * 0.18;
+      targets.rightUpperArm.z = -armDownSign * 0.95;
+      targets.rightLowerArm.y = -armDownSign * 1.45;
+      targets.rightHand.y = -armDownSign * 0.30;
+      targets.leftUpperArm.x = forwardSign * 0.32;
+      targets.leftUpperArm.y = armDownSign * 0.15;
+      targets.leftUpperArm.z = armDownSign * 1.05;
+      targets.leftLowerArm.y = armDownSign * 1.42;
+      targets.leftHand.y = armDownSign * 0.25;
     } else if (position === 'hugging_pillow') {
-      // Cozy semi-side hug around pillow
+      // Cozy semi-side hug around spawned hug pillow
       targets.spine.x = forwardSign * 0.05;
-      targets.leftUpperLeg.x = forwardSign * 0.42;
-      targets.leftLowerLeg.x = -forwardSign * 0.55;
-      targets.leftUpperArm.x = forwardSign * 0.38;
-      targets.leftUpperArm.y = armDownSign * 0.22;
-      targets.leftUpperArm.z = armDownSign * 1.15;
-      targets.leftLowerArm.y = armDownSign * 1.15;
+      // Top leg bent gently over the body pillow
+      targets.leftUpperLeg.x = forwardSign * 0.58;
+      targets.leftUpperLeg.y = -armDownSign * 0.08;
+      targets.leftUpperLeg.z = -armDownSign * 0.12;
+      targets.leftLowerLeg.x = -forwardSign * 0.72;
+      targets.leftFoot.x = forwardSign * 0.16;
+      // Bottom leg extended smoothly along mattress
+      targets.rightUpperLeg.x = forwardSign * 0.16;
+      targets.rightUpperLeg.z = armDownSign * 0.04;
+      targets.rightLowerLeg.x = -forwardSign * 0.22;
+      targets.rightFoot.x = forwardSign * 0.14;
+      // Both arms wrapped snugly around the hug pillow
+      targets.leftUpperArm.x = forwardSign * 0.48;
+      targets.leftUpperArm.y = armDownSign * 0.28;
+      targets.leftUpperArm.z = armDownSign * 0.95;
+      targets.leftLowerArm.x = forwardSign * 0.10;
+      targets.leftLowerArm.y = armDownSign * 1.42;
+      targets.leftHand.y = armDownSign * 0.25;
+      targets.leftHand.z = -armDownSign * 0.15;
       targets.rightUpperArm.x = forwardSign * 0.28;
-      targets.rightUpperArm.y = -armDownSign * 0.22;
-      targets.rightUpperArm.z = -armDownSign * 1.18;
-      targets.rightLowerArm.y = -armDownSign * 1.05;
+      targets.rightUpperArm.y = -armDownSign * 0.18;
+      targets.rightUpperArm.z = -armDownSign * 1.15;
+      targets.rightLowerArm.y = -armDownSign * 1.25;
+      targets.rightHand.y = -armDownSign * 0.18;
     } else if (position === 'sprawled') {
       // Relaxed deep sprawl with one arm above head and asymmetrical legs
       targets.leftUpperArm.x = -forwardSign * 0.04;
@@ -599,8 +623,12 @@ export class AvatarPoseController {
       targets.leftLowerArm.y = armDownSign * 0.45;
       targets.rightUpperArm.x = -forwardSign * 0.05;
       targets.rightUpperArm.z = -armDownSign * 1.38;
+      targets.rightLowerArm.y = -armDownSign * 0.18;
       targets.leftUpperLeg.z = -armDownSign * 0.24;
       targets.leftLowerLeg.x = -forwardSign * 0.38;
+      targets.rightUpperLeg.z = armDownSign * 0.18;
+      targets.leftFoot.x = forwardSign * 0.18;
+      targets.rightFoot.x = forwardSign * 0.18;
     }
 
     for (const boneName of POSE_BONES) {

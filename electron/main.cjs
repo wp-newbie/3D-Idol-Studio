@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, powerMonitor, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, powerMonitor, session, desktopCapturer } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -111,6 +111,22 @@ function readActiveForegroundWindowTitle() {
 }
 
 function createWindow() {
+  // Allow CORS for local offline AI engines (LM Studio :1234, VOICEVOX :50021)
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const isLocalRequest =
+      details.url.includes('127.0.0.1') ||
+      details.url.includes('localhost');
+    if (isLocalRequest) {
+      const responseHeaders = { ...(details.responseHeaders || {}) };
+      responseHeaders['access-control-allow-origin'] = ['*'];
+      responseHeaders['access-control-allow-headers'] = ['*'];
+      responseHeaders['access-control-allow-methods'] = ['GET, POST, PUT, DELETE, OPTIONS'];
+      callback({ responseHeaders });
+      return;
+    }
+    callback({ responseHeaders: details.responseHeaders });
+  });
+
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 920,
@@ -234,26 +250,99 @@ ipcMain.handle('studio:exportJson', async (_event, defaultName, jsonText) => {
 
 // === Desktop Mascot / Borderless Transparent Widget Overlay Mode IPC ===
 
-async function handleSetRoamOverlay(enabled) {
+let currentRoamDisplayTarget = null; // null | number (display.id) | 'all'
+
+function getRoamDisplays() {
+  const displays = screen.getAllDisplays();
+  const primaryId = screen.getPrimaryDisplay().id;
+  const prim = screen.getPrimaryDisplay();
+  return displays.map((d, index) => {
+    let positionHint = '';
+    if (d.id !== prim.id) {
+      if (d.bounds.x < prim.bounds.x) positionHint = ' (Left Screen)';
+      else if (d.bounds.x > prim.bounds.x) positionHint = ' (Right Screen)';
+      else if (d.bounds.y < prim.bounds.y) positionHint = ' (Top Screen)';
+      else if (d.bounds.y > prim.bounds.y) positionHint = ' (Bottom Screen)';
+    }
+    return {
+      id: d.id,
+      index,
+      label: `Display ${index + 1}${d.id === primaryId ? ' (Primary)' : positionHint}`,
+      isPrimary: d.id === primaryId,
+      bounds: d.bounds,
+      workArea: d.workArea,
+      scaleFactor: d.scaleFactor,
+    };
+  });
+}
+
+function getRoamTargetBounds(targetDisplay) {
+  const displays = screen.getAllDisplays();
+  if (displays.length === 0) return { x: 0, y: 0, width: 1920, height: 1080 };
+
+  if (targetDisplay === 'all') {
+    let minX = displays[0].bounds.x;
+    let minY = displays[0].bounds.y;
+    let maxX = displays[0].bounds.x + displays[0].bounds.width;
+    let maxY = displays[0].bounds.y + displays[0].bounds.height;
+    for (let i = 1; i < displays.length; i++) {
+      const b = displays[i].bounds;
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.width);
+      maxY = Math.max(maxY, b.y + b.height);
+    }
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+  }
+
+  let selected = null;
+  if (typeof targetDisplay === 'number') {
+    selected = displays.find((d) => d.id === targetDisplay) || displays[targetDisplay];
+  } else if (typeof targetDisplay === 'string' && targetDisplay !== 'primary') {
+    const parsed = parseInt(targetDisplay, 10);
+    if (!isNaN(parsed)) {
+      selected = displays.find((d) => d.id === parsed) || displays[parsed];
+    }
+    if (!selected) {
+      selected = displays.find((d) => String(d.id) === targetDisplay);
+    }
+  }
+  if (!selected) {
+    selected = screen.getPrimaryDisplay();
+  }
+  return selected.workArea;
+}
+
+async function handleSetRoamOverlay(enabled, targetDisplay) {
   if (!mainWindow) return { ok: false };
   isRoamOverlayActive = Boolean(enabled);
 
   if (isRoamOverlayActive) {
-    normalStudioBounds = mainWindow.getBounds();
-    const display = screen.getPrimaryDisplay();
-    const workArea = display.workArea;
+    if (!normalStudioBounds) {
+      normalStudioBounds = mainWindow.getBounds();
+    }
+    if (targetDisplay !== undefined) {
+      currentRoamDisplayTarget = targetDisplay;
+    }
+    const bounds = getRoamTargetBounds(currentRoamDisplayTarget);
     mainWindow.setSkipTaskbar(true);
     mainWindow.setResizable(false);
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     mainWindow.setBounds({
-      x: workArea.x,
-      y: workArea.y,
-      width: workArea.width,
-      height: workArea.height,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
     });
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
   } else {
+    currentRoamDisplayTarget = null;
     mainWindow.setIgnoreMouseEvents(false);
     mainWindow.setVisibleOnAllWorkspaces(false);
     mainWindow.setAlwaysOnTop(false);
@@ -266,7 +355,12 @@ async function handleSetRoamOverlay(enabled) {
       mainWindow.center();
     }
   }
-  return { ok: true, enabled: isRoamOverlayActive };
+  return {
+    ok: true,
+    enabled: isRoamOverlayActive,
+    currentDisplay: currentRoamDisplayTarget,
+    displays: getRoamDisplays(),
+  };
 }
 
 function handleSetClickThrough(ignore, forward) {
@@ -278,8 +372,56 @@ function handleSetClickThrough(ignore, forward) {
   }
 }
 
-ipcMain.handle('desktop:setRoamOverlay', async (_event, enabled) => handleSetRoamOverlay(enabled));
-ipcMain.handle('studio:setDesktopRoamMode', async (_event, enabled) => handleSetRoamOverlay(enabled));
+ipcMain.handle('desktop:setRoamOverlay', async (_event, enabled, targetDisplay) =>
+  handleSetRoamOverlay(enabled, targetDisplay)
+);
+ipcMain.handle('studio:setDesktopRoamMode', async (_event, enabled, targetDisplay) =>
+  handleSetRoamOverlay(enabled, targetDisplay)
+);
+
+ipcMain.handle('desktop:getDisplays', async () => ({
+  displays: getRoamDisplays(),
+  currentDisplayId: currentRoamDisplayTarget,
+}));
+ipcMain.handle('studio:getDisplays', async () => ({
+  displays: getRoamDisplays(),
+  currentDisplayId: currentRoamDisplayTarget,
+}));
+
+ipcMain.handle('desktop:moveToDisplay', async (_event, targetDisplay) => {
+  if (!mainWindow || !isRoamOverlayActive) return { ok: false };
+  currentRoamDisplayTarget = targetDisplay;
+  const bounds = getRoamTargetBounds(targetDisplay);
+  mainWindow.setBounds({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  });
+  return {
+    ok: true,
+    bounds,
+    currentDisplayId: currentRoamDisplayTarget,
+    displays: getRoamDisplays(),
+  };
+});
+ipcMain.handle('studio:moveToDisplay', async (_event, targetDisplay) => {
+  if (!mainWindow || !isRoamOverlayActive) return { ok: false };
+  currentRoamDisplayTarget = targetDisplay;
+  const bounds = getRoamTargetBounds(targetDisplay);
+  mainWindow.setBounds({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  });
+  return {
+    ok: true,
+    bounds,
+    currentDisplayId: currentRoamDisplayTarget,
+    displays: getRoamDisplays(),
+  };
+});
 
 ipcMain.on('desktop:setClickThrough', (_event, ignore, forward) => handleSetClickThrough(ignore, forward));
 ipcMain.on('studio:setIgnoreMouseEvents', (_event, ignore, forward) => handleSetClickThrough(ignore, forward));
@@ -342,6 +484,46 @@ ipcMain.handle('studio:getActiveWindowTitle', async () => {
   return { appName };
 });
 
+ipcMain.handle('desktop:captureScreen', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1280, height: 720 },
+    });
+    if (!sources || sources.length === 0) return { ok: false, error: 'No screen sources available' };
+    const primary = sources[0];
+    const buffer = primary.thumbnail.toJPEG(80);
+    return {
+      ok: true,
+      dataUrl: primary.thumbnail.toDataURL(),
+      base64: buffer.toString('base64'),
+      mimeType: 'image/jpeg',
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle('studio:captureScreen', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1280, height: 720 },
+    });
+    if (!sources || sources.length === 0) return { ok: false, error: 'No screen sources available' };
+    const primary = sources[0];
+    const buffer = primary.thumbnail.toJPEG(80);
+    return {
+      ok: true,
+      dataUrl: primary.thumbnail.toDataURL(),
+      base64: buffer.toString('base64'),
+      mimeType: 'image/jpeg',
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
 ipcMain.handle('studio:getSystemIdleAndFullscreenState', async () => {
   const idleSeconds = powerMonitor.getSystemIdleTime();
   const isFullscreenApp = await checkIsFullscreenAppActive();
@@ -364,6 +546,191 @@ ipcMain.on('studio:windowControl', (_event, action) => {
     else mainWindow.maximize();
   } else if (action === 'close') mainWindow.close();
 });
+
+async function handleFetchJapaneseTts(_event, spokenText) {
+  try {
+    const text = String(spokenText || '').slice(0, 180).trim();
+    if (!text) return { ok: false, error: 'Empty text' };
+
+    // Endpoint 1: Google Translate TTS (tw-ob client)
+    try {
+      const url1 = `https://translate.google.com/translate_tts?ie=UTF-8&tl=ja&client=tw-ob&q=${encodeURIComponent(text)}`;
+      const res1 = await fetch(url1, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'audio/mpeg, audio/*;q=0.9',
+        },
+      });
+      if (res1.ok) {
+        const arrayBuf = await res1.arrayBuffer();
+        if (arrayBuf.byteLength > 100) {
+          const base64 = Buffer.from(arrayBuf).toString('base64');
+          return { ok: true, base64, mimeType: 'audio/mpeg' };
+        }
+      }
+    } catch (err1) {
+      console.warn('[ELECTRON] tw-ob Google TTS attempt failed:', err1);
+    }
+
+    // Endpoint 2: Google Translate TTS (gtx client)
+    try {
+      const url2 = `https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=ja&q=${encodeURIComponent(text)}`;
+      const res2 = await fetch(url2, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'audio/mpeg, audio/*;q=0.9',
+        },
+      });
+      if (res2.ok) {
+        const arrayBuf = await res2.arrayBuffer();
+        if (arrayBuf.byteLength > 100) {
+          const base64 = Buffer.from(arrayBuf).toString('base64');
+          return { ok: true, base64, mimeType: 'audio/mpeg' };
+        }
+      }
+    } catch (err2) {
+      console.warn('[ELECTRON] gtx Google TTS attempt failed:', err2);
+    }
+
+    return { ok: false, error: 'Google Japanese TTS endpoints both returned error or empty audio' };
+  } catch (err) {
+    console.error('[ELECTRON] handleFetchJapaneseTts failed:', err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function handleRequestGeminiTts(_event, params) {
+  try {
+    const { apiKey, model, prompt, voiceName } = params || {};
+    // Auto-resolve apiKey from local .env if caller omitted it
+    const effectiveKey = apiKey || readLocalEnvApiKey().key;
+    if (!effectiveKey) return { ok: false, errBody: 'Missing API Key' };
+
+    const targetModel = model || 'gemini-2.5-flash-preview-tts';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      targetModel
+    )}:generateContent?key=${encodeURIComponent(effectiveKey)}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': effectiveKey,
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: voiceName || 'Aoede',
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { ok: false, status: res.status, errBody: errText };
+    }
+
+    const data = await res.json();
+    const inlineData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (inlineData?.data) {
+      return {
+        ok: true,
+        base64: inlineData.data,
+        mimeType: inlineData.mimeType || 'audio/L16;rate=24000',
+      };
+    }
+    return { ok: false, errBody: 'No audio returned in response parts' };
+  } catch (err) {
+    console.error('[ELECTRON] handleRequestGeminiTts failed:', err);
+    return { ok: false, errBody: String(err) };
+  }
+}
+
+async function handleCheckLocalAi() {
+  try {
+    const res = await fetch('http://127.0.0.1:1234/v1/models', { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    const model = data?.data?.[0]?.id || 'qwen2.5-7b-instruct-1m';
+    return { ok: true, model };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function handleQueryLocalAi(_event, params) {
+  try {
+    const { messages, temperature = 0.85, maxTokens = 350 } = params;
+    const res = await fetch('http://127.0.0.1:1234/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen2.5-7b-instruct-1m',
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${err}` };
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content?.trim() || '';
+    const resolvedModel = data?.model || 'qwen2.5-7b-instruct-1m';
+    return { ok: true, text, resolvedModel };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function handleSynthesizeVoicevox(_event, params) {
+  try {
+    const { text, speakerId = 8 } = params;
+    const clean = (text || '').slice(0, 240).trim();
+    if (!clean) return { ok: false, error: 'Empty text' };
+    const qRes = await fetch(
+      `http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(clean)}&speaker=${speakerId}`,
+      { method: 'POST', signal: AbortSignal.timeout(4000) }
+    );
+    if (!qRes.ok) return { ok: false, error: `audio_query HTTP ${qRes.status}` };
+    const qJson = await qRes.json();
+    const sRes = await fetch(`http://127.0.0.1:50021/synthesis?speaker=${speakerId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(qJson),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!sRes.ok) return { ok: false, error: `synthesis HTTP ${sRes.status}` };
+    const arrayBuffer = await sRes.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    return { ok: true, base64, mimeType: 'audio/wav' };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// Register both studio: and desktop: channels for backwards and cross-component compatibility
+ipcMain.handle('studio:fetchJapaneseTts', handleFetchJapaneseTts);
+ipcMain.handle('desktop:fetchJapaneseTts', handleFetchJapaneseTts);
+ipcMain.handle('studio:requestGeminiTts', handleRequestGeminiTts);
+ipcMain.handle('desktop:requestGeminiTts', handleRequestGeminiTts);
+ipcMain.handle('studio:checkLocalAi', handleCheckLocalAi);
+ipcMain.handle('desktop:checkLocalAi', handleCheckLocalAi);
+ipcMain.handle('studio:queryLocalAi', handleQueryLocalAi);
+ipcMain.handle('desktop:queryLocalAi', handleQueryLocalAi);
+ipcMain.handle('studio:synthesizeVoicevox', handleSynthesizeVoicevox);
+ipcMain.handle('desktop:synthesizeVoicevox', handleSynthesizeVoicevox);
 
 app.whenReady().then(() => {
   // Allow audio/media permissions without blocking voice playback or microphone capture

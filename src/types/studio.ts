@@ -44,7 +44,13 @@ export type ProceduralEmoteId =
   | 'friendly_wave'
   | 'shy_fidget'
   | 'idol_peace'
-  | 'gentle_bow';
+  | 'gentle_bow'
+  | 'thinking_chin'
+  | 'cat_paws'
+  | 'arms_behind_back'
+  | 'lean_forward'
+  | 'pout_turn'
+  | 'hands_on_hips';
 
 export type StageEnvironmentId =
   | 'gothic_cathedral'
@@ -67,6 +73,7 @@ export interface RoamCommand {
   targetX: number; // -1.0 .. 1.0
   targetY: number; // -0.5 .. 0.5
   targetZ?: number; // -0.4 .. 0.45
+  startFromX?: number; // optional starting coordinate when crossing monitor displays
   behavior: RoamBehavior;
 }
 
@@ -77,13 +84,26 @@ export type AutonomousToolLocation =
   | 'rainy_lofi_room'
   | 'midnight_rooftop';
 
+export interface DisplayInfo {
+  id: number;
+  index: number;
+  label: string;
+  isPrimary: boolean;
+  bounds: { x: number; y: number; width: number; height: number };
+  workArea: { x: number; y: number; width: number; height: number };
+  scaleFactor: number;
+}
+
 export interface AutonomousToolCallEvent {
   name:
     | 'move_on_stage'
     | 'travel_to_location'
     | 'switch_own_outfit'
     | 'trigger_emote'
-    | 'adjust_sleeping_position';
+    | 'adjust_sleeping_position'
+    | 'change_posture'
+    | 'move_to_display'
+    | 'take_self_care';
   args: Record<string, unknown>;
   summary: string;
 }
@@ -204,13 +224,17 @@ export interface OutfitSlot {
   materialMods: Record<string, MaterialMod>;
   /** Optional per-outfit Y-axis calibration in radians (default 0) for sideways .vrm/.glb exports */
   yawOffset?: number;
+  /** Whether cycling / safety shorts (spats) are equipped under the skirt */
+  cyclingShorts?: boolean;
+  /** Equipped 3D accessories / .xwear dress-up items attached to this outfit */
+  accessories?: EquippedAccessory[];
   createdAt: number;
 }
 
 export interface VaultModelMeta {
   id: string;
   fileName: string;
-  format: 'vrm' | 'glb';
+  format: 'vrm' | 'glb' | 'xavatar' | 'xwear' | 'vroidcustomitem';
   sizeBytes: number;
   thumbnailDataUrl: string | null;
   isDefaultSample?: boolean;
@@ -223,6 +247,42 @@ export interface VaultVrmaMeta {
   fileName: string;
   sizeBytes: number;
   createdAt: number;
+}
+
+export type AccessoryAttachTarget =
+  | 'auto_fit'
+  | 'head'
+  | 'neck'
+  | 'chest'
+  | 'hips'
+  | 'leftHand'
+  | 'rightHand'
+  | 'root';
+
+export interface VaultAccessoryMeta {
+  id: string;
+  name: string;
+  fileName: string;
+  format: 'xwear' | 'xavatar' | 'glb' | 'vrm' | 'vroidcustomitem';
+  defaultTarget: AccessoryAttachTarget;
+  thumbnailDataUrl: string | null;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+export interface EquippedAccessory {
+  id: string;
+  vaultAccessoryId: string;
+  name: string;
+  fileName: string;
+  format: 'xwear' | 'xavatar' | 'glb' | 'vrm' | 'vroidcustomitem';
+  visible: boolean;
+  attachTarget: AccessoryAttachTarget;
+  position: [number, number, number];
+  rotationDeg: [number, number, number];
+  scale: number;
+  scaleXYZ?: [number, number, number];
+  colorHex?: string;
 }
 
 export interface DialogueSegment {
@@ -293,6 +353,7 @@ export type UserHonorific = '' | '-san' | '-kun' | '-chan' | 'Senpai';
 export interface StudioSettings {
   apiKey: string;
   useBuiltInKey?: boolean;
+  preferLocalAi?: boolean;
   keyMode: KeyMode;
   textModel: string;
   ttsModel: string;

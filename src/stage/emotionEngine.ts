@@ -216,7 +216,7 @@ export class VrmEmotionEngine {
     if (empathySoftening) {
       base.headYawBias *= 0.25;
       base.headRollBias = 0.07;
-      base.spineLeanX += 0.048;
+      base.spineLeanX += 0.015;
       base.armsCrossTension = 0;
       base.breathingRate = Math.min(base.breathingRate, 1.4);
     }
@@ -224,9 +224,9 @@ export class VrmEmotionEngine {
     // 5. Active Listening Posture while the user is typing in chat
     if (isUserTyping) {
       base.headYawBias = THREE.MathUtils.lerp(base.headYawBias, 0.02, 0.7);
-      base.headRollBias = 0.095;
+      base.headRollBias = 0.06;
       base.headPitchBias = -0.015;
-      base.spineLeanX += 0.04;
+      base.spineLeanX += 0.012;
       base.armsCrossTension *= 0.4;
       base.breathingRate = Math.min(base.breathingRate, 1.45);
     }

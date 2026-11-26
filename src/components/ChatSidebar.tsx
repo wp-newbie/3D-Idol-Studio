@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Brain,
+  Eye,
   Mic,
   MicOff,
   Radio,
@@ -29,9 +30,11 @@ interface ChatSidebarProps {
   onOpenMemoryJournal: () => void;
   onConnectAiStudioKey: () => void;
   onOpenSettings: () => void;
+  onInspectScreen?: () => void;
 }
 
 const QUICK_PROMPTS = [
+  'Look at my screen right now!',
   'You look really cute under the studio lights today.',
   "Ready for tonight's live stage rehearsal?",
   'Wait, are you blushing right now?',
@@ -53,6 +56,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onOpenMemoryJournal,
   onConnectAiStudioKey,
   onOpenSettings,
+  onInspectScreen,
 }) => {
   const [draft, setDraft] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -219,9 +223,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             <div className="flex items-center gap-1.5 font-mono">
               {lastAffinityDelta !== null && lastAffinityDelta !== 0 && (
                 <span
-                  className={`font-bold ${
-                    lastAffinityDelta > 0 ? 'text-pink-300' : 'text-sky-300'
-                  }`}
+                  className={`font-bold ${lastAffinityDelta > 0 ? 'text-pink-300' : 'text-sky-300'
+                    }`}
                 >
                   {lastAffinityDelta > 0 ? `+${lastAffinityDelta}` : lastAffinityDelta}
                 </span>
@@ -299,11 +302,10 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                   )}
                   {typeof msg.affinityDelta === 'number' && msg.affinityDelta !== 0 && (
                     <span
-                      className={`rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold ${
-                        msg.affinityDelta > 0
+                      className={`rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold ${msg.affinityDelta > 0
                           ? 'bg-pink-500/15 text-pink-300'
                           : 'bg-sky-500/15 text-sky-300'
-                      }`}
+                        }`}
                     >
                       {msg.affinityDelta > 0
                         ? `+${msg.affinityDelta} 🌸`
@@ -351,9 +353,15 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     );
                   }
                   return (
-                    <p key={idx} className="pl-3 text-[11px] leading-snug text-zinc-400/90">
-                      ({seg.text})
-                    </p>
+                    <div
+                      key={idx}
+                      className="flex items-start gap-1.5 rounded-xl border border-violet-500/20 bg-violet-950/25 px-2.5 py-1.5 text-[11px] text-violet-200"
+                    >
+                      <span className="shrink-0 rounded bg-violet-500/30 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-violet-300">
+                        EN SUB
+                      </span>
+                      <span className="leading-snug">{seg.text}</span>
+                    </div>
                   );
                 })}
               </div>
@@ -421,11 +429,10 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             <button
               type="button"
               onClick={() => setHandsFreeMode((v) => !v)}
-              className={`flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-medium transition ${
-                handsFreeMode
+              className={`flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-medium transition ${handsFreeMode
                   ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200'
                   : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:text-zinc-200'
-              }`}
+                }`}
               title="Continuous Hands-Free Conversation: auto-listens after AI finishes speaking"
             >
               <Radio className="h-3 w-3" />
@@ -447,14 +454,26 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          {onInspectScreen && (
+            <button
+              type="button"
+              onClick={onInspectScreen}
+              disabled={isGenerating}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-[#121220] text-cyan-300 transition hover:border-cyan-400/50 hover:bg-cyan-500/10 hover:text-cyan-200 disabled:opacity-40"
+              title="Multimodal Screen Vision: Let character inspect your desktop screen"
+              aria-label="Inspect Desktop Screen"
+            >
+              <Eye className="h-4 w-4" />
+            </button>
+          )}
+
           <button
             type="button"
             onClick={toggleMic}
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition ${
-              isListening
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition ${isListening
                 ? 'border-rose-400 bg-rose-600 text-white shadow-[0_0_22px_rgba(244,63,94,0.5)] animate-pulse'
                 : 'border-white/10 bg-[#121220] text-zinc-300 hover:border-rose-400/50 hover:text-rose-200'
-            }`}
+              }`}
             title="Push-to-Talk Voice Chat (🎙️ Mic Input)"
             aria-label="Push-to-Talk Microphone"
           >
@@ -489,19 +508,18 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
           <button
             type="button"
             onClick={onOpenSettings}
-            className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9.5px] font-semibold transition ${
-              connectionMode === 'live'
+            className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9.5px] font-semibold transition ${connectionMode === 'live'
                 ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-300'
                 : connectionMode === 'error'
-                ? 'border-rose-400/40 bg-rose-500/15 text-rose-300'
-                : 'border-amber-400/35 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
-            }`}
+                  ? 'border-rose-400/40 bg-rose-500/15 text-rose-300'
+                  : 'border-amber-400/35 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+              }`}
           >
             {connectionMode === 'live'
               ? 'Live Gemini'
               : connectionMode === 'error'
-              ? 'API Error · Fix'
-              : 'Demo · Add Key'}
+                ? 'API Error · Fix'
+                : 'Demo · Add Key'}
           </button>
         </div>
       </div>

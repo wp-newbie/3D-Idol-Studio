@@ -2,12 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import {
   Brain,
   Camera,
-  Eye,
-  EyeOff,
   Footprints,
   Music,
   Pause,
@@ -21,10 +19,12 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AccessoryAttachTarget,
   AutonomousNeedTrigger,
   AvatarPosture,
   CameraPreset,
   CareActivityId,
+  EquippedAccessory,
   InteractionZone,
   MeshDescriptor,
   MicroTellCommand,
@@ -41,6 +41,7 @@ import type {
 } from '../types/studio';
 import { MOOD_META } from '../data/presets';
 import {
+  getAccessoryBuffer,
   getVrmaBuffer,
   resolveAvatarBufferForSlot,
   updateVaultModelThumbnail,
@@ -48,6 +49,8 @@ import {
 import { voiceEngine } from '../services/ttsService';
 import { computePersonaLiveVoiceTone } from '../services/voiceToneDirector';
 import { musicSync, type MusicTrackState } from '../services/musicSyncService';
+import { CareActivityBar } from './CareActivityBar';
+import { extractEnglishSubtitle, extractSpokenDialogue } from '../services/dialogueParser';
 import { applyOutfitModsToScene, detectClothingMeshes } from '../stage/clothingModder';
 import {
   applyProceduralEmote,
@@ -66,7 +69,6 @@ import {
 import { AvatarPoseController } from '../stage/poseController';
 import { VrmEmotionEngine, type HumanSensationContext } from '../stage/emotionEngine';
 import { AiBrainPopover } from './AiBrainPopover';
-import { CareActivityBar } from './CareActivityBar';
 
 interface StageViewportProps {
   persona: Persona;
@@ -80,9 +82,16 @@ interface StageViewportProps {
   autoRoamEnabled: boolean;
   posture?: AvatarPosture;
   onChangePosture?: (next: AvatarPosture) => void;
+  onChangeSleepingPosition?: (next: SleepingPosition) => void;
+  onCrossDisplayEdge?: (direction: 'left' | 'right') => void;
   roamBehavior: RoamBehavior;
   roamCommand: RoamCommand | null;
   emoteCommand: { id: number; emoteId: ProceduralEmoteId } | null;
+  gazeCommand?: {
+    id: number;
+    target: 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen';
+  } | null;
+  expressionCommand?: { id: number; expression: string } | null;
   microTellCommand: MicroTellCommand | null;
   onToggleAutoRoam: () => void;
   onTriggerBrainImpulse: (reason: AutonomousNeedTrigger) => void;
@@ -104,6 +113,7 @@ interface StageViewportProps {
   onCharacterHoverChange?: (isHoveringAvatar: boolean) => void;
   onMeshesDetected: (meshes: MeshDescriptor[]) => void;
   onImportModelFile: (file: File) => void;
+  onImportAccessoryFile?: (file: File) => void;
   onImportVrmaFile: (file: File) => Promise<VaultVrmaMeta | null>;
   onDeleteVrma: (id: string) => void;
   onSelectEnvironment: (envId: StageEnvironmentId) => void;
@@ -112,6 +122,8 @@ interface StageViewportProps {
   onModelVaultSynced?: () => void;
   onOpenWardrobe: () => void;
   onAvatarInteraction: (zone: InteractionZone, nextMood: MoodType) => void;
+  onUpdateYawOffset?: (yawOffsetRadians: number) => void;
+  onUpdateEquippedAccessory?: (accessoryId: string, patch: Partial<EquippedAccessory>) => void;
 }
 
 interface ComputedCameraFrames {
@@ -301,19 +313,23 @@ function applyPoseAndMicroReactions(params: {
     }
   }
 
-  let leftUpperZ = armSign * (1.15 + sway);
-  let rightUpperZ = -armSign * (1.15 - sway);
-  let leftUpperX = isMusicPlaying ? 0.08 - musicBeat * 0.14 : 0.08;
-  let rightUpperX = isMusicPlaying ? 0.08 - musicBeat * 0.14 : 0.08;
-  let leftLowerZ = armSign * 0.14;
-  let rightLowerZ = -armSign * 0.14;
-  let leftLowerY = 0.18;
-  let rightLowerY = -0.18;
+  let leftUpperZ = armSign * (1.22 + sway);
+  let rightUpperZ = -armSign * (1.22 - sway);
+  let leftUpperX = isMusicPlaying ? -0.03 - musicBeat * 0.12 : -0.03;
+  let rightUpperX = isMusicPlaying ? -0.03 - musicBeat * 0.12 : -0.03;
+  let leftUpperY = 0.02;
+  let rightUpperY = -0.02;
+  let leftLowerZ = armSign * 0.04;
+  let rightLowerZ = -armSign * 0.04;
+  let leftLowerX = 0.10;
+  let rightLowerX = 0.10;
+  let leftLowerY = -0.16;
+  let rightLowerY = 0.16;
 
   const breath = Math.sin(elapsed * 1.9);
-  const musicSwayZ = isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.045 + musicBass * 0.06) : 0;
-  let spineX = breath * 0.015 + (isMusicPlaying ? musicBeat * 0.055 : 0);
-  let spineY = Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.075 : 0.025);
+  const musicSwayZ = isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.035 + musicBass * 0.05) : 0;
+  let spineX = breath * 0.012 + (isMusicPlaying ? musicBeat * 0.04 : 0);
+  let spineY = Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.05 : 0.018);
   let spineZ = musicSwayZ;
   let targetContainerZ = 0;
   let targetContainerX = 0;
@@ -344,23 +360,35 @@ function applyPoseAndMicroReactions(params: {
   }
 
   if (leftUpperArm) {
-    leftUpperArm.rotation.z = leftUpperZ;
     leftUpperArm.rotation.x = leftUpperX;
+    leftUpperArm.rotation.y = leftUpperY;
+    leftUpperArm.rotation.z = leftUpperZ;
   }
   if (rightUpperArm) {
-    rightUpperArm.rotation.z = rightUpperZ;
     rightUpperArm.rotation.x = rightUpperX;
+    rightUpperArm.rotation.y = rightUpperY;
+    rightUpperArm.rotation.z = rightUpperZ;
   }
   if (leftLowerArm) {
-    leftLowerArm.rotation.z = leftLowerZ;
+    leftLowerArm.rotation.x = leftLowerX;
     leftLowerArm.rotation.y = leftLowerY;
+    leftLowerArm.rotation.z = leftLowerZ;
   }
   if (rightLowerArm) {
-    rightLowerArm.rotation.z = rightLowerZ;
+    rightLowerArm.rotation.x = rightLowerX;
     rightLowerArm.rotation.y = rightLowerY;
+    rightLowerArm.rotation.z = rightLowerZ;
   }
-  if (leftHand) leftHand.rotation.z = armSign * 0.06;
-  if (rightHand) rightHand.rotation.z = -armSign * 0.06;
+  if (leftHand) {
+    leftHand.rotation.x = 0.04;
+    leftHand.rotation.y = -0.04;
+    leftHand.rotation.z = armSign * 0.02;
+  }
+  if (rightHand) {
+    rightHand.rotation.x = 0.04;
+    rightHand.rotation.y = 0.04;
+    rightHand.rotation.z = -armSign * 0.02;
+  }
 
   if (spine) {
     spine.rotation.x = spineX;
@@ -368,7 +396,7 @@ function applyPoseAndMicroReactions(params: {
     spine.rotation.z = spineZ;
   }
   if (chest) {
-    chest.rotation.x = breath * 0.018;
+    chest.rotation.x = breath * 0.015;
   }
 
   avatarContainer.position.z = THREE.MathUtils.lerp(
@@ -395,13 +423,17 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   autoRoamEnabled,
   posture: controlledPosture,
   onChangePosture,
+  onChangeSleepingPosition,
+  onCrossDisplayEdge,
   roamBehavior,
   roamCommand,
   emoteCommand,
+  gazeCommand,
+  expressionCommand,
   microTellCommand,
   onToggleAutoRoam,
   onTriggerBrainImpulse,
-  onCareActivity,
+  onCareActivity: _onCareActivity,
   onWakeFromSleep,
   onSpeakLatest,
   onStopSpeaking,
@@ -413,6 +445,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onCharacterHoverChange,
   onMeshesDetected,
   onImportModelFile,
+  onImportAccessoryFile,
   onImportVrmaFile,
   onDeleteVrma,
   onSelectEnvironment,
@@ -421,6 +454,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onModelVaultSynced,
   onOpenWardrobe,
   onAvatarInteraction,
+  onUpdateYawOffset,
+  onUpdateEquippedAccessory,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -455,10 +490,31 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   }, [persona.brain?.sleepingPosition]);
 
   const [showThoughtHud, setShowThoughtHud] = useState(true);
+  const [showSubtitles, setShowSubtitles] = useState(true);
   const [openPanel, setOpenPanel] = useState<StagePanel>('none');
 
-  // Cursor Eye-Tracking, Hit-Zones, Emotes & Music State
-  const [eyeTrackingEnabled, setEyeTrackingEnabled] = useState(true);
+  // Latest assistant dialogue & English subtitle for the Live Anime Subtitle Bar
+  const latestAssistantMsg = [...persona.messages]
+    .reverse()
+    .find((m) => m.role === 'assistant');
+
+  const liveSubtitle = (() => {
+    if (!latestAssistantMsg) return null;
+    const japanese =
+      extractSpokenDialogue(latestAssistantMsg.rawText) ||
+      latestAssistantMsg.segments.find((s) => s.kind === 'dialogue')?.text ||
+      '';
+    const english =
+      extractEnglishSubtitle(latestAssistantMsg.rawText) ||
+      latestAssistantMsg.segments.find((s) => s.kind === 'subtitle')?.text ||
+      '';
+    if (!japanese && !english) return null;
+    return { japanese, english };
+  })();
+
+  // Autonomous AI Gaze Engine (character independently decides where and when to look)
+  const aiGazeModeRef = useRef<'attentive' | 'look_away' | 'daydream'>('attentive');
+  const nextGazeShiftRef = useRef<number>(5.0);
   const [hoveredZone, setHoveredZone] = useState<InteractionZone | null>(null);
   const [particles, setParticles] = useState<FloatingParticle[]>([]);
   const [lastZoneToast, setLastZoneToast] = useState<string | null>(null);
@@ -472,8 +528,6 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   });
   const [musicBars, setMusicBars] = useState<number[]>(Array(12).fill(0.1));
 
-  const eyeTrackingRef = useRef(eyeTrackingEnabled);
-  eyeTrackingRef.current = eyeTrackingEnabled;
   const moodRef = useRef<MoodType>(persona.mood);
   const emotionIntensityRef = useRef<number>(persona.emotionIntensity ?? 0.7);
   emotionIntensityRef.current = persona.emotionIntensity ?? 0.7;
@@ -499,6 +553,12 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   const autoRoamRef = useRef<boolean>(autoRoamEnabled);
   autoRoamRef.current = autoRoamEnabled;
   const lastEmoteCommandIdRef = useRef<number>(-1);
+  const lastGazeCmdIdRef = useRef<number>(-1);
+  const activeGazeCommandRef = useRef<'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen' | null>(null);
+  const gazeCommandExpireAtRef = useRef<number>(0);
+  const lastExprCmdIdRef = useRef<number>(-1);
+  const activeExprCommandRef = useRef<string | null>(null);
+  const exprCommandExpireAtRef = useRef<number>(0);
   const roamControllerRef = useRef<AutonomousRoamController>(new AutonomousRoamController());
   const poseControllerRef = useRef<AvatarPoseController>(new AvatarPoseController());
   const postureRef = useRef<AvatarPosture>(posture);
@@ -527,6 +587,19 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   const envControllerRef = useRef<StageEnvironmentController | null>(null);
   const avatarContainerRef = useRef<THREE.Group | null>(null);
   const avatarRootRef = useRef<THREE.Group | null>(null);
+  const mountedAccessoriesRef = useRef<
+    Map<
+      string,
+      {
+        id: string;
+        vaultId: string;
+        attachTarget: AccessoryAttachTarget;
+        wrapper: THREE.Group;
+        baseScale: number;
+        bonePairs: Array<{ host: THREE.Object3D; guest: THREE.Object3D }>;
+      }
+    >
+  >(new Map());
   const activeYawOffsetRef = useRef<number>(activeSlot.yawOffset ?? 0);
   activeYawOffsetRef.current =
     typeof activeSlot.yawOffset === 'number' && Number.isFinite(activeSlot.yawOffset)
@@ -621,6 +694,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     const showBed = posture === 'sleeping' && !desktopRoamMode;
     envControllerRef.current?.setBedVisible(showBed);
     envControllerRef.current?.setSeatVisible(showSeat);
+    const isHugPillow = showBed && sleepingPosition === 'hugging_pillow';
+    envControllerRef.current?.setHugPillowVisible(
+      isHugPillow,
+      sleepingPosition === 'side_curled_left' ? 'left' : 'right'
+    );
     cameraFramesRef.current = computeCameraFramesFromBox(modelBoxRef.current, posture);
 
     if (posture === 'sleeping') {
@@ -657,9 +735,16 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     }
   }, [persona.brain?.isSleeping, posture, desktopRoamMode]);
 
-  // Autonomous AI sleep movement: slowly shift sleeping positions every 45-60s while asleep
+  // Auto-roam transition: when autonomous roaming starts, stand up from stool or bed
   useEffect(() => {
-    if (posture !== 'sleeping' || !persona.brain?.isSleeping) return;
+    if (autoRoamEnabled && posture !== 'standing' && !desktopRoamMode) {
+      setPosture('standing');
+    }
+  }, [autoRoamEnabled, posture, desktopRoamMode]);
+
+  // Autonomous AI sleep movement: character autonomously shifts sleeping positions while in bed
+  useEffect(() => {
+    if (posture !== 'sleeping') return;
     const interval = window.setInterval(() => {
       const positions: SleepingPosition[] = [
         'side_curled_right',
@@ -678,13 +763,14 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           hugging_pillow: 'hugging her pillow closer',
           sprawled: 'stretching into a relaxed deep sleep',
         };
-        setLastZoneToast(`💤 ${persona.name} shifted in her sleep: ${labels[next]}`);
-        window.setTimeout(() => setLastZoneToast(null), 3200);
+        setLastZoneToast(`💤 ${persona.name} shifted: ${labels[next]}`);
+        window.setTimeout(() => setLastZoneToast(null), 3500);
+        onChangeSleepingPosition?.(next);
         return next;
       });
-    }, 45000);
+    }, 38000);
     return () => window.clearInterval(interval);
-  }, [posture, persona.brain?.isSleeping, persona.name]);
+  }, [posture, persona.name, onChangeSleepingPosition]);
 
   useEffect(() => {
     void envControllerRef.current?.applyCustomEnvironment(persona.customEnvironment);
@@ -739,6 +825,22 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     };
     setActiveEmoteLabel(`${meta.emoji} ${meta.shortLabel}`);
   }, [emoteCommand]);
+
+  // Execute Gemini `[GAZE: ...]` autonomous eye & head gaze tracking
+  useEffect(() => {
+    if (!gazeCommand || gazeCommand.id === lastGazeCmdIdRef.current) return;
+    lastGazeCmdIdRef.current = gazeCommand.id;
+    activeGazeCommandRef.current = gazeCommand.target;
+    gazeCommandExpireAtRef.current = performance.now() + 4500;
+  }, [gazeCommand]);
+
+  // Execute Gemini `[EXPRESSION: ...]` autonomous facial blendshapes
+  useEffect(() => {
+    if (!expressionCommand || expressionCommand.id === lastExprCmdIdRef.current) return;
+    lastExprCmdIdRef.current = expressionCommand.id;
+    activeExprCommandRef.current = expressionCommand.expression.toLowerCase().trim();
+    exprCommandExpireAtRef.current = performance.now() + 5000;
+  }, [expressionCommand]);
 
   // Execute organic human micro-tells (sigh, yawn, startled, eat_sip, cold_shiver, cozy_warm)
   useEffect(() => {
@@ -947,41 +1049,81 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           };
 
           if (isSleepingStage) {
+            const bedMetrics = envControllerRef.current?.getBedMetrics() ?? {
+              mattressTopY: 0.40,
+              bedCenterX: 0.0,
+              bedCenterZ: -0.10,
+              bedWidth: 1.14,
+              bedLength: 2.08,
+              bedMinX: -0.57,
+              bedMaxX: 0.57,
+              bedMinZ: -1.14,
+              bedMaxZ: 0.94,
+              pillowCenter: new THREE.Vector3(0, 0.485, -0.79),
+            };
+
+            const clampMinX = bedMetrics.bedMinX + 0.35;
+            const clampMaxX = bedMetrics.bedMaxX - 0.35;
+            const clampMinZ = bedMetrics.bedMinZ + 0.35;
+            const clampMaxZ = bedMetrics.bedMaxZ - 0.35;
+
             // Keep character smoothly resting on the sleeping bed with dynamic sleep position roll
             const posLerp = Math.min(1, dt * 7.5);
             const targetRoll =
               sleepingPosRef.current === 'side_curled_right'
-                ? 1.15
+                ? 1.30
                 : sleepingPosRef.current === 'side_curled_left'
-                ? -1.15
-                : sleepingPosRef.current === 'hugging_pillow'
-                ? 0.45
-                : sleepingPosRef.current === 'sprawled'
-                ? 0.12
-                : 0;
+                  ? -1.30
+                  : sleepingPosRef.current === 'hugging_pillow'
+                    ? 1.10
+                    : sleepingPosRef.current === 'sprawled'
+                      ? 0.05
+                      : 0;
 
-            const targetX =
-              sleepingPosRef.current === 'side_curled_right'
-                ? 0.04
-                : sleepingPosRef.current === 'side_curled_left'
-                ? -0.04
-                : 0;
+            // Center avatar strictly on mattress X and Z bounds
+            const rawTargetX = bedMetrics.bedCenterX;
+            const targetX = THREE.MathUtils.clamp(rawTargetX, clampMinX, clampMaxX);
+
+            // Head rests on top pillow (Z ≈ -0.76).
+            // With model scaled to 1.62m, head bone is ~1.47m from feet.
+            // When pitched -PI/2, feet are at avatarContainer.position.z.
+            // Hips bone (~0.82m) is kept strictly inside mattress [clampMinZ, clampMaxZ].
+            const rawTargetZ = 0.71;
+            const clampedHipsZ = THREE.MathUtils.clamp(rawTargetZ - 0.82, clampMinZ, clampMaxZ);
+            const targetZ = clampedHipsZ + 0.82;
+            const targetY = bedMetrics.mattressTopY + 0.085;
 
             if (!activeReaction) {
               avatarContainer.position.x = THREE.MathUtils.lerp(avatarContainer.position.x, targetX, posLerp);
-              avatarContainer.position.z = THREE.MathUtils.lerp(avatarContainer.position.z, 0.68, posLerp);
+              avatarContainer.position.z = THREE.MathUtils.lerp(avatarContainer.position.z, targetZ, posLerp);
             }
-            avatarContainer.position.y = THREE.MathUtils.lerp(avatarContainer.position.y, 0.44, posLerp);
+            avatarContainer.position.y = THREE.MathUtils.lerp(avatarContainer.position.y, targetY, posLerp);
+
+            // Lay avatar horizontal on the mattress (pitch on avatarContainer)
             avatarContainer.rotation.x = THREE.MathUtils.lerp(
               avatarContainer.rotation.x,
-              -Math.PI * 0.49,
+              -Math.PI * 0.5,
               posLerp
             );
             avatarContainer.rotation.y = THREE.MathUtils.lerp(avatarContainer.rotation.y, 0, posLerp);
-            avatarContainer.rotation.z = THREE.MathUtils.lerp(
-              avatarContainer.rotation.z,
-              targetRoll,
-              posLerp
+            avatarContainer.rotation.z = THREE.MathUtils.lerp(avatarContainer.rotation.z, 0, posLerp);
+
+            // Apply side-lying roll around longitudinal spine axis on avatarRoot (in place, zero sideways orbit)
+            if (avatarRootRef.current) {
+              avatarRootRef.current.rotation.x = THREE.MathUtils.lerp(avatarRootRef.current.rotation.x, 0, posLerp);
+              avatarRootRef.current.rotation.y = THREE.MathUtils.lerp(
+                avatarRootRef.current.rotation.y,
+                targetRoll + activeYawOffsetRef.current,
+                posLerp
+              );
+              avatarRootRef.current.rotation.z = THREE.MathUtils.lerp(avatarRootRef.current.rotation.z, 0, posLerp);
+            }
+
+            // Sync hug pillow visibility
+            const isHugPillowMode = sleepingPosRef.current === 'hugging_pillow';
+            envControllerRef.current?.setHugPillowVisible(
+              isHugPillowMode,
+              sleepingPosRef.current === 'side_curled_left' ? 'left' : 'right'
             );
 
             if (!activeReaction && !activeEmoteRef.current) {
@@ -1006,6 +1148,16 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             avatarContainer.rotation.y = THREE.MathUtils.lerp(avatarContainer.rotation.y, 0, posLerp);
             avatarContainer.rotation.z = THREE.MathUtils.lerp(avatarContainer.rotation.z, 0, posLerp);
 
+            if (avatarRootRef.current) {
+              avatarRootRef.current.rotation.x = THREE.MathUtils.lerp(avatarRootRef.current.rotation.x, 0, posLerp);
+              avatarRootRef.current.rotation.y = THREE.MathUtils.lerp(
+                avatarRootRef.current.rotation.y,
+                activeYawOffsetRef.current,
+                posLerp
+              );
+              avatarRootRef.current.rotation.z = THREE.MathUtils.lerp(avatarRootRef.current.rotation.z, 0, posLerp);
+            }
+
             if (!activeReaction && !activeEmoteRef.current) {
               poseControllerRef.current.applySeatedPose({
                 vrm,
@@ -1023,6 +1175,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             const rotLerp = Math.min(1, dt * 7.0);
             avatarContainer.rotation.x = THREE.MathUtils.lerp(avatarContainer.rotation.x, 0, rotLerp);
             avatarContainer.rotation.z = THREE.MathUtils.lerp(avatarContainer.rotation.z, 0, rotLerp);
+            if (avatarRootRef.current) {
+              avatarRootRef.current.rotation.x = THREE.MathUtils.lerp(avatarRootRef.current.rotation.x, 0, rotLerp);
+              avatarRootRef.current.rotation.y = THREE.MathUtils.lerp(
+                avatarRootRef.current.rotation.y,
+                activeYawOffsetRef.current,
+                rotLerp
+              );
+              avatarRootRef.current.rotation.z = THREE.MathUtils.lerp(avatarRootRef.current.rotation.z, 0, rotLerp);
+            }
 
             poseControllerRef.current.restoreStandingHips(vrm, dt);
             roamStatus = roamControllerRef.current.update({
@@ -1047,6 +1208,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               sleepiness: brainNow?.sleepiness ?? 20,
               energy: brainNow?.energy ?? 80,
               curiosity: brainNow?.curiosity ?? 50,
+              onCrossDisplayEdge,
             });
             if (!activeReaction && !activeEmoteRef.current) {
               poseControllerRef.current.applyStandingFingerRelax(vrm, dt);
@@ -1075,14 +1237,38 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             });
           }
 
-          // 2. Smooth Cursor Eye & Head Tracking + Active Listening Posture + Emotion Head-Turn Bias
+          // 2. Autonomous Gaze & Head Tracking + Active Listening Posture + Emotion Head-Turn Bias
+          nextGazeShiftRef.current -= dt;
+          if (nextGazeShiftRef.current <= 0) {
+            const boredom = brainNow?.boredom ?? 25;
+            const curiosity = brainNow?.curiosity ?? 50;
+            const isAttentiveMood =
+              mood === 'Warm' || mood === 'Amused' || mood === 'Proud';
+            const isShyOrAnnoyed =
+              mood === 'Flustered' || mood === 'Annoyed' || mood === 'Pouty' || mood === 'Shy';
+
+            if (isShyOrAnnoyed) {
+              aiGazeModeRef.current = Math.random() < 0.65 ? 'look_away' : 'attentive';
+              nextGazeShiftRef.current = 2.5 + Math.random() * 3.0;
+            } else if (boredom > 65) {
+              aiGazeModeRef.current = Math.random() < 0.5 ? 'daydream' : 'look_away';
+              nextGazeShiftRef.current = 3.5 + Math.random() * 4.0;
+            } else if (curiosity > 60 || isAttentiveMood || humanCtx.isUserTyping) {
+              aiGazeModeRef.current = 'attentive';
+              nextGazeShiftRef.current = 5.0 + Math.random() * 6.0;
+            } else {
+              aiGazeModeRef.current = Math.random() < 0.75 ? 'attentive' : 'look_away';
+              nextGazeShiftRef.current = 3.5 + Math.random() * 5.0;
+            }
+          }
+
           const activeEmote = activeEmoteRef.current;
           const isSpeechHeadTurn =
             isSpeakingRef.current &&
             !humanCtx.empathySoftening &&
             (mood === 'Flustered' || mood === 'Annoyed' || mood === 'Pouty');
           const allowCursorTracking =
-            eyeTrackingRef.current &&
+            aiGazeModeRef.current === 'attentive' &&
             !humanCtx.isSleeping &&
             !activeReaction &&
             !activeEmote &&
@@ -1104,13 +1290,44 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
           if (lookAtTargetRef.current) {
             const baseEyeY = isSeatedStage ? 1.0 : 1.4;
-            const targetX = allowCursorTracking
-              ? mx * 1.15 + bodyLang.headYawBias * 0.85
-              : bodyLang.headYawBias * 2.2;
-            const targetY =
-              baseEyeY + (allowCursorTracking ? my * 0.72 : -bodyLang.headPitchBias * 1.2);
+            const isGazeCmd =
+              activeGazeCommandRef.current &&
+              performance.now() < gazeCommandExpireAtRef.current;
+            const gazeTarget = isGazeCmd ? activeGazeCommandRef.current : null;
+
+            let targetX = 0;
+            let targetY = baseEyeY;
+            let targetZ = 2.1;
+
+            if (gazeTarget === 'camera') {
+              targetX = 0;
+              targetY = baseEyeY;
+              targetZ = 2.5;
+            } else if (gazeTarget === 'look_away') {
+              targetX = 1.25;
+              targetY = baseEyeY + 0.12;
+              targetZ = 1.6;
+            } else if (gazeTarget === 'shy_down') {
+              targetX = -0.15;
+              targetY = baseEyeY - 0.52;
+              targetZ = 1.3;
+            } else if (gazeTarget === 'screen') {
+              targetX = 0.42;
+              targetY = baseEyeY - 0.22;
+              targetZ = 1.8;
+            } else if (gazeTarget === 'mouse' || allowCursorTracking) {
+              targetX = mx * 1.15 + bodyLang.headYawBias * 0.85;
+              targetY =
+                baseEyeY + (my * 0.72 - bodyLang.headPitchBias * 1.2);
+              targetZ = 2.1;
+            } else {
+              targetX = bodyLang.headYawBias * 2.2;
+              targetY = baseEyeY - bodyLang.headPitchBias * 1.2;
+              targetZ = 2.1;
+            }
+
             lookAtTargetRef.current.position.lerp(
-              new THREE.Vector3(targetX, targetY, 2.1),
+              new THREE.Vector3(targetX, targetY, targetZ),
               Math.min(1, dt * 8)
             );
             if (vrm.lookAt && vrm.lookAt.target !== lookAtTargetRef.current) {
@@ -1284,9 +1501,48 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             isSpeaking: isMouthActive,
             human: humanCtx,
           });
+
+          // Apply autonomous facial expression tag if active
+          if (
+            activeExprCommandRef.current &&
+            performance.now() < exprCommandExpireAtRef.current &&
+            !Boolean(activeEmoteRef.current)
+          ) {
+            const cmd = activeExprCommandRef.current;
+            if (cmd === 'blush_high') {
+              setExpr(['blush', 'Fcl_ALL_Angry'], 0.95);
+            } else if (cmd === 'starry_eyes') {
+              setExpr(['happy', 'joy', 'Fcl_EYE_Joy', 'Fcl_MTH_Fun'], 0.95);
+            } else if (cmd === 'wink_left' || cmd === 'wink') {
+              setExpr(['blinkLeft', 'winkLeft', 'blink_l'], 1.0);
+              setExpr(['happy', 'joy'], 0.4);
+            } else if (cmd === 'cat_mouth') {
+              setExpr(['happy', 'relaxed', 'Fcl_MTH_Fun'], 0.85);
+            } else if (cmd === 'smug_smirk') {
+              setExpr(['happy', 'Fcl_MTH_Fun'], 0.7);
+              setExpr(['angry'], 0.25);
+            } else if (cmd === 'pout') {
+              setExpr(['angry', 'sad', 'Fcl_MTH_Pout'], 0.75);
+              setExpr(['blush'], 0.6);
+            } else if (cmd === 'happy') {
+              setExpr(['happy', 'joy'], 0.85);
+            } else if (cmd === 'surprised') {
+              setExpr(['surprised'], 0.9);
+            } else {
+              setExpr([cmd], 0.85);
+            }
+          }
         }
 
         vrm.update(dt);
+
+        for (const entry of mountedAccessoriesRef.current.values()) {
+          if (entry.wrapper.visible && entry.bonePairs.length > 0) {
+            for (const pair of entry.bonePairs) {
+              pair.guest.quaternion.copy(pair.host.quaternion);
+            }
+          }
+        }
       }
 
       renderer.render(scene, camera);
@@ -1328,7 +1584,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
     let cancelled = false;
 
+    const clearMountedAccessories = () => {
+      for (const entry of mountedAccessoriesRef.current.values()) {
+        entry.wrapper.parent?.remove(entry.wrapper);
+      }
+      mountedAccessoriesRef.current.clear();
+    };
+
     const clearCurrentAvatar = () => {
+      clearMountedAccessories();
       activeVrmaActionRef.current?.stop();
       activeVrmaActionRef.current = null;
       mixerRef.current = null;
@@ -1435,8 +1699,27 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           if (vrm) {
             poseControllerRef.current.bindVrm(vrm, appliedScale, postureRef.current);
             if (postureRef.current === 'sleeping' && !desktopRoamRef.current) {
-              avatarContainer.position.set(0, 0.44, 0.68);
-              avatarContainer.rotation.set(-Math.PI * 0.49, 0, 0);
+              const bed = envControllerRef.current?.getBedMetrics();
+              const bedCenterX = bed ? bed.bedCenterX : 0;
+              const mattressY = bed ? bed.mattressTopY + 0.085 : 0.485;
+              avatarContainer.position.set(bedCenterX, mattressY, 0.71);
+              avatarContainer.rotation.set(-Math.PI * 0.5, 0, 0);
+              const initRoll =
+                sleepingPosRef.current === 'side_curled_right'
+                  ? 1.30
+                  : sleepingPosRef.current === 'side_curled_left'
+                    ? -1.30
+                    : sleepingPosRef.current === 'hugging_pillow'
+                      ? 1.10
+                      : sleepingPosRef.current === 'sprawled'
+                        ? 0.05
+                        : 0;
+              avatarRoot.rotation.set(0, initRoll + activeYawOffsetRef.current, 0);
+              const isHugPillow = sleepingPosRef.current === 'hugging_pillow';
+              envControllerRef.current?.setHugPillowVisible(
+                isHugPillow,
+                sleepingPosRef.current === 'side_curled_left' ? 'left' : 'right'
+              );
               const initBodyLang = emotionEngineRef.current.getBodyLanguage(
                 moodRef.current,
                 emotionIntensityRef.current,
@@ -1486,6 +1769,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             materialMods: activeSlot.materialMods,
             isImportedModel: true,
             textureCache: textureCacheRef.current,
+            cyclingShorts: activeSlot.cyclingShorts ?? true,
           });
 
           onMeshesDetectedRef.current(
@@ -1547,6 +1831,206 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     avatarRoot.rotation.y = yaw;
   }, [activeSlot.yawOffset, activeSlot.id]);
 
+  // 2c. Mount & live-update 3D accessories / .xwear dress-up items on the active avatar
+  useEffect(() => {
+    if (isLoadingModel || !avatarRootRef.current) return;
+    let cancelled = false;
+    const equipped = activeSlot.accessories || [];
+
+    for (const [id, entry] of mountedAccessoriesRef.current.entries()) {
+      const match = equipped.find((a) => a.id === id);
+      if (
+        !match ||
+        match.vaultAccessoryId !== entry.vaultId ||
+        match.attachTarget !== entry.attachTarget
+      ) {
+        entry.wrapper.parent?.remove(entry.wrapper);
+        mountedAccessoriesRef.current.delete(id);
+      }
+    }
+
+    const syncAccessories = async () => {
+      const avatarRoot = avatarRootRef.current;
+      if (!avatarRoot) return;
+      const hostVrm = currentVrmRef.current;
+
+      for (const acc of equipped) {
+        if (cancelled) return;
+        let entry = mountedAccessoriesRef.current.get(acc.id);
+
+        if (!entry) {
+          const record = await getAccessoryBuffer(acc.vaultAccessoryId);
+          if (cancelled || !record) continue;
+
+          const blobUrl = URL.createObjectURL(new Blob([record.buffer]));
+          try {
+            const loader = new GLTFLoader();
+            loader.register((parser) => new VRMLoaderPlugin(parser));
+            const gltf = await loader.loadAsync(blobUrl);
+            if (cancelled) continue;
+
+            const guestVrm = gltf.userData.vrm as VRM | undefined;
+            if (guestVrm && guestVrm.meta?.metaVersion === '0') {
+              VRMUtils.rotateVRM0(guestVrm);
+            }
+            const sceneRoot = guestVrm ? guestVrm.scene : gltf.scene;
+            sceneRoot.traverse((obj) => {
+              if (obj instanceof THREE.Mesh) obj.frustumCulled = false;
+            });
+
+            const wrapper = new THREE.Group();
+            wrapper.name = `acc_${acc.id}`;
+            wrapper.add(sceneRoot);
+
+            const rawBox = new THREE.Box3().setFromObject(sceneRoot);
+            const rawSize = new THREE.Vector3();
+            rawBox.getSize(rawSize);
+            const rawCenter = new THREE.Vector3();
+            rawBox.getCenter(rawCenter);
+
+            let baseScale = 1;
+            const bonePairs: Array<{ host: THREE.Object3D; guest: THREE.Object3D }> = [];
+
+            if (acc.attachTarget === 'auto_fit') {
+              baseScale = rawSize.y > 0.4 ? 1.62 / rawSize.y : modelScaleRef.current;
+              sceneRoot.position.set(-rawCenter.x, -rawBox.min.y, -rawCenter.z);
+              avatarRoot.add(wrapper);
+
+              if (hostVrm?.humanoid) {
+                const candidateBones: VRMHumanBoneName[] = [
+                  'hips',
+                  'spine',
+                  'chest',
+                  'upperChest',
+                  'neck',
+                  'head',
+                  'leftShoulder',
+                  'leftUpperArm',
+                  'leftLowerArm',
+                  'leftHand',
+                  'rightShoulder',
+                  'rightUpperArm',
+                  'rightLowerArm',
+                  'rightHand',
+                  'leftUpperLeg',
+                  'leftLowerLeg',
+                  'leftFoot',
+                  'rightUpperLeg',
+                  'rightLowerLeg',
+                  'rightFoot',
+                ];
+                const guestNodesByName = new Map<string, THREE.Object3D>();
+                sceneRoot.traverse((node) => {
+                  if (node.name) {
+                    guestNodesByName.set(node.name.toLowerCase(), node);
+                  }
+                });
+
+                for (const boneName of candidateBones) {
+                  const hostBone =
+                    hostVrm.humanoid.getNormalizedBoneNode(boneName) ||
+                    hostVrm.humanoid.getRawBoneNode(boneName);
+                  if (!hostBone) continue;
+                  const guestBone =
+                    guestVrm?.humanoid?.getNormalizedBoneNode(boneName) ||
+                    guestVrm?.humanoid?.getRawBoneNode(boneName) ||
+                    guestNodesByName.get(boneName.toLowerCase()) ||
+                    guestNodesByName.get(hostBone.name.toLowerCase());
+                  if (guestBone) {
+                    bonePairs.push({ host: hostBone, guest: guestBone });
+                  }
+                }
+              }
+            } else {
+              sceneRoot.position.set(-rawCenter.x, -rawCenter.y, -rawCenter.z);
+              const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z, 0.01);
+              const desiredMeters =
+                acc.attachTarget === 'chest' ||
+                acc.attachTarget === 'hips' ||
+                acc.attachTarget === 'root'
+                  ? 0.42
+                  : 0.25;
+              const hostScale = Math.max(0.01, modelScaleRef.current);
+
+              if (acc.attachTarget === 'root' || !hostVrm?.humanoid) {
+                baseScale = desiredMeters / maxDim;
+                avatarRoot.add(wrapper);
+              } else {
+                const boneKey = acc.attachTarget as VRMHumanBoneName;
+                const boneNode =
+                  hostVrm.humanoid.getNormalizedBoneNode(boneKey) ||
+                  hostVrm.humanoid.getRawBoneNode(boneKey);
+                if (boneNode) {
+                  baseScale = desiredMeters / maxDim / hostScale;
+                  boneNode.add(wrapper);
+                } else {
+                  baseScale = desiredMeters / maxDim;
+                  avatarRoot.add(wrapper);
+                }
+              }
+            }
+
+            entry = {
+              id: acc.id,
+              vaultId: acc.vaultAccessoryId,
+              attachTarget: acc.attachTarget,
+              wrapper,
+              baseScale,
+              bonePairs,
+            };
+            mountedAccessoriesRef.current.set(acc.id, entry);
+          } catch (err) {
+            console.warn('[StageViewport] Failed to load accessory:', acc.fileName, err);
+            continue;
+          } finally {
+            URL.revokeObjectURL(blobUrl);
+          }
+        }
+
+        if (entry) {
+          entry.wrapper.visible = acc.visible;
+          entry.wrapper.position.set(acc.position[0], acc.position[1], acc.position[2]);
+          entry.wrapper.rotation.set(
+            THREE.MathUtils.degToRad(acc.rotationDeg[0]),
+            THREE.MathUtils.degToRad(acc.rotationDeg[1]),
+            THREE.MathUtils.degToRad(acc.rotationDeg[2])
+          );
+          const s = Math.max(0.01, acc.scale || 1);
+          const sx = s * (acc.scaleXYZ?.[0] ?? 1);
+          const sy = s * (acc.scaleXYZ?.[1] ?? 1);
+          const sz = s * (acc.scaleXYZ?.[2] ?? 1);
+          entry.wrapper.scale.set(
+            entry.baseScale * sx,
+            entry.baseScale * sy,
+            entry.baseScale * sz
+          );
+
+          if (acc.colorHex) {
+            const tint = new THREE.Color(acc.colorHex);
+            entry.wrapper.traverse((obj) => {
+              if (!(obj instanceof THREE.Mesh)) return;
+              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+              for (const mat of mats) {
+                if (!mat) continue;
+                const anyMat = mat as unknown as {
+                  color?: THREE.Color;
+                  shadeColorFactor?: THREE.Color;
+                };
+                if (anyMat.color) anyMat.color.copy(tint);
+                if (anyMat.shadeColorFactor) anyMat.shadeColorFactor.copy(tint);
+              }
+            });
+          }
+        }
+      }
+    };
+
+    void syncAccessories();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSlot.accessories, isLoadingModel]);
+
   // 3. Apply live clothing mods
   useEffect(() => {
     const avatarRoot = avatarRootRef.current;
@@ -1558,12 +2042,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       materialMods: activeSlot.materialMods,
       isImportedModel: true,
       textureCache: textureCacheRef.current,
+      cyclingShorts: activeSlot.cyclingShorts ?? true,
     });
 
     onMeshesDetectedRef.current(
       detectClothingMeshes(avatarRoot, activeSlot.materialMods)
     );
-  }, [activeSlot.meshVisibility, activeSlot.materialMods]);
+  }, [activeSlot.meshVisibility, activeSlot.materialMods, activeSlot.cyclingShorts]);
 
   // 4. Emote & .VRMA Playback Handlers
   const triggerProceduralEmote = (emoteId: ProceduralEmoteId) => {
@@ -1799,6 +2284,14 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     setActivePreset(preset);
     if (preset === 'reset') {
       roamControllerRef.current.resetToCenter();
+      onUpdateYawOffset?.(0);
+      activeYawOffsetRef.current = 0;
+      if (avatarRootRef.current) {
+        avatarRootRef.current.rotation.y = 0;
+      }
+      if (controlsRef.current) {
+        controlsRef.current.target.set(...DEFAULT_FRAMES.reset.target);
+      }
     }
     const cfg = cameraFramesRef.current[preset];
     cameraLerpRef.current = {
@@ -1815,7 +2308,18 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
     const lower = file.name.toLowerCase();
-    if (lower.endsWith('.vrm') || lower.endsWith('.glb')) {
+    if (lower.endsWith('.xwear')) {
+      if (onImportAccessoryFile) {
+        onImportAccessoryFile(file);
+      } else {
+        onImportModelFile(file);
+      }
+    } else if (
+      lower.endsWith('.vrm') ||
+      lower.endsWith('.glb') ||
+      lower.endsWith('.xavatar') ||
+      lower.endsWith('.vroidcustomitem')
+    ) {
       onImportModelFile(file);
     } else if (lower.endsWith('.vrma')) {
       const meta = await onImportVrmaFile(file);
@@ -1896,729 +2400,898 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             </span>
           </div>
 
-            {/* Compact Live Human Needs Gauges Strip (click to inspect 🧠 AI Brain) */}
-            {persona.brain && (
+          {/* Compact Live Human Needs Gauges Strip (click to inspect 🧠 AI Brain) */}
+          {persona.brain && (
+            <button
+              type="button"
+              onClick={() => setOpenPanel((p) => (p === 'brain' ? 'none' : 'brain'))}
+              className="flex w-fit items-center gap-2 rounded-full border border-white/10 bg-[#0b0b15]/82 px-3 py-1 text-[10.5px] font-mono text-zinc-200 shadow-glass backdrop-blur-xl transition hover:border-violet-400/45"
+              title={`Nuanced Feeling: ${persona.brain.nuancedFeeling} — click to open AI Brain & Human Needs`}
+            >
+              <span
+                className={persona.brain.hunger > 70 ? 'font-bold text-amber-300' : 'text-zinc-300'}
+              >
+                🍱 {Math.round(persona.brain.hunger)}%
+              </span>
+              <span className="text-white/15">·</span>
+              <span
+                className={
+                  persona.brain.isSleeping
+                    ? 'font-bold text-indigo-300'
+                    : persona.brain.sleepiness > 70
+                      ? 'font-bold text-purple-300'
+                      : 'text-zinc-300'
+                }
+              >
+                😴 {Math.round(persona.brain.sleepiness)}%
+              </span>
+              <span className="text-white/15">·</span>
+              <span
+                className={persona.brain.boredom > 65 ? 'font-bold text-rose-300' : 'text-zinc-300'}
+              >
+                🥱 {Math.round(persona.brain.boredom)}%
+              </span>
+              <span className="text-white/15">·</span>
+              <span
+                className={persona.brain.comfort < 35 ? 'font-bold text-cyan-300' : 'text-zinc-300'}
+              >
+                🧣 {Math.round(persona.brain.comfort)}%
+              </span>
+            </button>
+          )}
+
+          {persona.brain?.isSleeping && (
+            <div className="flex w-fit items-center gap-2 rounded-full border border-indigo-400/40 bg-indigo-950/80 px-3 py-1 text-[11px] font-medium text-indigo-100 backdrop-blur-md">
+              <span>💤 Dozing peacefully — pat her head or message to wake</span>
+            </div>
+          )}
+
+          {isUserTyping && !persona.brain?.isSleeping && (
+            <div className="flex w-fit items-center gap-1.5 rounded-full border border-cyan-400/35 bg-cyan-950/70 px-3 py-1 text-[10.5px] font-medium text-cyan-100 backdrop-blur-md">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+              <span>Listening attentively...</span>
+            </div>
+          )}
+
+          {(lastZoneToast || hoverMeta) && (
+            <div className="flex w-fit items-center gap-1.5 rounded-full border border-white/15 bg-[#0e0e1b]/85 px-3 py-1 text-[11px] font-medium text-zinc-100 backdrop-blur-xl">
+              <span>{lastZoneToast || `${hoverMeta!.emoji} Click to ${hoverMeta!.label}`}</span>
+            </div>
+          )}
+
+          {activeEmoteLabel && (
+            <div className="flex w-fit items-center gap-2 rounded-full border border-amber-400/35 bg-amber-950/75 px-3 py-1 text-[11px] font-medium text-amber-100 backdrop-blur-md">
+              <span>Emote: {activeEmoteLabel}</span>
               <button
                 type="button"
-                onClick={() => setOpenPanel((p) => (p === 'brain' ? 'none' : 'brain'))}
-                className="flex w-fit items-center gap-2 rounded-full border border-white/10 bg-[#0b0b15]/82 px-3 py-1 text-[10.5px] font-mono text-zinc-200 shadow-glass backdrop-blur-xl transition hover:border-violet-400/45"
-                title={`Nuanced Feeling: ${persona.brain.nuancedFeeling} — click to open AI Brain & Human Needs`}
+                onClick={stopActiveEmote}
+                className="rounded-full p-0.5 hover:bg-white/15"
+                title="Stop emote"
               >
-                <span
-                  className={persona.brain.hunger > 70 ? 'font-bold text-amber-300' : 'text-zinc-300'}
-                >
-                  🍱 {Math.round(persona.brain.hunger)}%
-                </span>
-                <span className="text-white/15">·</span>
-                <span
-                  className={
-                    persona.brain.isSleeping
-                      ? 'font-bold text-indigo-300'
-                      : persona.brain.sleepiness > 70
-                        ? 'font-bold text-purple-300'
-                        : 'text-zinc-300'
-                  }
-                >
-                  😴 {Math.round(persona.brain.sleepiness)}%
-                </span>
-                <span className="text-white/15">·</span>
-                <span
-                  className={persona.brain.boredom > 65 ? 'font-bold text-rose-300' : 'text-zinc-300'}
-                >
-                  🥱 {Math.round(persona.brain.boredom)}%
-                </span>
-                <span className="text-white/15">·</span>
-                <span
-                  className={persona.brain.comfort < 35 ? 'font-bold text-cyan-300' : 'text-zinc-300'}
-                >
-                  🧣 {Math.round(persona.brain.comfort)}%
-                </span>
+                <X className="h-3 w-3" />
               </button>
-            )}
+            </div>
+          )}
 
-            {persona.brain?.isSleeping && (
-              <div className="flex w-fit items-center gap-2 rounded-full border border-indigo-400/40 bg-indigo-950/80 px-3 py-1 text-[11px] font-medium text-indigo-100 backdrop-blur-md">
-                <span>💤 Dozing peacefully — pat her head or message to wake</span>
-              </div>
-            )}
+          {/* Live Voice Tone Indicator Pill + Quick Speak (🔊) Button */}
+          <div className="flex w-fit items-center gap-1.5">
+            <button
+              type="button"
+              onClick={isSpeaking ? onStopSpeaking : onSpeakLatest}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold shadow-glass backdrop-blur-xl transition hover:brightness-115 ${isSpeaking
+                ? 'border-violet-400/60 bg-violet-600/35 text-violet-100'
+                : 'border-white/15 bg-[#0b0b15]/85 text-zinc-200 hover:border-violet-400/45'
+                }`}
+              title={
+                isSpeaking
+                  ? 'Stop speaking'
+                  : `Speak latest reply (${liveVoiceTone.toneLabel} · ${liveVoiceTone.summaryDetail})`
+              }
+            >
+              {isSpeaking ? (
+                <Square className="h-3 w-3 fill-current text-rose-300" />
+              ) : (
+                <Volume2 className="h-3 w-3 text-violet-300" />
+              )}
+              <span>{isSpeaking ? 'Speaking' : 'Speak'}</span>
+            </button>
 
-            {isUserTyping && !persona.brain?.isSleeping && (
-              <div className="flex w-fit items-center gap-1.5 rounded-full border border-cyan-400/35 bg-cyan-950/70 px-3 py-1 text-[10.5px] font-medium text-cyan-100 backdrop-blur-md">
-                <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
-                <span>Listening attentively...</span>
-              </div>
-            )}
+            <div
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium shadow-glass backdrop-blur-xl ${liveVoiceTone.badgeClass}`}
+              title={`${liveVoiceTone.summaryDetail} — ${liveVoiceTone.stylePrompt}`}
+            >
+              <span>🎙️</span>
+              <span className="font-mono text-[10px] opacity-75">Tone:</span>
+              <span className="font-semibold">{liveVoiceTone.toneLabel}</span>
+              <span className="hidden xl:inline font-mono text-[9.5px] opacity-75">
+                ({liveVoiceTone.summaryDetail})
+              </span>
+            </div>
+          </div>
 
-            {(lastZoneToast || hoverMeta) && (
-              <div className="flex w-fit items-center gap-1.5 rounded-full border border-white/15 bg-[#0e0e1b]/85 px-3 py-1 text-[11px] font-medium text-zinc-100 backdrop-blur-xl">
-                <span>{lastZoneToast || `${hoverMeta!.emoji} Click to ${hoverMeta!.label}`}</span>
-              </div>
-            )}
+          {musicState.isPlaying && (
+            <div className="flex w-fit items-center gap-2 rounded-full border border-pink-400/40 bg-pink-950/75 px-3 py-1 text-[11px] font-medium text-pink-100 backdrop-blur-md">
+              <Music className="h-3.5 w-3.5 animate-bounce text-pink-300" />
+              <span className="max-w-[160px] truncate">Karaoke Sync: {musicState.fileName}</span>
+            </div>
+          )}
+        </div>
+      )}
 
-            {activeEmoteLabel && (
-              <div className="flex w-fit items-center gap-2 rounded-full border border-amber-400/35 bg-amber-950/75 px-3 py-1 text-[11px] font-medium text-amber-100 backdrop-blur-md">
-                <span>Emote: {activeEmoteLabel}</span>
+      {/* Top-Right: Stage Controls (hidden in transparent Roam Mode) */}
+      {!desktopRoamMode && (
+        <div className="absolute right-4 top-5 z-20 flex max-w-[66%] flex-wrap items-center justify-end gap-1.5">
+          {Math.abs(activeSlot.yawOffset ?? 0) > 0.04 && (
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateYawOffset?.(0);
+                activeYawOffsetRef.current = 0;
+                if (avatarRootRef.current) {
+                  avatarRootRef.current.rotation.y = 0;
+                }
+              }}
+              className="flex items-center gap-1 rounded-full border border-cyan-400/60 bg-cyan-950/80 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 shadow-glass backdrop-blur-xl transition hover:bg-cyan-900/90"
+              title={`Body is currently turned ${Math.round(((activeSlot.yawOffset ?? 0) * 180) / Math.PI)}°. Click to snap front-facing (0°).`}
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-cyan-300" />
+              <span>Face Front (0°)</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggleAutoRoam}
+            className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${autoRoamEnabled
+              ? 'border-emerald-400/50 bg-emerald-950/70 text-emerald-100'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-400 hover:text-zinc-200'
+              }`}
+            title={`Auto-Roam & Procedural Idle (${ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior})`}
+          >
+            <Footprints className={`h-3.5 w-3.5 ${autoRoamEnabled ? 'text-emerald-300' : ''}`} />
+            <span>Auto-Roam</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setOpenPanel((p) => (p === 'brain' ? 'none' : 'brain'))}
+            className={`relative flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'brain'
+              ? 'border-violet-400/70 bg-violet-600/30 text-violet-100'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-violet-400/50'
+              }`}
+            title="AI Brain Inspector — Energy, Boredom, Curiosity & Inner Thoughts"
+          >
+            <Brain className="h-3.5 w-3.5 text-violet-300" />
+            <span>AI Brain</span>
+            {persona.brain && persona.brain.boredom > 70 && (
+              <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setOpenPanel((p) => (p === 'emotes' ? 'none' : 'emotes'))}
+            className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'emotes'
+              ? 'border-amber-400/60 bg-amber-500/25 text-amber-100'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-amber-400/45'
+              }`}
+            title="Skeletal Emotes & .VRMA Animation Player"
+          >
+            <span>✨</span>
+            <span>Emotes</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setOpenPanel((p) => (p === 'environments' ? 'none' : 'environments'))
+            }
+            className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'environments'
+              ? 'border-indigo-400/60 bg-indigo-500/25 text-indigo-100'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-indigo-400/45'
+              }`}
+            title="Atmospheric 3D Stage Environments & Lighting Presets"
+          >
+            <span>🌌</span>
+            <span>Stage</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setOpenPanel((p) => (p === 'music' ? 'none' : 'music'))}
+            className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'music' || musicState.isPlaying
+              ? 'border-pink-400/60 bg-pink-500/25 text-pink-100'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-pink-400/45'
+              }`}
+            title="Idol Stage Audio / Karaoke Music Sync Mode"
+          >
+            <span>🎵</span>
+            <span>Audio</span>
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".vrm,.glb,.xwear,.xavatar,.vroidcustomitem"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                if (file.name.toLowerCase().endsWith('.xwear') && onImportAccessoryFile) {
+                  onImportAccessoryFile(file);
+                } else {
+                  onImportModelFile(file);
+                }
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1 rounded-full border border-violet-400/40 bg-[#10101e]/85 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 shadow-glass backdrop-blur-xl transition hover:border-violet-300 hover:bg-violet-600/30"
+            title="Import Anime .VRM / .GLB / .XWEAR / .XAVATAR"
+          >
+            <Upload className="h-3.5 w-3.5 text-violet-300" />
+            <span>.VRM</span>
+          </button>
+        </div>
+      )}
+
+      {/* Stage Popover 0: AI Brain Inspector (🧠) */}
+      {openPanel === 'brain' && (
+        <AiBrainPopover
+          persona={persona}
+          roamBehavior={roamBehavior}
+          autoRoamEnabled={autoRoamEnabled}
+          showThoughtHud={showThoughtHud}
+          isGenerating={isGenerating}
+          onToggleAutoRoam={onToggleAutoRoam}
+          onToggleThoughtHud={() => setShowThoughtHud((v) => !v)}
+          onTriggerBrainImpulse={onTriggerBrainImpulse}
+          onOpenMemoryJournal={onOpenMemoryJournal}
+          onClose={() => setOpenPanel('none')}
+        />
+      )}
+
+      {/* Stage Popover 1: Emotes & .VRMA Player (✨) */}
+      {openPanel === 'emotes' && (
+        <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-bold text-white">✨ Emotes &amp; .VRMA Player</div>
+            <button
+              type="button"
+              onClick={() => setOpenPanel('none')}
+              className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-1.5">
+            {PROCEDURAL_EMOTES.map((em) => (
+              <button
+                key={em.id}
+                type="button"
+                onClick={() => triggerProceduralEmote(em.id)}
+                className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-xs text-zinc-100 transition hover:border-amber-400/50 hover:bg-amber-500/15"
+              >
+                <span className="flex items-center gap-2">
+                  <span>{em.emoji}</span>
+                  <span className="font-medium">{em.label}</span>
+                </span>
+                <Play className="h-3 w-3 text-amber-300" />
+              </button>
+            ))}
+          </div>
+
+          <div className="border-t border-white/[0.08] pt-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                Custom .VRMA Animations ({vaultVrmas.length})
+              </span>
+              {activeEmoteLabel && (
                 <button
                   type="button"
                   onClick={stopActiveEmote}
-                  className="rounded-full p-0.5 hover:bg-white/15"
-                  title="Stop emote"
+                  className="text-[10px] text-rose-300 hover:underline"
+                >
+                  Stop
+                </button>
+              )}
+            </div>
+
+            {vaultVrmas.map((vrma) => (
+              <div
+                key={vrma.id}
+                className="flex items-center justify-between rounded-xl border border-white/10 bg-[#121220] px-2.5 py-1.5 text-[11px]"
+              >
+                <button
+                  type="button"
+                  onClick={() => void playSavedVrma(vrma.id)}
+                  className="flex flex-1 items-center gap-1.5 truncate text-left text-zinc-200 hover:text-amber-200"
+                >
+                  <Play className="h-3 w-3 shrink-0 text-amber-300" />
+                  <span className="truncate">{vrma.name}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDeleteVrma(vrma.id)}
+                  className="p-1 text-zinc-500 hover:text-rose-300"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+
+            <input
+              ref={vrmaInputRef}
+              type="file"
+              accept=".vrma"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  const meta = await onImportVrmaFile(file);
+                  if (meta) void playSavedVrma(meta.id);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => vrmaInputRef.current?.click()}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-amber-400/40 bg-amber-950/20 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-950/35"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import .VRMA Dance / Pose
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stage Popover 2: Atmospheric 3D Stage Environments (🌌) */}
+      {openPanel === 'environments' && (
+        <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-bold text-white">🌌 Stage Environments &amp; Lighting</div>
+            <button
+              type="button"
+              onClick={() => setOpenPanel('none')}
+              className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="space-y-1.5">
+            {(Object.keys(STAGE_ENVIRONMENTS) as StageEnvironmentId[]).map((id) => {
+              const item = STAGE_ENVIRONMENTS[id];
+              const active = persona.stageEnvironment === id && !persona.customEnvironment;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    onClearCustomEnvironment();
+                    onSelectEnvironment(id);
+                  }}
+                  className={`w-full rounded-2xl border p-2.5 text-left transition ${active
+                    ? 'border-indigo-400/60 bg-indigo-500/20'
+                    : 'border-white/10 bg-white/[0.03] hover:border-white/25'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                    <span>{item.emoji}</span>
+                    <span>{item.name}</span>
+                  </div>
+                  <p className="mt-0.5 text-[10px] leading-snug text-zinc-400">
+                    {item.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-white/[0.08] pt-3 space-y-2">
+            {persona.customEnvironment && (
+              <div className="flex items-center justify-between rounded-xl border border-cyan-400/35 bg-cyan-950/30 px-2.5 py-1.5 text-[11px] text-cyan-100">
+                <span className="truncate">Custom: {persona.customEnvironment.fileName}</span>
+                <button
+                  type="button"
+                  onClick={onClearCustomEnvironment}
+                  className="text-[10px] text-rose-300 hover:underline"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+
+            <input
+              ref={envInputRef}
+              type="file"
+              accept=".hdr,.png,.jpg,.jpeg,.webp,.glb"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  onUploadCustomEnvironment(file);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => envInputRef.current?.click()}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-indigo-400/40 bg-indigo-950/20 py-2 text-xs font-semibold text-indigo-200 hover:bg-indigo-950/35"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Upload .HDR / .PNG Backdrop or .GLB Room
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stage Popover 3: Idol Stage Audio / Karaoke Music Sync Mode (🎵) */}
+      {openPanel === 'music' && (
+        <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-bold text-white">🎵 Idol Stage Audio &amp; Karaoke Sync</div>
+            <button
+              type="button"
+              onClick={() => setOpenPanel('none')}
+              className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <p className="text-[11px] text-zinc-400">
+            Drop an <code className="text-pink-300">.mp3</code> / <code className="text-pink-300">.wav</code> track to drive rhythmic swaying, beat-synced head nods, vocal-band lip-sync &amp; bass spotlights.
+          </p>
+
+          {/* 12-Bar Audio Visualizer */}
+          <div className="flex h-12 items-end justify-between gap-1 rounded-2xl border border-white/10 bg-[#080810] px-3 py-2">
+            {musicBars.map((val, i) => (
+              <div
+                key={i}
+                className="flex-1 rounded-t-sm bg-gradient-to-t from-violet-500 via-pink-500 to-cyan-300 transition-all duration-75"
+                style={{ height: `${Math.max(10, Math.round(val * 100))}%` }}
+              />
+            ))}
+          </div>
+
+          {musicState.fileName && (
+            <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-pink-200">
+                  {musicState.fileName}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => musicSync.clearTrack()}
+                  className="text-zinc-500 hover:text-rose-300"
+                  title="Remove track"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void musicSync.togglePlay()}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-pink-600 text-white hover:bg-pink-500"
+                >
+                  {musicState.isPlaying ? (
+                    <Pause className="h-3.5 w-3.5" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => musicSync.stop()}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:text-white"
+                >
+                  <Square className="h-3 w-3" />
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.02}
+                  value={musicState.volume}
+                  onChange={(e) => musicSync.setVolume(Number(e.target.value))}
+                  aria-label="Music Volume"
+                  className="flex-1"
+                />
+              </div>
+            </div>
+          )}
+
+          <input
+            ref={musicInputRef}
+            type="file"
+            accept=".mp3,.wav,.ogg,.m4a,audio/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                void musicSync.loadAndPlayFile(file);
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => musicInputRef.current?.click()}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-pink-600 to-violet-600 py-2 text-xs font-semibold text-white shadow-glow hover:brightness-110"
+          >
+            <Music className="h-3.5 w-3.5" />
+            Load .MP3 / .WAV Music Track
+          </button>
+        </div>
+      )}
+
+      {/* Bottom-Left: Persona, Outfit & Active Stage Environment (hidden in transparent Roam Mode) */}
+      {!desktopRoamMode && (
+        <div className="absolute bottom-5 left-5 z-20 flex flex-col gap-2">
+          {/* Floating Live 3D Accessory Sizing & Fit Bar */}
+          {activeSlot.accessories && activeSlot.accessories.length > 0 && onUpdateEquippedAccessory && (
+            <div className="rounded-2xl border border-white/10 bg-[#0b0b14]/88 p-2.5 shadow-glass backdrop-blur-xl w-[320px]">
+              <div className="flex items-center justify-between border-b border-white/[0.08] pb-1.5 mb-1.5">
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-fuchsia-200">
+                  <span>🎀</span>
+                  <span>Accessory Sizing &amp; Fit</span>
+                </span>
+                <span className="rounded bg-fuchsia-500/20 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-fuchsia-300">
+                  {activeSlot.accessories.length} Item{activeSlot.accessories.length > 1 ? 's' : ''}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {activeSlot.accessories.map((acc) => {
+                  const s = acc.scale || 1;
+                  return (
+                    <div key={acc.id} className="space-y-1">
+                      <div className="flex items-center justify-between gap-1 text-[10.5px]">
+                        <span className="truncate text-zinc-200 font-medium max-w-[170px]" title={acc.name}>
+                          {acc.name}
+                        </span>
+                        <span className="font-mono text-[10px] font-bold text-fuchsia-300">
+                          {s.toFixed(2)}x ({Math.round(s * 100)}%)
+                        </span>
+                      </div>
+
+                      {/* Increase / Decrease Buttons */}
+                      <div className="grid grid-cols-4 gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.max(0.05, Math.round((s - 0.1) * 100) / 100);
+                            onUpdateEquippedAccessory(acc.id, { scale: next });
+                          }}
+                          className="rounded-lg border border-white/10 bg-white/5 py-1 text-center font-mono text-[9.5px] font-semibold text-zinc-300 hover:bg-white/10"
+                          title="Decrease size by 10%"
+                        >
+                          -10%
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.max(0.05, Math.round((s - 0.05) * 100) / 100);
+                            onUpdateEquippedAccessory(acc.id, { scale: next });
+                          }}
+                          className="rounded-lg border border-rose-400/30 bg-rose-500/15 py-1 text-center font-mono text-[9.5px] font-semibold text-rose-200 hover:bg-rose-500/25"
+                          title="Decrease size by 5%"
+                        >
+                          -5%
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.min(5.0, Math.round((s + 0.05) * 100) / 100);
+                            onUpdateEquippedAccessory(acc.id, { scale: next });
+                          }}
+                          className="rounded-lg border border-emerald-400/30 bg-emerald-500/15 py-1 text-center font-mono text-[9.5px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                          title="Increase size by 5%"
+                        >
+                          +5%
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.min(5.0, Math.round((s + 0.1) * 100) / 100);
+                            onUpdateEquippedAccessory(acc.id, { scale: next });
+                          }}
+                          className="rounded-lg border border-white/10 bg-white/5 py-1 text-center font-mono text-[9.5px] font-semibold text-zinc-300 hover:bg-white/10"
+                          title="Increase size by 10%"
+                        >
+                          +10%
+                        </button>
+                      </div>
+
+                      {/* Sizing Presets */}
+                      <div className="flex items-center gap-1">
+                        {[0.75, 0.9, 1.0, 1.1, 1.25, 1.5].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => onUpdateEquippedAccessory(acc.id, { scale: preset })}
+                            className={`flex-1 rounded py-0.5 font-mono text-[8.5px] transition ${
+                              Math.abs(s - preset) < 0.02
+                                ? 'bg-fuchsia-500 text-white font-bold'
+                                : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-zinc-200'
+                            }`}
+                          >
+                            {Math.round(preset * 100)}%
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Nudge Position */}
+                      <div className="flex items-center justify-between text-[9px] text-zinc-400 pt-0.5">
+                        <span>Nudge:</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const p: [number, number, number] = [...acc.position];
+                              p[1] = Math.round((p[1] + 0.01) * 100) / 100;
+                              onUpdateEquippedAccessory(acc.id, { position: p });
+                            }}
+                            className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300 hover:bg-white/10"
+                            title="Nudge Up 1cm"
+                          >
+                            ↑ Up
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const p: [number, number, number] = [...acc.position];
+                              p[1] = Math.round((p[1] - 0.01) * 100) / 100;
+                              onUpdateEquippedAccessory(acc.id, { position: p });
+                            }}
+                            className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300 hover:bg-white/10"
+                            title="Nudge Down 1cm"
+                          >
+                            ↓ Down
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const p: [number, number, number] = [...acc.position];
+                              p[2] = Math.round((p[2] + 0.01) * 100) / 100;
+                              onUpdateEquippedAccessory(acc.id, { position: p });
+                            }}
+                            className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300 hover:bg-white/10"
+                            title="Nudge Forward 1cm"
+                          >
+                            → Fwd
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const p: [number, number, number] = [...acc.position];
+                              p[2] = Math.round((p[2] - 0.01) * 100) / 100;
+                              onUpdateEquippedAccessory(acc.id, { position: p });
+                            }}
+                            className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300 hover:bg-white/10"
+                            title="Nudge Back 1cm"
+                          >
+                            ← Back
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div className="rounded-2xl border border-white/10 bg-[#0b0b14]/82 px-4 py-3 shadow-glass backdrop-blur-xl">
+            <div className="flex items-center gap-2">
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: persona.accentColor }}
+              />
+              <span className="font-display text-sm font-semibold tracking-tight text-white">
+                {persona.name}
+              </span>
+              <span className="text-xs text-zinc-400">{persona.japaneseName}</span>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-400">
+              <Sparkles className="h-3 w-3 text-violet-400" />
+              <span className="truncate max-w-[200px]">{activeSlot.name}</span>
+              <button
+                type="button"
+                onClick={onOpenWardrobe}
+                className="ml-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-violet-300 transition hover:bg-violet-500/20"
+              >
+                👗 Wardrobe
+              </button>
+            </div>
+            <div className="mt-1 truncate font-mono text-[10px] text-zinc-500 max-w-[310px]">
+              {envMeta.emoji} {envMeta.shortName} · {activeModelFileName}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom-Right: Camera Presets Bar */}
+      {!desktopRoamMode && (
+        <div className="absolute bottom-5 right-5 z-20 flex items-center gap-2">
+          <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-[#0b0b14]/82 p-1.5 shadow-glass backdrop-blur-xl">
+            <Camera className="mx-1.5 h-3.5 w-3.5 text-zinc-400" />
+            {(
+              [
+                ['portrait', 'Close-Up'],
+                ['bust', 'Upper Body'],
+                ['full', 'Full Body'],
+              ] as [CameraPreset, string][]
+            ).map(([preset, label]) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => applyCameraPreset(preset)}
+                className={`rounded-xl px-2.5 py-1 text-[11px] font-medium transition ${activePreset === preset
+                  ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-400/40'
+                  : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
+                  }`}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateYawOffset?.(0);
+                activeYawOffsetRef.current = 0;
+                if (avatarRootRef.current) {
+                  avatarRootRef.current.rotation.set(0, 0, 0);
+                }
+                if (avatarContainerRef.current) {
+                  avatarContainerRef.current.rotation.set(0, 0, 0);
+                }
+                applyCameraPreset('reset');
+              }}
+              title="Align character body and camera strictly to front (0°)"
+              className={`flex items-center gap-1 rounded-xl px-2 py-1 text-[11px] font-semibold transition ${
+                Math.abs(activeSlot.yawOffset ?? 0) > 0.04
+                  ? 'border border-cyan-400/40 bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/35'
+                  : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
+              }`}
+            >
+              <RotateCcw className="h-3 w-3 text-cyan-300" />
+              <span>Body: Front (0°)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSubtitles((s) => !s)}
+              title={showSubtitles ? 'Hide English subtitles' : 'Show English subtitles'}
+              className={`flex items-center gap-1 rounded-xl px-2.5 py-1 text-[11px] font-semibold transition ${
+                showSubtitles
+                  ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-400/40'
+                  : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
+              }`}
+            >
+              <span className="font-mono text-[10px] font-bold">CC</span>
+              <span>{showSubtitles ? 'Subs ON' : 'Subs OFF'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => applyCameraPreset('reset')}
+              title="Reset camera angle & align body facing front (0°)"
+              className="flex items-center gap-1 rounded-xl px-2 py-1 text-[11px] text-zinc-400 transition hover:bg-white/5 hover:text-white"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset View &amp; Facing
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Live Anime Subtitle Bar Overlay across lower-center of 3D Stage */}
+      {!desktopRoamMode && showSubtitles && liveSubtitle && (
+        <div className="absolute bottom-20 left-1/2 z-20 -translate-x-1/2 pointer-events-auto max-w-[85vw] sm:max-w-xl animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="rounded-2xl border border-white/15 bg-[#0b0b14]/88 px-4 py-2.5 shadow-2xl backdrop-blur-xl">
+            {/* Header: Persona name & [JA VOICE · EN SUBS] */}
+            <div className="mb-1 flex items-center justify-between gap-2 border-b border-white/[0.08] pb-1">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: persona.accentColor }}
+                />
+                <span className="font-display text-xs font-bold text-white">
+                  {persona.name}
+                </span>
+                <span className="text-[10px] text-zinc-400">
+                  {persona.japaneseName}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="rounded bg-violet-500/25 px-1.5 py-0.5 font-mono text-[9px] font-bold text-violet-300">
+                  🇯🇵 JA Voice · EN Sub
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowSubtitles(false)}
+                  className="rounded p-0.5 text-zinc-400 hover:bg-white/10 hover:text-white"
+                  title="Hide subtitles (click [CC] below to reopen)"
                 >
                   <X className="h-3 w-3" />
                 </button>
               </div>
-            )}
-
-            {/* Live Voice Tone Indicator Pill + Quick Speak (🔊) Button */}
-            <div className="flex w-fit items-center gap-1.5">
-              <button
-                type="button"
-                onClick={isSpeaking ? onStopSpeaking : onSpeakLatest}
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold shadow-glass backdrop-blur-xl transition hover:brightness-115 ${isSpeaking
-                  ? 'border-violet-400/60 bg-violet-600/35 text-violet-100'
-                  : 'border-white/15 bg-[#0b0b15]/85 text-zinc-200 hover:border-violet-400/45'
-                  }`}
-                title={
-                  isSpeaking
-                    ? 'Stop speaking'
-                    : `Speak latest reply (${liveVoiceTone.toneLabel} · ${liveVoiceTone.summaryDetail})`
-                }
-              >
-                {isSpeaking ? (
-                  <Square className="h-3 w-3 fill-current text-rose-300" />
-                ) : (
-                  <Volume2 className="h-3 w-3 text-violet-300" />
-                )}
-                <span>{isSpeaking ? 'Speaking' : 'Speak'}</span>
-              </button>
-
-              <div
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium shadow-glass backdrop-blur-xl ${liveVoiceTone.badgeClass}`}
-                title={`${liveVoiceTone.summaryDetail} — ${liveVoiceTone.stylePrompt}`}
-              >
-                <span>🎙️</span>
-                <span className="font-mono text-[10px] opacity-75">Tone:</span>
-                <span className="font-semibold">{liveVoiceTone.toneLabel}</span>
-                <span className="hidden xl:inline font-mono text-[9.5px] opacity-75">
-                  ({liveVoiceTone.summaryDetail})
-                </span>
-              </div>
             </div>
 
-            {musicState.isPlaying && (
-              <div className="flex w-fit items-center gap-2 rounded-full border border-pink-400/40 bg-pink-950/75 px-3 py-1 text-[11px] font-medium text-pink-100 backdrop-blur-md">
-                <Music className="h-3.5 w-3.5 animate-bounce text-pink-300" />
-                <span className="max-w-[160px] truncate">Karaoke Sync: {musicState.fileName}</span>
+            {/* Japanese spoken dialogue line */}
+            {liveSubtitle.japanese && (
+              <div className="text-[13px] font-medium leading-snug text-white font-sans drop-shadow-sm">
+                “{liveSubtitle.japanese}”
+              </div>
+            )}
+
+            {/* English translation subtitle line */}
+            {liveSubtitle.english && (
+              <div className="mt-1 flex items-start gap-1.5 rounded-lg bg-violet-950/40 px-2 py-1 text-[11.5px] leading-snug text-violet-100">
+                <span className="shrink-0 rounded bg-violet-500/35 px-1 font-mono text-[8.5px] font-bold text-violet-200 uppercase tracking-wide">
+                  EN
+                </span>
+                <span>{liveSubtitle.english}</span>
               </div>
             )}
           </div>
+        </div>
       )}
 
-          {/* Top-Right: Stage Controls (hidden in transparent Roam Mode) */}
-          {!desktopRoamMode && (
-            <div className="absolute right-4 top-5 z-20 flex max-w-[66%] flex-wrap items-center justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={onToggleAutoRoam}
-                className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${autoRoamEnabled
-                  ? 'border-emerald-400/50 bg-emerald-950/70 text-emerald-100'
-                  : 'border-white/15 bg-[#10101e]/85 text-zinc-400 hover:text-zinc-200'
-                  }`}
-                title={`Auto-Roam & Procedural Idle (${ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior})`}
-              >
-                <Footprints className={`h-3.5 w-3.5 ${autoRoamEnabled ? 'text-emerald-300' : ''}`} />
-                <span>Auto-Roam</span>
-              </button>
+      {/* Autonomous AI Care & Activities Floating Bar */}
+      {!desktopRoamMode && (
+        <CareActivityBar
+          persona={persona}
+          isSleeping={Boolean(persona.brain?.isSleeping)}
+          isGenerating={isGenerating}
+        />
+      )}
 
-              <button
-                type="button"
-                onClick={() => setOpenPanel((p) => (p === 'brain' ? 'none' : 'brain'))}
-                className={`relative flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'brain'
-                  ? 'border-violet-400/70 bg-violet-600/30 text-violet-100'
-                  : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-violet-400/50'
-                  }`}
-                title="AI Brain Inspector — Energy, Boredom, Curiosity & Inner Thoughts"
-              >
-                <Brain className="h-3.5 w-3.5 text-violet-300" />
-                <span>AI Brain</span>
-                {persona.brain && persona.brain.boredom > 70 && (
-                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setOpenPanel((p) => (p === 'emotes' ? 'none' : 'emotes'))}
-                className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'emotes'
-                  ? 'border-amber-400/60 bg-amber-500/25 text-amber-100'
-                  : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-amber-400/45'
-                  }`}
-                title="Skeletal Emotes & .VRMA Animation Player"
-              >
-                <span>✨</span>
-                <span>Emotes</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setOpenPanel((p) => (p === 'environments' ? 'none' : 'environments'))
-                }
-                className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'environments'
-                  ? 'border-indigo-400/60 bg-indigo-500/25 text-indigo-100'
-                  : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-indigo-400/45'
-                  }`}
-                title="Atmospheric 3D Stage Environments & Lighting Presets"
-              >
-                <span>🌌</span>
-                <span>Stage</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setOpenPanel((p) => (p === 'music' ? 'none' : 'music'))}
-                className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${openPanel === 'music' || musicState.isPlaying
-                  ? 'border-pink-400/60 bg-pink-500/25 text-pink-100'
-                  : 'border-white/15 bg-[#10101e]/85 text-zinc-200 hover:border-pink-400/45'
-                  }`}
-                title="Idol Stage Audio / Karaoke Music Sync Mode"
-              >
-                <span>🎵</span>
-                <span>Audio</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setEyeTrackingEnabled((v) => !v)}
-                className={`flex items-center gap-1 rounded-full border px-2 py-1.5 text-[11px] font-medium shadow-glass backdrop-blur-xl transition ${eyeTrackingEnabled
-                  ? 'border-cyan-400/45 bg-cyan-950/65 text-cyan-100'
-                  : 'border-white/15 bg-[#10101e]/80 text-zinc-400 hover:text-zinc-200'
-                  }`}
-                title="Toggle Cursor Eye-Tracking"
-              >
-                {eyeTrackingEnabled ? (
-                  <Eye className="h-3.5 w-3.5 text-cyan-300" />
-                ) : (
-                  <EyeOff className="h-3.5 w-3.5" />
-                )}
-                <span className="hidden 2xl:inline">Eye-Track</span>
-              </button>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".vrm,.glb"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    onImportModelFile(file);
-                    e.target.value = '';
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1 rounded-full border border-violet-400/40 bg-[#10101e]/85 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 shadow-glass backdrop-blur-xl transition hover:border-violet-300 hover:bg-violet-600/30"
-                title="Import Anime .VRM / .GLB"
-              >
-                <Upload className="h-3.5 w-3.5 text-violet-300" />
-                <span>.VRM</span>
-              </button>
-            </div>
-          )}
-
-          {/* Stage Popover 0: AI Brain Inspector (🧠) */}
-          {openPanel === 'brain' && (
-            <AiBrainPopover
-              persona={persona}
-              roamBehavior={roamBehavior}
-              autoRoamEnabled={autoRoamEnabled}
-              showThoughtHud={showThoughtHud}
-              isGenerating={isGenerating}
-              onToggleAutoRoam={onToggleAutoRoam}
-              onToggleThoughtHud={() => setShowThoughtHud((v) => !v)}
-              onTriggerBrainImpulse={onTriggerBrainImpulse}
-              onOpenMemoryJournal={onOpenMemoryJournal}
-              onClose={() => setOpenPanel('none')}
-            />
-          )}
-
-          {/* Stage Popover 1: Emotes & .VRMA Player (✨) */}
-          {openPanel === 'emotes' && (
-            <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-bold text-white">✨ Emotes &amp; .VRMA Player</div>
-                <button
-                  type="button"
-                  onClick={() => setOpenPanel('none')}
-                  className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-1.5">
-                {PROCEDURAL_EMOTES.map((em) => (
-                  <button
-                    key={em.id}
-                    type="button"
-                    onClick={() => triggerProceduralEmote(em.id)}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-xs text-zinc-100 transition hover:border-amber-400/50 hover:bg-amber-500/15"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span>{em.emoji}</span>
-                      <span className="font-medium">{em.label}</span>
-                    </span>
-                    <Play className="h-3 w-3 text-amber-300" />
-                  </button>
-                ))}
-              </div>
-
-              <div className="border-t border-white/[0.08] pt-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-                    Custom .VRMA Animations ({vaultVrmas.length})
-                  </span>
-                  {activeEmoteLabel && (
-                    <button
-                      type="button"
-                      onClick={stopActiveEmote}
-                      className="text-[10px] text-rose-300 hover:underline"
-                    >
-                      Stop
-                    </button>
-                  )}
-                </div>
-
-                {vaultVrmas.map((vrma) => (
-                  <div
-                    key={vrma.id}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-[#121220] px-2.5 py-1.5 text-[11px]"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void playSavedVrma(vrma.id)}
-                      className="flex flex-1 items-center gap-1.5 truncate text-left text-zinc-200 hover:text-amber-200"
-                    >
-                      <Play className="h-3 w-3 shrink-0 text-amber-300" />
-                      <span className="truncate">{vrma.name}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteVrma(vrma.id)}
-                      className="p-1 text-zinc-500 hover:text-rose-300"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-
-                <input
-                  ref={vrmaInputRef}
-                  type="file"
-                  accept=".vrma"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const meta = await onImportVrmaFile(file);
-                      if (meta) void playSavedVrma(meta.id);
-                      e.target.value = '';
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => vrmaInputRef.current?.click()}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-amber-400/40 bg-amber-950/20 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-950/35"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import .VRMA Dance / Pose
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Stage Popover 2: Atmospheric 3D Stage Environments (🌌) */}
-          {openPanel === 'environments' && (
-            <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-bold text-white">🌌 Stage Environments &amp; Lighting</div>
-                <button
-                  type="button"
-                  onClick={() => setOpenPanel('none')}
-                  className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <div className="space-y-1.5">
-                {(Object.keys(STAGE_ENVIRONMENTS) as StageEnvironmentId[]).map((id) => {
-                  const item = STAGE_ENVIRONMENTS[id];
-                  const active = persona.stageEnvironment === id && !persona.customEnvironment;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => {
-                        onClearCustomEnvironment();
-                        onSelectEnvironment(id);
-                      }}
-                      className={`w-full rounded-2xl border p-2.5 text-left transition ${active
-                        ? 'border-indigo-400/60 bg-indigo-500/20'
-                        : 'border-white/10 bg-white/[0.03] hover:border-white/25'
-                        }`}
-                    >
-                      <div className="flex items-center gap-2 text-xs font-semibold text-white">
-                        <span>{item.emoji}</span>
-                        <span>{item.name}</span>
-                      </div>
-                      <p className="mt-0.5 text-[10px] leading-snug text-zinc-400">
-                        {item.description}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="border-t border-white/[0.08] pt-3 space-y-2">
-                {persona.customEnvironment && (
-                  <div className="flex items-center justify-between rounded-xl border border-cyan-400/35 bg-cyan-950/30 px-2.5 py-1.5 text-[11px] text-cyan-100">
-                    <span className="truncate">Custom: {persona.customEnvironment.fileName}</span>
-                    <button
-                      type="button"
-                      onClick={onClearCustomEnvironment}
-                      className="text-[10px] text-rose-300 hover:underline"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                )}
-
-                <input
-                  ref={envInputRef}
-                  type="file"
-                  accept=".hdr,.png,.jpg,.jpeg,.webp,.glb"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      onUploadCustomEnvironment(file);
-                      e.target.value = '';
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => envInputRef.current?.click()}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-indigo-400/40 bg-indigo-950/20 py-2 text-xs font-semibold text-indigo-200 hover:bg-indigo-950/35"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Upload .HDR / .PNG Backdrop or .GLB Room
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Stage Popover 3: Idol Stage Audio / Karaoke Music Sync Mode (🎵) */}
-          {openPanel === 'music' && (
-            <div className="absolute right-5 top-16 z-30 w-80 rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 p-4 shadow-glass backdrop-blur-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-bold text-white">🎵 Idol Stage Audio &amp; Karaoke Sync</div>
-                <button
-                  type="button"
-                  onClick={() => setOpenPanel('none')}
-                  className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <p className="text-[11px] text-zinc-400">
-                Drop an <code className="text-pink-300">.mp3</code> / <code className="text-pink-300">.wav</code> track to drive rhythmic swaying, beat-synced head nods, vocal-band lip-sync &amp; bass spotlights.
-              </p>
-
-              {/* 12-Bar Audio Visualizer */}
-              <div className="flex h-12 items-end justify-between gap-1 rounded-2xl border border-white/10 bg-[#080810] px-3 py-2">
-                {musicBars.map((val, i) => (
-                  <div
-                    key={i}
-                    className="flex-1 rounded-t-sm bg-gradient-to-t from-violet-500 via-pink-500 to-cyan-300 transition-all duration-75"
-                    style={{ height: `${Math.max(10, Math.round(val * 100))}%` }}
-                  />
-                ))}
-              </div>
-
-              {musicState.fileName && (
-                <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs font-semibold text-pink-200">
-                      {musicState.fileName}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => musicSync.clearTrack()}
-                      className="text-zinc-500 hover:text-rose-300"
-                      title="Remove track"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void musicSync.togglePlay()}
-                      className="flex h-8 w-8 items-center justify-center rounded-xl bg-pink-600 text-white hover:bg-pink-500"
-                    >
-                      {musicState.isPlaying ? (
-                        <Pause className="h-3.5 w-3.5" />
-                      ) : (
-                        <Play className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => musicSync.stop()}
-                      className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:text-white"
-                    >
-                      <Square className="h-3 w-3" />
-                    </button>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.02}
-                      value={musicState.volume}
-                      onChange={(e) => musicSync.setVolume(Number(e.target.value))}
-                      aria-label="Music Volume"
-                      className="flex-1"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <input
-                ref={musicInputRef}
-                type="file"
-                accept=".mp3,.wav,.ogg,.m4a,audio/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    void musicSync.loadAndPlayFile(file);
-                    e.target.value = '';
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => musicInputRef.current?.click()}
-                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-pink-600 to-violet-600 py-2 text-xs font-semibold text-white shadow-glow hover:brightness-110"
-              >
-                <Music className="h-3.5 w-3.5" />
-                Load .MP3 / .WAV Music Track
-              </button>
-            </div>
-          )}
-
-          {/* Bottom-Left: Persona, Outfit & Active Stage Environment (hidden in transparent Roam Mode) */}
-          {!desktopRoamMode && (
-            <div className="absolute bottom-5 left-5 z-20 flex flex-col gap-2">
-              <div className="rounded-2xl border border-white/10 bg-[#0b0b14]/82 px-4 py-3 shadow-glass backdrop-blur-xl">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: persona.accentColor }}
-                  />
-                  <span className="font-display text-sm font-semibold tracking-tight text-white">
-                    {persona.name}
-                  </span>
-                  <span className="text-xs text-zinc-400">{persona.japaneseName}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-400">
-                  <Sparkles className="h-3 w-3 text-violet-400" />
-                  <span className="truncate max-w-[200px]">{activeSlot.name}</span>
-                  <button
-                    type="button"
-                    onClick={onOpenWardrobe}
-                    className="ml-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-violet-300 transition hover:bg-violet-500/20"
-                  >
-                    👗 Wardrobe
-                  </button>
-                </div>
-                <div className="mt-1 truncate font-mono text-[10px] text-zinc-500 max-w-[310px]">
-                  {envMeta.emoji} {envMeta.shortName} · {activeModelFileName}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Bottom-Right: Interactive Care & Activities Bar (☕) + Camera Presets Bar */}
-          {!desktopRoamMode && (
-            <CareActivityBar
-              isSleeping={Boolean(persona.brain?.isSleeping)}
-              isGenerating={isGenerating}
-              onTriggerCare={(activity) => {
-                if (activity === 'entertain_music') {
-                  setOpenPanel('music');
-                }
-                onCareActivity(activity);
-              }}
-            />
-          )}
-
-          {/* Bottom-Right: Posture Toggle (Sit / Stand / Bed) + Sleep Pose Sub-Selector + Camera Presets Bar */}
-          {!desktopRoamMode && (
-            <div className="absolute bottom-5 right-5 z-20 flex items-center gap-2">
-              {posture === 'sleeping' && (
-                <div
-                  className="flex items-center gap-0.5 rounded-2xl border border-indigo-400/30 bg-[#0c0c1a]/90 p-1 shadow-glass backdrop-blur-xl animate-fade-in"
-                  title="Switch sleeping position"
-                >
-                  <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300">
-                    Sleep:
-                  </span>
-                  {(
-                    [
-                      ['side_curled_right', '🌙 Curled'],
-                      ['back_relaxed', '🛌 On Back'],
-                      ['hugging_pillow', '🧸 Hug Pillow'],
-                      ['sprawled', '✨ Sprawl'],
-                      ['side_curled_left', '💤 Away'],
-                    ] as [SleepingPosition, string][]
-                  ).map(([posKey, label]) => (
-                    <button
-                      key={posKey}
-                      type="button"
-                      onClick={() => setSleepingPosition(posKey)}
-                      className={`rounded-xl px-2 py-1 text-[10.5px] font-semibold transition ${
-                        sleepingPosition === posKey
-                          ? 'bg-indigo-500/30 text-indigo-100 ring-1 ring-indigo-400/50 shadow-sm'
-                          : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div
-                className="flex items-center gap-0.5 rounded-2xl border border-white/10 bg-[#0b0b14]/82 p-1.5 shadow-glass backdrop-blur-xl"
-                title="Switch avatar posture between Seated (studio stool), Standing, and Sleeping Bed"
-              >
-                <button
-                  type="button"
-                  onClick={() => setPosture('seated')}
-                  className={`rounded-xl px-2.5 py-1 text-[11px] font-semibold transition ${
-                    posture === 'seated'
-                      ? 'bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/45'
-                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
-                  }`}
-                >
-                  🪑 Sit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPosture('standing')}
-                  className={`rounded-xl px-2.5 py-1 text-[11px] font-semibold transition ${
-                    posture === 'standing'
-                      ? 'bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/45'
-                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
-                  }`}
-                >
-                  🧍 Stand
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPosture('sleeping')}
-                  className={`rounded-xl px-2.5 py-1 text-[11px] font-semibold transition ${
-                    posture === 'sleeping'
-                      ? 'bg-indigo-500/25 text-indigo-200 ring-1 ring-indigo-400/45'
-                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
-                  }`}
-                >
-                  🛏️ Bed
-                </button>
-              </div>
-
-              <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-[#0b0b14]/82 p-1.5 shadow-glass backdrop-blur-xl">
-                <Camera className="mx-1.5 h-3.5 w-3.5 text-zinc-400" />
-                {(
-                  [
-                    ['portrait', 'Close-Up'],
-                    ['bust', 'Upper Body'],
-                    ['full', 'Full Body'],
-                  ] as [CameraPreset, string][]
-                ).map(([preset, label]) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => applyCameraPreset(preset)}
-                    className={`rounded-xl px-2.5 py-1 text-[11px] font-medium transition ${activePreset === preset
-                      ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-400/40'
-                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
-                      }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => applyCameraPreset('reset')}
-                  title="Reset camera angle"
-                  className="flex items-center gap-1 rounded-xl px-2 py-1 text-[11px] text-zinc-400 transition hover:bg-white/5 hover:text-white"
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  Reset
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Loading Overlay */}
-          {isLoadingModel && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#07070c]/65 backdrop-blur-sm">
-              <div className="h-10 w-10 animate-spin rounded-full border-2 border-violet-400 border-t-transparent" />
-              <p className="mt-3 font-display text-xs font-semibold text-zinc-100">{loadLabel}</p>
-            </div>
-          )}
-
-          {loadError && !isLoadingModel && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#07070c]/75 p-6 text-center backdrop-blur-sm">
-              <Upload className="h-9 w-9 text-rose-300" />
-              <p className="mt-3 font-display text-sm font-semibold text-white">
-                Could not fetch default Anime .VRM
-              </p>
-              <p className="mt-1 max-w-md text-xs text-zinc-400">{loadError}</p>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500"
-              >
-                Import Local .VRM / .GLB File
-              </button>
-            </div>
-          )}
-
-          {/* Prominent Multi-Format Drag & Drop Overlay */}
-          {isDraggingFile && (
-            <div className="pointer-events-none absolute inset-4 z-40 flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-violet-400/90 bg-violet-950/65 shadow-glow backdrop-blur-md">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-violet-300/40 bg-violet-500/25">
-                <Upload className="h-8 w-8 text-violet-200" />
-              </div>
-              <p className="mt-4 font-display text-lg font-bold text-white">
-                Drop .VRM / .GLB · .VRMA · .MP3/.WAV · .HDR/.PNG
-              </p>
-              <p className="mt-1 text-xs text-violet-200/85">
-                Auto-detects avatars, dance animations, karaoke tracks &amp; stage backdrops
-              </p>
-            </div>
-          )}
+      {/* Loading Overlay */}
+      {isLoadingModel && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#07070c]/65 backdrop-blur-sm">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-violet-400 border-t-transparent" />
+          <p className="mt-3 font-display text-xs font-semibold text-zinc-100">{loadLabel}</p>
         </div>
-      );
+      )}
+
+      {loadError && !isLoadingModel && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#07070c]/75 p-6 text-center backdrop-blur-sm">
+          <Upload className="h-9 w-9 text-rose-300" />
+          <p className="mt-3 font-display text-sm font-semibold text-white">
+            Could not fetch default Anime .VRM
+          </p>
+          <p className="mt-1 max-w-md text-xs text-zinc-400">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500"
+          >
+            Import Local .VRM / .GLB File
+          </button>
+        </div>
+      )}
+
+      {/* Prominent Multi-Format Drag & Drop Overlay */}
+      {isDraggingFile && (
+        <div className="pointer-events-none absolute inset-4 z-40 flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-violet-400/90 bg-violet-950/65 shadow-glow backdrop-blur-md">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-violet-300/40 bg-violet-500/25">
+            <Upload className="h-8 w-8 text-violet-200" />
+          </div>
+          <p className="mt-4 font-display text-lg font-bold text-white">
+            Drop .VRM / .GLB · .XWEAR · .VROIDCUSTOMITEM · .VRMA · .MP3
+          </p>
+          <p className="mt-1 text-xs text-violet-200/85">
+            Auto-detects avatars, dance animations, karaoke tracks &amp; stage backdrops
+          </p>
+        </div>
+      )}
+    </div>
+  );
 };

@@ -2,6 +2,8 @@ import type {
   InteractionZone,
   MoodType,
   Persona,
+  VocalArchetype,
+  VoiceGender,
   VoiceSettings,
 } from '../types/studio';
 import { MOOD_META, VOCAL_ARCHETYPES } from '../data/presets';
@@ -20,6 +22,7 @@ export interface VoiceModulationProfile {
     | 'cool_deadpan';
   toneLabel: string;
   badgeClass: string;
+  archetype: VocalArchetype;
   pitchMultiplier: number;
   rateMultiplier: number;
   effectivePitch: number;
@@ -31,6 +34,7 @@ export interface VoiceModulationProfile {
 export interface VoiceToneInput {
   personaName?: string;
   personaTitle?: string;
+  personaTraits?: string;
   mood: MoodType;
   emotionIntensity?: number; // 0.0 - 1.0
   voice: VoiceSettings;
@@ -42,6 +46,63 @@ export interface VoiceToneInput {
   nuancedFeeling?: string;
   empathySoftening?: boolean;
   recentInteractionZone?: InteractionZone | null;
+}
+
+export function resolveAiDrivenArchetype(input: {
+  baseArchetype?: VocalArchetype;
+  mood?: MoodType;
+  gender?: VoiceGender;
+  isSleeping?: boolean;
+  sleepiness?: number;
+  nuancedFeeling?: string;
+  traits?: string;
+  explicitTag?: VocalArchetype | null;
+}): VocalArchetype {
+  if (input.explicitTag && input.explicitTag in VOCAL_ARCHETYPES) {
+    return input.explicitTag;
+  }
+
+  const feeling = (input.nuancedFeeling || '').toLowerCase();
+  const traits = (input.traits || '').toLowerCase();
+
+  // 1. Sleeping or deeply exhausted -> Deadpan & Sleepy
+  if (
+    input.isSleeping ||
+    (input.sleepiness ?? 0) > 65 ||
+    /(sleepy|tired|drowsy|dozing|exhausted|yawning)/i.test(feeling)
+  ) {
+    return 'deadpan_sleepy';
+  }
+
+  // 2. Male or explicitly guarded/kuudere -> Cool Guarded Tsundere
+  if (
+    input.gender === 'male' ||
+    traits.includes('cool guarded') ||
+    traits.includes('kuudere') ||
+    feeling.includes('guarded')
+  ) {
+    return 'cool_guarded_tsundere';
+  }
+
+  // 3. Theatrical / Diva / Proud / Dramatic / Mischievous -> Theatrical Gothic Diva
+  if (
+    input.mood === 'Proud' ||
+    input.mood === 'Amused' ||
+    traits.includes('diva') ||
+    traits.includes('gothic') ||
+    traits.includes('theatrical') ||
+    /(dramatic|theatrical|haughty|diva|teasing|smug)/i.test(feeling)
+  ) {
+    return 'gothic_diva';
+  }
+
+  // 4. Deadpan / Low-energy -> Deadpan & Sleepy
+  if (input.mood === 'Deadpan' && !traits.includes('sharp')) {
+    return 'deadpan_sleepy';
+  }
+
+  // 5. Classic sharp / snappy / flustered tsundere
+  return 'sharp_tsundere';
 }
 
 const INTERACTION_CONTEXT_NOTE: Record<InteractionZone, string> = {
@@ -73,7 +134,16 @@ export function computeVoiceModulation(input: VoiceToneInput): VoiceModulationPr
 
   const k = Math.max(0.15, Math.min(1.0, emotionIntensity));
   const intensityScale = 0.45 + 0.55 * k;
-  const archetype = VOCAL_ARCHETYPES[voice.archetype];
+  const resolvedArchetypeKey = resolveAiDrivenArchetype({
+    baseArchetype: voice.archetype,
+    mood,
+    gender: voice.gender,
+    isSleeping,
+    sleepiness,
+    nuancedFeeling,
+    traits: input.personaTraits,
+  });
+  const archetype = VOCAL_ARCHETYPES[resolvedArchetypeKey] || VOCAL_ARCHETYPES.sharp_tsundere;
   const circadian = getCircadianContext();
   const feelingLower = nuancedFeeling.toLowerCase();
 
@@ -208,13 +278,12 @@ export function computeVoiceModulation(input: VoiceToneInput): VoiceModulationPr
     Math.min(1.32, Number((baseSpeed * rateMultiplier).toFixed(2)))
   );
 
-  const langLabel = voice.language === 'ja' ? 'Japanese (ja-JP)' : 'English';
   const moodDir = MOOD_META[mood]?.tsundereVocalDirection || '';
   const feelingClause = nuancedFeeling ? ` Nuanced feeling: ${nuancedFeeling}.` : '';
 
-  const stylePrompt = `Speak in ${langLabel} as ${personaName} (${archetype.label}). ${archetype.stylePrompt} ${dynamicDirection} ${moodDir}${feelingClause} Emotional intensity: ${Math.round(
+  const stylePrompt = `Speak ONLY in authentic anime Japanese (ja-JP) as ${personaName} (${archetype.label}). ${archetype.stylePrompt} ${dynamicDirection} ${moodDir}${feelingClause} Emotional intensity: ${Math.round(
     k * 100
-  )}%.`;
+  )}%. Do not speak English.`;
 
   const pitchPct = Math.round((pitchMultiplier - 1) * 100);
   const pitchStr = pitchPct >= 0 ? `+${pitchPct}%` : `${pitchPct}%`;
@@ -224,6 +293,7 @@ export function computeVoiceModulation(input: VoiceToneInput): VoiceModulationPr
     toneId,
     toneLabel,
     badgeClass,
+    archetype: resolvedArchetypeKey,
     pitchMultiplier,
     rateMultiplier,
     effectivePitch,

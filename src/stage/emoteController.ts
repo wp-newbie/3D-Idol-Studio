@@ -52,6 +52,48 @@ export const PROCEDURAL_EMOTES: ProceduralEmoteMeta[] = [
     emoji: '🙇‍♀️',
     duration: 3.0,
   },
+  {
+    id: 'thinking_chin',
+    label: 'Thinking / Chin Rest',
+    shortLabel: 'Thinking',
+    emoji: '🤔',
+    duration: 3.5,
+  },
+  {
+    id: 'cat_paws',
+    label: 'Cute Cat Paws',
+    shortLabel: 'Cat Paws',
+    emoji: '🐾',
+    duration: 3.4,
+  },
+  {
+    id: 'arms_behind_back',
+    label: 'Arms Behind Back / Playful',
+    shortLabel: 'Behind Back',
+    emoji: '✨',
+    duration: 3.5,
+  },
+  {
+    id: 'lean_forward',
+    label: 'Curious Lean Forward',
+    shortLabel: 'Lean In',
+    emoji: '👀',
+    duration: 3.2,
+  },
+  {
+    id: 'pout_turn',
+    label: 'Pout & Look Away',
+    shortLabel: 'Pout Turn',
+    emoji: '😤',
+    duration: 3.2,
+  },
+  {
+    id: 'hands_on_hips',
+    label: 'Proud Hands on Hips',
+    shortLabel: 'On Hips',
+    emoji: '💁‍♀️',
+    duration: 3.4,
+  },
 ];
 
 export interface ActiveProceduralEmote {
@@ -202,6 +244,106 @@ export function applyProceduralEmote(
     if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 1.24, w);
     setExpr(['relaxed'], (isSpeaking ? 0.45 : 0.28) * w);
     setExpr(['blink'], 0.85 * w);
+  } else if (emote.id === 'thinking_chin') {
+    if (rUpper) {
+      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.42, w);
+      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.68, w);
+    }
+    if (rLower) {
+      rLower.rotation.y = lerp(rLower.rotation.y, -1.25, w);
+      rLower.rotation.z = lerp(rLower.rotation.z, armSign * 0.62, w);
+    }
+    if (lUpper) {
+      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.72, w);
+      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.15, w);
+    }
+    if (head) {
+      head.rotation.z = lerp(head.rotation.z, -0.16, w);
+      head.rotation.x = lerp(head.rotation.x, 0.08, w);
+      head.rotation.y = lerp(head.rotation.y, 0.12, w);
+    }
+    setExpr(['relaxed', 'surprised'], (isSpeaking ? 0.4 : 0.22) * w);
+  } else if (emote.id === 'cat_paws') {
+    const pawBounce = Math.sin(age * 6.5) * 0.08;
+    if (lUpper) {
+      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.35, w);
+      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.58 + pawBounce, w);
+    }
+    if (rUpper) {
+      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.35, w);
+      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.58 - pawBounce, w);
+    }
+    if (lLower) {
+      lLower.rotation.y = lerp(lLower.rotation.y, 1.15, w);
+      lLower.rotation.z = lerp(lLower.rotation.z, armSign * 0.42, w);
+    }
+    if (rLower) {
+      rLower.rotation.y = lerp(rLower.rotation.y, -1.15, w);
+      rLower.rotation.z = lerp(rLower.rotation.z, -armSign * 0.42, w);
+    }
+    if (head) {
+      head.rotation.z = lerp(head.rotation.z, 0.14, w);
+      head.rotation.y = lerp(head.rotation.y, 0.06, w);
+    }
+    setExpr(['happy', 'joy'], (isSpeaking ? 0.7 : 0.45) * w);
+  } else if (emote.id === 'arms_behind_back') {
+    if (lUpper) {
+      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 1.12, w);
+      lUpper.rotation.x = lerp(lUpper.rotation.x, 0.32, w);
+    }
+    if (rUpper) {
+      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 1.12, w);
+      rUpper.rotation.x = lerp(rUpper.rotation.x, 0.32, w);
+    }
+    if (lLower) lLower.rotation.y = lerp(lLower.rotation.y, 0.85, w);
+    if (rLower) rLower.rotation.y = lerp(rLower.rotation.y, -0.85, w);
+    if (spine) spine.rotation.x = lerp(spine.rotation.x, 0.12, w);
+    if (head) {
+      head.rotation.x = lerp(head.rotation.x, -0.08, w);
+      head.rotation.z = lerp(head.rotation.z, 0.09, w);
+    }
+    setExpr(['happy'], (isSpeaking ? 0.5 : 0.3) * w);
+  } else if (emote.id === 'lean_forward') {
+    if (spine) spine.rotation.x = lerp(spine.rotation.x, 0.22, w);
+    if (chest) chest.rotation.x = lerp(chest.rotation.x, 0.14, w);
+    if (head) {
+      head.rotation.x = lerp(head.rotation.x, -0.16, w);
+      head.rotation.y = lerp(head.rotation.y, 0.04, w);
+    }
+    if (lUpper) lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.95, w);
+    if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.95, w);
+    setExpr(['surprised'], (isSpeaking ? 0.35 : 0.25) * w);
+  } else if (emote.id === 'pout_turn') {
+    if (neck) neck.rotation.y = lerp(neck.rotation.y, 0.32, w);
+    if (head) {
+      head.rotation.y = lerp(head.rotation.y, 0.22, w);
+      head.rotation.x = lerp(head.rotation.x, -0.06, w);
+    }
+    if (lUpper) lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.72, w);
+    if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.72, w);
+    setExpr(['angry'], (isSpeaking ? 0.65 : 0.45) * w);
+  } else if (emote.id === 'hands_on_hips') {
+    if (lUpper) {
+      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.75, w);
+      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.22, w);
+    }
+    if (rUpper) {
+      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.75, w);
+      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.22, w);
+    }
+    if (lLower) {
+      lLower.rotation.y = lerp(lLower.rotation.y, 1.25, w);
+      lLower.rotation.z = lerp(lLower.rotation.z, -armSign * 0.25, w);
+    }
+    if (rLower) {
+      rLower.rotation.y = lerp(rLower.rotation.y, -1.25, w);
+      rLower.rotation.z = lerp(rLower.rotation.z, armSign * 0.25, w);
+    }
+    if (head) {
+      head.rotation.x = lerp(head.rotation.x, -0.06, w);
+      head.rotation.y = lerp(head.rotation.y, -0.08, w);
+    }
+    setExpr(['happy'], (isSpeaking ? 0.55 : 0.35) * w);
   }
 
   return true;

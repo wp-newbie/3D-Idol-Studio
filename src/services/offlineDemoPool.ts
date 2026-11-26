@@ -548,7 +548,7 @@ export function pickContextualOfflineReply(persona: Persona, userPrompt: string)
       },
     ];
     const line = pickNonRepeating(persona.id, wardrobeLines);
-    return isJa ? line.ja : line.en;
+    return line.ja;
   }
 
   // 2. High-affection special dere replies when tier is Devoted Idol (81–100)
@@ -566,7 +566,7 @@ export function pickContextualOfflineReply(persona: Persona, userPrompt: string)
       },
     ];
     const line = pickNonRepeating(persona.id, devotedLines);
-    return isJa ? line.ja : line.en;
+    return line.ja;
   }
 
   // 3. Persona-specific intent-matched non-repeating pool
@@ -584,5 +584,58 @@ export function pickContextualOfflineReply(persona: Persona, userPrompt: string)
     persona.id,
     bucketLines.length >= 2 ? bucketLines : fallbackCombined
   );
-  return isJa ? chosen.ja : chosen.en;
+  let text = chosen.ja;
+
+  if (!text.includes('[POSE:') && !text.includes('[EMOTE:')) {
+    const moodMatch = /\[MOOD\s*:\s*([A-Za-z]+)\s*\]/i.exec(text);
+    const m = moodMatch ? moodMatch[1] : persona.mood;
+    let pose = 'thinking_chin';
+    let gaze = 'camera';
+    let expr = 'relaxed';
+    switch (m) {
+      case 'Flustered':
+        pose = 'shy_fidget';
+        gaze = 'look_away';
+        expr = 'blush_high';
+        break;
+      case 'Annoyed':
+        pose = 'crossed_arms';
+        gaze = 'look_away';
+        expr = 'pout';
+        break;
+      case 'Shy':
+        pose = 'arms_behind_back';
+        gaze = 'shy_down';
+        expr = 'blush_high';
+        break;
+      case 'Amused':
+        pose = 'cat_paws';
+        gaze = 'camera';
+        expr = 'smug_smirk';
+        break;
+      case 'Warm':
+        pose = 'lean_forward';
+        gaze = 'camera';
+        expr = 'happy';
+        break;
+      case 'Proud':
+        pose = 'hands_on_hips';
+        gaze = 'camera';
+        expr = 'smug_smirk';
+        break;
+      case 'Pouty':
+        pose = 'pout_turn';
+        gaze = 'look_away';
+        expr = 'pout';
+        break;
+      default:
+        pose = 'thinking_chin';
+        gaze = 'camera';
+        expr = 'relaxed';
+        break;
+    }
+    text = `${text} [POSE: ${pose}] [GAZE: ${gaze}] [EXPRESSION: ${expr}]`;
+  }
+
+  return text;
 }

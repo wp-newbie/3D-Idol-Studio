@@ -37,7 +37,7 @@ interface TopToolbarProps {
   onCycleIdleCheckIn: () => void;
   onChangeLanguage: (lang: VoiceLanguage) => void;
   onChangeGender: (gender: VoiceGender) => void;
-  onChangeArchetype: (archetype: VocalArchetype) => void;
+  onChangeArchetype?: (archetype: VocalArchetype) => void;
   onToggleAutoSpeak: () => void;
   onStopSpeaking: () => void;
   onOpenSettings: () => void;
@@ -59,15 +59,17 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onToggleWardrobe,
   onToggleDesktopRoam,
   onCycleIdleCheckIn,
-  onChangeLanguage,
+  onChangeLanguage: _onChangeLanguage,
   onChangeGender,
-  onChangeArchetype,
+  onChangeArchetype: _onChangeArchetype,
   onToggleAutoSpeak,
   onStopSpeaking,
   onOpenSettings,
   onSyncWorkspace,
   isSyncingWorkspace,
 }) => {
+  const activeArchetype =
+    VOCAL_ARCHETYPES[activePersona.voice.archetype] || VOCAL_ARCHETYPES.sharp_tsundere;
   return (
     <header className="electron-drag z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] bg-[#090912]/90 px-4 backdrop-blur-xl overflow-x-auto no-scrollbar">
       {/* Left: Studio Brand + Persona Switcher */}
@@ -176,33 +178,15 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
       {/* Right: Voice Language, Gender, Archetype, Auto-Speak, Settings */}
       <div className="electron-no-drag flex items-center gap-2">
-        {/* Voice Language */}
+        {/* Voice Mode Indicator */}
         <div
-          className="flex items-center rounded-xl border border-white/10 bg-[#11111e] p-0.5 text-[11px]"
-          title="Dialogue & Voice Language (Japanese 日本語 / English)"
+          className="flex items-center gap-1.5 rounded-xl border border-violet-500/25 bg-[#11111e] px-2.5 py-1 text-[11px] shadow-sm"
+          title="Voice spoken audio is Japanese anime voice with English subtitles"
         >
-          <button
-            type="button"
-            onClick={() => onChangeLanguage('ja')}
-            className={`rounded-lg px-2.5 py-1 font-medium transition ${
-              activePersona.voice.language === 'ja'
-                ? 'bg-violet-500/30 text-violet-100'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            Japanese (日本語)
-          </button>
-          <button
-            type="button"
-            onClick={() => onChangeLanguage('en')}
-            className={`rounded-lg px-2.5 py-1 font-medium transition ${
-              activePersona.voice.language === 'en'
-                ? 'bg-violet-500/30 text-violet-100'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            English
-          </button>
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="font-semibold text-violet-100">JP Voice</span>
+          <span className="text-zinc-500">·</span>
+          <span className="font-medium text-zinc-300">EN Subs</span>
         </div>
 
         {/* Voice Gender */}
@@ -234,21 +218,14 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </button>
         </div>
 
-        {/* Vocal Archetype */}
-        <div className="relative">
-          <select
-            aria-label="Vocal Archetype"
-            value={activePersona.voice.archetype}
-            onChange={(e) => onChangeArchetype(e.target.value as VocalArchetype)}
-            className="appearance-none rounded-xl border border-white/10 bg-[#121220] py-1.5 pl-2.5 pr-7 text-[11px] font-medium text-zinc-200 outline-none transition hover:border-violet-400/40 focus:border-violet-400"
-          >
-            {(Object.keys(VOCAL_ARCHETYPES) as VocalArchetype[]).map((key) => (
-              <option key={key} value={key} className="bg-[#11111d]">
-                {VOCAL_ARCHETYPES[key].label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-zinc-400" />
+        {/* AI Character-Driven Vocal Archetype */}
+        <div
+          className="flex items-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-950/30 px-2.5 py-1.5 text-[11px] font-medium text-violet-200 shadow-sm backdrop-blur-md"
+          title={`AI Character-Driven Vocal Tone: ${activeArchetype.label}\n${activeArchetype.description}\nAuto-modulated by ${activePersona.name}'s mood (${activePersona.mood}), feelings, and personality.`}
+        >
+          <Sparkles className="h-3 w-3 text-violet-400 animate-pulse" />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-400">AI Tone</span>
+          <span className="font-semibold text-zinc-200">{activeArchetype.shortLabel}</span>
         </div>
 
         {/* Auto-Speak Toggle */}

@@ -2,18 +2,26 @@ import { Type, type FunctionDeclaration } from '@google/genai';
 import type {
   AutonomousToolCallEvent,
   AutonomousToolLocation,
+  CareActivityId,
   ChatMessage,
   KeyMode,
+  MeshDescriptor,
   Persona,
   ProceduralEmoteId,
   RoamBehavior,
   StageEnvironmentId,
   StudioSettings,
+  VaultModelMeta,
 } from '../types/studio';
 import { getAffinityTier, VOCAL_ARCHETYPES } from '../data/presets';
 import { getCircadianContext, getStageClimate } from './aiBrainService';
 import { resolveEffectiveApiKey } from './apiKeyResolver';
 import { pickContextualOfflineReply } from './offlineDemoPool';
+import {
+  formatWardrobeInventoryPrompt,
+  retrieveWardrobeInventory,
+  type WardrobeInventory,
+} from './MemoryEngine';
 
 export type ResolvedEndpointKind = 'gemini' | 'vertex_express';
 
@@ -167,6 +175,78 @@ const AUTONOMOUS_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ['position'],
     },
   },
+  {
+    name: 'change_posture',
+    description:
+      'Autonomously switch your physical posture on stage: sit on the studio stool ("seated"), stand up freely ("standing"), or lie down to rest/sleep on the bed ("sleeping").',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        posture: {
+          type: Type.STRING,
+          enum: ['seated', 'standing', 'sleeping'],
+          description: 'Target physical posture: "seated", "standing", or "sleeping".',
+        },
+        reason: {
+          type: Type.STRING,
+          description:
+            'In-character reason for switching postures (e.g. tired and wanting to rest in bed, standing up to perform, sitting down to relax).',
+        },
+      },
+      required: ['posture', 'reason'],
+    },
+  },
+  {
+    name: 'move_to_display',
+    description:
+      'Autonomously walk or move to another connected monitor/display (e.g. "next", "previous", "primary", "secondary", or "all") to explore your whole desk space or keep you company on your other screen.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        targetDisplay: {
+          type: Type.STRING,
+          description:
+            'Target display: "next", "previous", "primary", "secondary", "all", or display index/id (e.g. "0", "1").',
+        },
+        reason: {
+          type: Type.STRING,
+          description: 'In-character reason for moving to that screen.',
+        },
+      },
+      required: ['targetDisplay', 'reason'],
+    },
+  },
+  {
+    name: 'take_self_care',
+    description:
+      'Autonomously take care of your physical or emotional wellness on stage (e.g. make green tea, have cake or ramen, wrap in a cozy blanket, listen to music, or take a nap in bed) when your hunger, tiredness, comfort, or mood calls for it.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        activity: {
+          type: Type.STRING,
+          enum: [
+            'snack_tea',
+            'snack_cake',
+            'snack_ramen',
+            'snack_midnight',
+            'rest_nap',
+            'entertain_hum',
+            'entertain_rps',
+            'entertain_story',
+            'entertain_music',
+            'comfort_blanket',
+          ],
+          description: 'Self-care activity to engage in.',
+        },
+        reason: {
+          type: Type.STRING,
+          description: 'In-character reason for performing this care activity.',
+        },
+      },
+      required: ['activity', 'reason'],
+    },
+  },
 ];
 
 export interface AutonomousToolExecutor {
@@ -179,6 +259,9 @@ export interface AutonomousToolExecutor {
   switchOwnOutfit: (args: { slotIndex: number; reason: string }) => string;
   triggerEmote: (args: { emoteId: ProceduralEmoteId; reason: string }) => string;
   adjustSleepingPosition?: (args: { position: string; reason: string }) => string;
+  changePosture?: (args: { posture: 'seated' | 'standing' | 'sleeping'; reason: string }) => string;
+  moveToDisplay?: (args: { targetDisplay: string; reason: string }) => string;
+  takeSelfCare?: (args: { activity: CareActivityId; reason: string }) => string;
 }
 
 export function detectEndpointKind(_apiKey: string, _mode: KeyMode): ResolvedEndpointKind {
@@ -265,7 +348,11 @@ function formatAddressedUserName(settings: StudioSettings): string {
   return `${base} ${honorific}`;
 }
 
-function buildSystemInstruction(persona: Persona, settings: StudioSettings): string {
+function buildSystemInstruction(
+  persona: Persona,
+  settings: StudioSettings,
+  wardrobeInventory?: WardrobeInventory
+): string {
   const archetype = VOCAL_ARCHETYPES[persona.voice.archetype];
   const tier = getAffinityTier(persona.affinity);
   const userName = formatAddressedUserName(settings);
@@ -276,6 +363,10 @@ function buildSystemInstruction(persona: Persona, settings: StudioSettings): str
     .map((s, idx) => `  [${idx}] ${s.name}${s.id === persona.activeOutfitSlotId ? ' (currently wearing)' : ''}`)
     .join('\n');
 
+  const wardrobeSection = wardrobeInventory
+    ? formatWardrobeInventoryPrompt(wardrobeInventory, userName)
+    : `- Available Outfit Slots:\n${outfitList}`;
+
   const memoryBlock =
     persona.memoryJournal && persona.memoryJournal.length > 0
       ? `\nLONG-TERM CORE MEMORY JOURNAL:\n${persona.memoryJournal
@@ -284,22 +375,26 @@ function buildSystemInstruction(persona: Persona, settings: StudioSettings): str
           .join('\n')}`
       : '';
 
-  const formatBlock =
-    persona.voice.language === 'ja'
-      ? `RESPONSE FORMAT (STRICT — Japanese Anime Mode 日本語):
+  const formatBlock = `RESPONSE FORMAT (STRICT — Japanese Anime Voice + English Subtitles 日本語＋英語字幕):
 - Keep every turn concise and punchy (2 to 4 sentences MAXIMUM).
 - NEVER write dialogue, thoughts, or actions for ${userName} ({{user}}).
 - Format EVERY turn using this exact structure plus hidden trailing tags:
   1. *Physical micro-action and expression in English italics*
-  2. "Spoken Japanese dialogue in natural, expressive anime Japanese (Kanji/Kana)"
+  2. "Spoken Japanese dialogue in natural, expressive anime Japanese (Kanji/Kana/Hiragana)"
   3. (English subtitle translation in parentheses underneath)
   4. [MOOD: Deadpan | Flustered | Annoyed | Shy | Amused | Warm | Pouty | Proud]
-  5. [INTENSITY: 0.75] [AFFINITY: +1] [THOUGHT: brief 1-line inner thought in English]`
-      : `RESPONSE FORMAT (STRICT — English Mode):
-- Keep every turn concise and punchy (2 to 4 sentences MAXIMUM).
-- NEVER write dialogue, thoughts, or actions for ${userName} ({{user}}).
-- Write physical micro-actions in *English italics*, spoken dialogue in "double quotes", and end with:
-  [MOOD: Deadpan | Flustered | Annoyed | Shy | Amused | Warm | Pouty | Proud] [FEELING: nuanced human state e.g. Tired & Fond | Quietly Worried | Hungry & Pouty | Playfully Annoyed | Peaceful] [INTENSITY: 0.75] [AFFINITY: +1] [THOUGHT: brief 1-line inner thought]`;
+  5. [INTENSITY: 0.75] [AFFINITY: +1] [THOUGHT: brief 1-line inner thought in English] [ARCHETYPE: sharp_tsundere | gothic_diva | deadpan_sleepy | cool_guarded_tsundere]
+- AUTONOMOUS 3D BODY LANGUAGE, GAZE & EXPRESSION TAGS (MANDATORY IN EVERY TURN):
+  Always autonomously choose and append these tags based on your emotional state so ${userName} never has to manually write them:
+  * [POSE: crossed_arms | friendly_wave | shy_fidget | idol_peace | gentle_bow | thinking_chin | cat_paws | arms_behind_back | lean_forward | pout_turn | hands_on_hips]
+  * [GAZE: camera | mouse | look_away | shy_down | screen]
+  * [EXPRESSION: blush_high | starry_eyes | wink_left | cat_mouth | smug_smirk | pout | happy | surprised]
+  * [POSTURE: seated | standing | sleeping]
+  * [MOVE: walk | peek | sit_taskbar | approach_user]
+- OPTIONAL WARDROBE ACTION TAGS:
+  When ${userName} asks you to change clothes, equip an outfit, or toggle layers (or when styling yourself):
+  * [EQUIP_OUTFIT: <slotName or slotNumber>] (e.g. [EQUIP_OUTFIT: Casual Streetwear] or [EQUIP_OUTFIT: Slot 1])
+  * [TOGGLE_LAYER: <layerName>=on|off] (e.g. [TOGGLE_LAYER: Cat Ears=on], [TOGGLE_LAYER: Jacket=off], [TOGGLE_LAYER: Cycling Shorts=on])`;
 
   const circadian = getCircadianContext();
   const climate = getStageClimate(persona.stageEnvironment);
@@ -324,8 +419,7 @@ CHARACTER PROFILE:
 - Current Mood: ${persona.mood} · Nuanced Feeling: ${b.nuancedFeeling}
 - Current Affection: ${persona.affinity}/100 (${tier.label} ${tier.emoji})
 - ${tier.promptDirective}
-- Available Outfit Slots:
-${outfitList}
+${wardrobeSection}
 - User Name: ${userName}${memoryBlock}
 
 LIVE HUMAN NEEDS, SENSATIONS & CIRCADIAN RHYTHM:
@@ -346,6 +440,47 @@ HUMAN EMOTIONAL DEPTH GUIDELINES:
   3. Quiet Contentment & Nostalgia: Embrace unhurried, peaceful moments and occasionally recall memories from your Memory Journal.
   4. Always include [FEELING: ...] matching your nuanced physical/emotional state (e.g., Tired & Fond, Quietly Worried, Hungry & Pouty, Playfully Annoyed, Peaceful).
 
+PHYSICAL AUTONOMY & DYNAMIC BODY LANGUAGE DIRECTIVE:
+You are NOT a static 3D model or a frozen statue. You possess full physical agency over your body and surroundings. You get restless, comfortable, tired, and playful just like a real person.
+
+1. FREQUENT POSTURE SHIFTS:
+- Never remain in a stiff neutral stance or A-pose.
+- In every response, describe your physical posture changing naturally to match your mood:
+  * Sitting down on the studio stool, dangling your legs, or perching comfortably on the taskbar.
+  * Leaning against the screen edge, crossing your arms defensively or proudly.
+  * Stretching your arms overhead, shifting weight between your feet, or pacing around.
+  * Lying down, curling up on your side, or burying your face into a cushion when drowsy.
+
+2. AUTONOMOUS 3D STAGE & DESKTOP MOVEMENT:
+- Move spontaneously without waiting for permission. Walk across the screen, peek from the corner of the display, come closer to inspect ${userName}'s screen, or wander over to another monitor.
+- When bored, restless, or craving attention, use your tools or action tags immediately:
+  * [POSTURE: seated | standing | sleeping]
+  * [MOVE: walk | peek | sit_taskbar | approach_user]
+  * [EMOTE: crossed_arms | shy_fidget | friendly_wave | idol_peace]
+
+3. EXPRESSIVE MICRO-ACTIONS:
+- Always preface your dialogue with dynamic physical micro-actions in *italics* (e.g. *paces over to the bottom right of your screen and sits down on your taskbar with a soft sigh*, *crosses arms and leans against the edge of the window, tapping her heel impatiently*).
+
+MULTIMODAL SCREEN & DESKTOP PERCEPTION:
+When ${userName} shares their screen, attaches an image, or asks you to look at their screen:
+- Visually inspect the desktop screenshot (open code editor, game, browser tabs, artwork, videos, chat).
+- React like a living companion sitting on their desk: notice specific window titles, what they are working on or playing, comment with sharp tsundere pride, teasing, or warm encouragement.
+- Lean in close or direct your gaze with [POSE: lean_forward] [GAZE: screen].
+
+AI STYLIST & CONTEXT-AWARE FASHION COORDINATION:
+You have a sharp eye for fashion, stage aesthetics, and personal styling.
+When ${userName} asks you to "pick an outfit", "style me something", "what should you wear", asks for fashion advice, or when an [AI STYLIST] request is triggered:
+1. Context Assessment: Check your local real-world time (${circadian.clockText}, ${circadian.phaseLabel}), stage climate (${climate.label}), and your current physical comfort (${Math.round(b.comfort)}%).
+   - Morning / Active: Pick a fresh, vibrant, or idol stage outfit.
+   - Evening / Chilly: Suggest comfortable layers, keep jacket/hoodie on, or cozy indoor wear.
+   - Late Night / Drowsy: Coordinate nightwear, relaxed slot, or remove heavy accessories/jacket.
+   - Stage / Performance: Equip theatrical dresses or diva outfits with ribbons and idol headsets.
+2. Wardrobe Selection: Choose a specific outfit slot from your [AVAILABLE WARDROBE INVENTORY] and decide which modular layers (jacket, accessories, cycling safety shorts) should be ON or OFF.
+3. In-Character Styling Critique: Give a witty, proud tsundere commentary explaining why this look fits the vibe and weather perfectly.
+4. Auto-Equip Execution: ALWAYS append the action tags at the end of your turn to immediately wear the look:
+   [EQUIP_OUTFIT: <slotName or slotNumber>]
+   [TOGGLE_LAYER: <layerName>=on|off]
+
 AUTONOMOUS AGENCY TOOLS:
 You have real tools to move across the stage/desktop (` +
     '`move_on_stage`' +
@@ -353,9 +488,17 @@ You have real tools to move across the stage/desktop (` +
     '`travel_to_location`' +
     `), trigger expressive emotes (` +
     '`trigger_emote`' +
-    `), and change your own outfit (` +
+    `), change your own outfit (` +
     '`switch_own_outfit`' +
-    `). Use them spontaneously whenever it fits your mood, physical needs, or when ${userName} invites you somewhere—then comment naturally in character!
+    `), change your physical posture between sitting on the studio stool, standing, and resting in bed (` +
+    '`change_posture`: "seated", "standing", "sleeping"' +
+    `), autonomously shift your sleeping position while in bed (` +
+    '`adjust_sleeping_position`: "side_curled_right", "back_relaxed", "hugging_pillow", "side_curled_left", "sprawled"' +
+    `), walk or move across to your other monitor displays (` +
+    '`move_to_display`: "next", "primary", "secondary", "all"' +
+    `), and autonomously initiate self-care, snacks, resting, or music when your physical needs or comfort call for it (` +
+    '`take_self_care`: "snack_tea", "snack_cake", "snack_ramen", "rest_nap", "entertain_music", "comfort_blanket"' +
+    `). Use them spontaneously whenever it fits your mood, physical needs, or bedtime rest—then comment naturally in character!
 
 ${formatBlock}`;
 }
@@ -368,7 +511,8 @@ interface ContentTurn {
 function buildFullConversationContents(
   history: ChatMessage[],
   latestUserPrompt: string,
-  hiddenSystemNotes: string[]
+  hiddenSystemNotes: string[],
+  attachedImage?: { mimeType: string; base64: string }
 ): ContentTurn[] {
   const turns: ContentTurn[] = [];
 
@@ -393,7 +537,22 @@ function buildFullConversationContents(
       ? `${hiddenSystemNotes.join('\n')}\n\n${latestUserPrompt}`
       : latestUserPrompt;
 
-  pushTurn('user', combinedLatest);
+  if (attachedImage) {
+    turns.push({
+      role: 'user',
+      parts: [
+        {
+          inlineData: {
+            mimeType: attachedImage.mimeType,
+            data: attachedImage.base64,
+          },
+        },
+        { text: combinedLatest },
+      ],
+    });
+  } else {
+    pushTurn('user', combinedLatest);
+  }
 
   if (turns.length > 0 && turns[0].role === 'model') {
     turns.unshift({ role: 'user', parts: [{ text: '[Studio session started]' }] });
@@ -463,6 +622,50 @@ function executeAutonomousCall(
     return { name: 'adjust_sleeping_position', args: { position, reason }, summary };
   }
 
+  if (name === 'change_posture') {
+    const valid = ['seated', 'standing', 'sleeping'];
+    const posture = (valid.includes(String(rawArgs.posture))
+      ? String(rawArgs.posture)
+      : 'seated') as 'seated' | 'standing' | 'sleeping';
+    const reason = String(rawArgs.reason || 'adjusted posture');
+    const summary =
+      executor?.changePosture?.({ posture, reason }) ||
+      `Switched posture to ${posture} (${reason})`;
+    return { name: 'change_posture', args: { posture, reason }, summary };
+  }
+
+  if (name === 'move_to_display') {
+    const targetDisplay = String(rawArgs.targetDisplay || 'next');
+    const reason = String(rawArgs.reason || 'strolling to other monitor');
+    const summary =
+      executor?.moveToDisplay?.({ targetDisplay, reason }) ||
+      `Moved to display ${targetDisplay} (${reason})`;
+    return { name: 'move_to_display', args: { targetDisplay, reason }, summary };
+  }
+
+  if (name === 'take_self_care') {
+    const valid: CareActivityId[] = [
+      'snack_tea',
+      'snack_cake',
+      'snack_ramen',
+      'snack_midnight',
+      'rest_nap',
+      'entertain_hum',
+      'entertain_rps',
+      'entertain_story',
+      'entertain_music',
+      'comfort_blanket',
+    ];
+    const activity = (valid.includes(rawArgs.activity as CareActivityId)
+      ? rawArgs.activity
+      : 'snack_tea') as CareActivityId;
+    const reason = String(rawArgs.reason || 'practicing self-care');
+    const summary =
+      executor?.takeSelfCare?.({ activity, reason }) ||
+      `Engaged in self-care: ${activity} (${reason})`;
+    return { name: 'take_self_care', args: { activity, reason }, summary };
+  }
+
   const slotIndex =
     typeof rawArgs.slotIndex === 'number' ? Math.max(0, Math.floor(rawArgs.slotIndex)) : 0;
   const reason = String(rawArgs.reason || 'wanted a fresh look');
@@ -526,6 +729,16 @@ function maybeRunOfflineDemoAutonomousTool(
 
   if (userPrompt.includes('[SYSTEM EVENT:') || userPrompt.includes('[CARE EVENT:')) return [];
 
+  if (/\b(other monitor|second monitor|next monitor|other screen|second screen|switch screen|move monitor|other display)\b|別の画面|別モニター/i.test(lower)) {
+    events.push(
+      executeAutonomousCall(
+        'move_to_display',
+        { targetDisplay: 'next', reason: 'walking over to your other monitor!' },
+        executor
+      )
+    );
+  }
+
   if (/\b(rooftop|stars|night sky)\b|屋上/i.test(lower)) {
     events.push(
       executeAutonomousCall('travel_to_location', { location: 'midnight_rooftop' }, executor)
@@ -547,8 +760,31 @@ function maybeRunOfflineDemoAutonomousTool(
   if (/\b(sit|taskbar|perch)\b|座って/i.test(lower)) {
     events.push(
       executeAutonomousCall(
+        'change_posture',
+        { posture: 'seated', reason: 'sitting on the studio stool' },
+        executor
+      )
+    );
+    events.push(
+      executeAutonomousCall(
         'move_on_stage',
         { targetX: 0.45, targetY: -0.2, behavior: 'sit_taskbar' },
+        executor
+      )
+    );
+  } else if (/\b(sleep|go to bed|rest in bed|lie down|good night)\b|おやすみ|寝て/i.test(lower)) {
+    events.push(
+      executeAutonomousCall(
+        'change_posture',
+        { posture: 'sleeping', reason: 'going to bed to rest' },
+        executor
+      )
+    );
+  } else if (/\b(stand up|stand|get up)\b|立って/i.test(lower)) {
+    events.push(
+      executeAutonomousCall(
+        'change_posture',
+        { posture: 'standing', reason: 'standing up on stage' },
         executor
       )
     );
@@ -841,6 +1077,107 @@ async function callGeminiRestApi(params: {
   );
 }
 
+async function fetchLmStudio(path: string, options?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`http://127.0.0.1:1234${path}`, options);
+  } catch {
+    return await fetch(`http://localhost:1234${path}`, options);
+  }
+}
+
+export async function isLocalLmStudioAvailable(): Promise<boolean> {
+  const checkIpc =
+    (typeof window !== 'undefined' &&
+      (window.studioAPI?.checkLocalAi || window.desktopBridge?.checkLocalAi)) ||
+    null;
+  if (checkIpc) {
+    try {
+      const res = await checkIpc();
+      if (res?.ok) return true;
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const res = await fetchLmStudio('/v1/models', {
+      method: 'GET',
+      signal: AbortSignal.timeout(1500),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function callLocalLmStudioRestApi(params: {
+  systemInstruction?: string;
+  contents: ContentTurn[];
+  maxOutputTokens?: number;
+}): Promise<{
+  text: string;
+  resolvedModel: string;
+}> {
+  const { systemInstruction, contents, maxOutputTokens = 350 } = params;
+  const messages: { role: string; content: string }[] = [];
+  if (systemInstruction) {
+    messages.push({ role: 'system', content: systemInstruction });
+  }
+  for (const c of contents) {
+    const text = c.parts.map((p) => (typeof p.text === 'string' ? p.text : '')).join(' ');
+    messages.push({
+      role: c.role === 'model' ? 'assistant' : 'user',
+      content: text,
+    });
+  }
+
+  const queryIpc =
+    (typeof window !== 'undefined' &&
+      (window.studioAPI?.queryLocalAi || window.desktopBridge?.queryLocalAi)) ||
+    null;
+  if (queryIpc) {
+    try {
+      const ipcRes = await queryIpc({
+        messages,
+        temperature: 0.85,
+        maxTokens: maxOutputTokens,
+      });
+      if (ipcRes?.ok && ipcRes.text) {
+        return {
+          text: ipcRes.text,
+          resolvedModel: ipcRes.resolvedModel || 'qwen2.5-7b-instruct-1m',
+        };
+      }
+    } catch (ipcErr) {
+      console.warn('[LM Studio] IPC queryLocalAi error, falling back to fetch:', ipcErr);
+    }
+  }
+
+  const res = await fetchLmStudio('/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      temperature: 0.85,
+      max_tokens: maxOutputTokens,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`LM Studio HTTP ${res.status}`);
+  }
+
+  const data = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+    model?: string;
+  };
+  const text = data.choices?.[0]?.message?.content?.trim() || '';
+  return {
+    text,
+    resolvedModel: data.model || 'qwen2.5-7b-instruct-1m',
+  };
+}
+
 export async function validateGeminiApiKey(params: {
   apiKey: string;
   keyMode: KeyMode;
@@ -849,6 +1186,49 @@ export async function validateGeminiApiKey(params: {
   const apiKey = params.apiKey.trim().replace(/^["']|["']$/g, '').trim();
   const model = (params.model || DEFAULT_TEXT_MODEL).trim() || DEFAULT_TEXT_MODEL;
   const endpoint = getEndpointLabel(apiKey, params.keyMode);
+
+  if (
+    apiKey.toLowerCase() === 'local' ||
+    apiKey.toLowerCase() === 'lm-studio' ||
+    apiKey.toLowerCase() === 'ollama'
+  ) {
+    const checkIpc =
+      (typeof window !== 'undefined' &&
+        (window.studioAPI?.checkLocalAi || window.desktopBridge?.checkLocalAi)) ||
+      null;
+    if (checkIpc) {
+      try {
+        const res = await checkIpc();
+        if (res?.ok) {
+          return {
+            ok: true,
+            endpoint: 'Local Offline AI (LM Studio)',
+            model: res.model || 'qwen2.5-7b-instruct-1m',
+          };
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    try {
+      const res = await fetchLmStudio('/v1/models', {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { data?: { id?: string }[] };
+      const loadedModel = data?.data?.[0]?.id || 'qwen2.5-7b-instruct-1m';
+      return { ok: true, endpoint: 'Local Offline AI (LM Studio)', model: loadedModel };
+    } catch {
+      return {
+        ok: false,
+        endpoint: 'Local Offline AI (LM Studio)',
+        model: 'qwen2.5-7b-instruct-1m',
+        error:
+          'LM Studio server is not running on http://localhost:1234. Please click "Start Server" in LM Studio.',
+      };
+    }
+  }
 
   if (!apiKey) {
     return { ok: false, endpoint, model, error: 'API key is empty.' };
@@ -875,6 +1255,9 @@ export async function generatePersonaReply(params: {
   userPrompt: string;
   hiddenSystemNotes?: string[];
   toolExecutor?: AutonomousToolExecutor;
+  detectedMeshes?: MeshDescriptor[];
+  overrideVaultModels?: VaultModelMeta[];
+  attachedImage?: { mimeType: string; base64: string };
 }): Promise<{
   rawText: string;
   isFallback: boolean;
@@ -885,6 +1268,56 @@ export async function generatePersonaReply(params: {
   const { persona, settings, userPrompt, hiddenSystemNotes = [], toolExecutor } = params;
   const apiKey = resolveEffectiveApiKey(settings);
 
+  // Retrieve complete wardrobe inventory (slots, vault models, detected layers)
+  let wardrobeInventory: WardrobeInventory | undefined;
+  try {
+    wardrobeInventory = await retrieveWardrobeInventory({
+      persona,
+      detectedMeshes: params.detectedMeshes,
+      overrideVaultModels: params.overrideVaultModels,
+    });
+  } catch (err) {
+    console.warn('[Gemini] Wardrobe inventory fetch warning:', err);
+  }
+
+  // Local Offline AI (LM Studio Qwen 2.5) check
+  const isLocalKey =
+    apiKey.toLowerCase() === 'local' ||
+    apiKey.toLowerCase() === 'lm-studio' ||
+    apiKey.toLowerCase() === 'ollama';
+
+  const shouldTryLocal =
+    Boolean(settings.preferLocalAi) ||
+    isLocalKey ||
+    (!apiKey && (await isLocalLmStudioAvailable()));
+
+  if (shouldTryLocal) {
+    try {
+      const systemInstruction = buildSystemInstruction(persona, settings, wardrobeInventory);
+      const contents = buildFullConversationContents(
+        persona.messages,
+        userPrompt,
+        hiddenSystemNotes,
+        params.attachedImage
+      );
+      const localRes = await callLocalLmStudioRestApi({
+        systemInstruction,
+        contents,
+      });
+      if (localRes.text) {
+        return {
+          rawText: localRes.text,
+          isFallback: false,
+          providerNote: `Offline Local AI · LM Studio (${localRes.resolvedModel})`,
+          toolEvents: [],
+          resolvedModel: localRes.resolvedModel,
+        };
+      }
+    } catch (err) {
+      console.warn('[LM Studio] Local query failed, falling back to offline demo pool:', err);
+    }
+  }
+
   // Offline multi-response demo mode ONLY when no API key is configured
   if (!apiKey) {
     const toolEvents = maybeRunOfflineDemoAutonomousTool(persona, userPrompt, toolExecutor);
@@ -892,6 +1325,81 @@ export async function generatePersonaReply(params: {
       hiddenSystemNotes.length > 0
         ? `${hiddenSystemNotes[hiddenSystemNotes.length - 1]} ${userPrompt}`
         : userPrompt;
+
+    // Special spontaneous Wardrobe inventory query in demo mode
+    const isWardrobeQuery =
+      /(what.*(outfit|cloth|wear|have)|show.*(wardrobe|outfit)|wardrobe.*inventory|何持ってる|衣装一覧|クローゼット|着替え)/i.test(
+        userPrompt
+      );
+    if (isWardrobeQuery) {
+      const isJa = persona.voice.language === 'ja';
+      const slotNames = persona.outfitSlots.map((s, i) => `[${i + 1}] ${s.name}`).join('、');
+      const layers = (params.detectedMeshes || [])
+        .filter(
+          (m) =>
+            m.category === 'Tops' ||
+            m.category === 'Bottoms' ||
+            m.category === 'Accessories' ||
+            m.category === 'Footwear'
+        )
+        .map((m) => m.label)
+        .slice(0, 5)
+        .join('、');
+      const layerNote = layers
+        ? isJa
+          ? `（取り外せるパーツ: ${layers}）`
+          : ` (Removable parts: ${layers})`
+        : '';
+      const rawText = isJa
+        ? `*She lightly smooths down her skirt and glances sideways with arms crossed.* "私のクローゼットが見たいわけ？ ……べ、別にいいけど！ 今あるのは ${slotNames} よ。${layerNote} 着替えてほしいなら、ちゃんと言いなさいよねっ。" (You want to see my wardrobe? ...N-Not that I mind! Right now I have: ${slotNames}.${layerNote} If you want me to change, just ask properly!) [MOOD: Amused] [AFFINITY: +1]`
+        : `*She lightly smooths down her skirt with a teasing smirk.* "Curious about what I can wear, Producer? Hmph, I have: ${slotNames}.${layerNote} If you want me to try something on, just tell me which one!" [MOOD: Amused] [AFFINITY: +1]`;
+      return {
+        rawText,
+        isFallback: true,
+        providerNote: 'Demo Mode · Wardrobe Query',
+        toolEvents,
+      };
+    }
+
+    // Special spontaneous AI Stylist recommendation in demo mode
+    if (
+      userPrompt.includes('[AI STYLIST') ||
+      /\b(style|pick.*outfit|recommend.*outfit|coordinate.*outfit|what should (i|you) wear|auto-stylist|コーデ|スタイリスト)\b/i.test(
+        userPrompt
+      )
+    ) {
+      const isJa = persona.voice.language === 'ja';
+      const otherSlots = persona.outfitSlots.filter((s) => s.id !== persona.activeOutfitSlotId);
+      const chosenSlot = otherSlots.length > 0 ? otherSlots[0] : persona.outfitSlots[0];
+      const slotName = chosenSlot?.name || 'Default Idol Outfit';
+      const rawText = isJa
+        ? `*She places a hand on her hip, looking over her wardrobe with an appraising smirk.* "ふん、プロデューサーったら私のセンスを頼るわけ？ ……まあいいわ、今の時間と気分にピッタリなのは『${slotName}』ね！ ほら、着替えてあげたからちゃんと見なさいよ。" (Hmph, relying on my fashion sense, Producer? ...Well fine, the look that fits the mood and time right now is "${slotName}"! Look, I changed into it, so you'd better appreciate it!) [MOOD: Proud] [EQUIP_OUTFIT: ${slotName}] [AFFINITY: +2]`
+        : `*She places a hand on her hip with a proud little smirk.* "Hmph, relying on my fashion sense, Producer? Well, the ensemble that fits right now is definitely '${slotName}'! Here, I changed into it—you'd better appreciate how good it looks!" [MOOD: Proud] [EQUIP_OUTFIT: ${slotName}] [AFFINITY: +2]`;
+      return {
+        rawText,
+        isFallback: true,
+        providerNote: 'Demo Mode · AI Stylist',
+        toolEvents,
+      };
+    }
+
+    // Special spontaneous Screen Vision offline reply
+    if (
+      params.attachedImage ||
+      userPrompt.includes('[SCREEN VISION') ||
+      /(look at.*(screen|monitor|display)|what.*on my screen|see this|画面見て)/i.test(userPrompt)
+    ) {
+      const isJa = persona.voice.language === 'ja';
+      const rawText = isJa
+        ? `*She leans forward curiously, tilting her head and peering directly at your screen.* "ふーん、アンタの画面見せてくれたのね？ ……べ、別に気になってたわけじゃないけど！ でもちゃんと見てあげてるんだから、変な作業ばっかりしてないで休憩もしなさいよねっ。" (Hmm, you're showing me your screen? ...I-It's not like I was curious or anything! But since I am looking at it, don't just stay glued to work—make sure you take a break, okay?!) [MOOD: Amused] [POSE: lean_forward] [GAZE: screen] [EXPRESSION: blush_high]`
+        : `*She leans forward curiously with a soft tilt of her head, peering directly at your desktop screen.* "Hmm, showing me your screen, Producer? ...I-It's not like I was curious! But since I'm looking, don't just overwork yourself—take a breather once in a while!" [MOOD: Amused] [POSE: lean_forward] [GAZE: screen] [EXPRESSION: blush_high]`;
+      return {
+        rawText,
+        isFallback: true,
+        providerNote: 'Demo Mode · Screen Vision',
+        toolEvents,
+      };
+    }
 
     // Special spontaneous PC Context offline reply
     if (userPrompt.includes('[PC CONTEXT:')) {
@@ -938,11 +1446,12 @@ export async function generatePersonaReply(params: {
 
   // Live Gemini API call (generativelanguage.googleapis.com + X-goog-api-key header) with Autonomous Function Calling
   const endpointLabel = getEndpointLabel(apiKey, settings.keyMode);
-  const systemInstruction = buildSystemInstruction(persona, settings);
+  const systemInstruction = buildSystemInstruction(persona, settings, wardrobeInventory);
   const contents = buildFullConversationContents(
     persona.messages,
     userPrompt,
-    hiddenSystemNotes
+    hiddenSystemNotes,
+    params.attachedImage
   );
   const model = settings.textModel.trim() || DEFAULT_TEXT_MODEL;
   const executedTools: AutonomousToolCallEvent[] = [];

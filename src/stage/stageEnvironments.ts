@@ -4,6 +4,19 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { CustomStageEnvironment, MusicSyncFrame, StageEnvironmentId } from '../types/studio';
 import { getEnvironmentFromVault } from '../storage/modelVault';
 
+export interface BedMetrics {
+  mattressTopY: number;
+  bedCenterX: number;
+  bedCenterZ: number;
+  bedWidth: number;
+  bedLength: number;
+  bedMinX: number;
+  bedMaxX: number;
+  bedMinZ: number;
+  bedMaxZ: number;
+  pillowCenter: THREE.Vector3;
+}
+
 export interface StageEnvironmentMeta {
   id: StageEnvironmentId;
   name: string;
@@ -155,6 +168,10 @@ export class StageEnvironmentController {
   private bedAccentStripMat: THREE.MeshBasicMaterial;
   private nightLampLight: THREE.PointLight;
   private bedVisible = false;
+  private mattressMesh: THREE.Mesh | null = null;
+  private hugPillowMesh: THREE.Mesh | null = null;
+  private hugPillowAccentMat: THREE.MeshBasicMaterial;
+  private hugPillowVisible = false;
   private propsGroup: THREE.Group;
   private customRoomGroup: THREE.Group;
   private particles: THREE.Points;
@@ -414,6 +431,7 @@ export class StageEnvironmentController {
       })
     );
     mattress.position.set(0, 0.31, -0.05);
+    this.mattressMesh = mattress;
 
     // Mattress edge piping / border trim
     const mattressTrim = new THREE.Mesh(
@@ -451,6 +469,43 @@ export class StageEnvironmentController {
     accentCushion.rotation.y = 0.45;
     accentCushion.rotation.x = 0.12;
     accentCushion.position.set(-0.35, 0.435, -0.72);
+
+    // 6b. Soft Hug Pillow / Dakimakura Body Pillow Prop (for 'hugging_pillow' & cozy 'curled' sleep)
+    // Capsule: radius 0.095m, cylinder length 0.52m (total length 0.71m)
+    const hugPillowGeo = new THREE.CapsuleGeometry(0.095, 0.52, 16, 24);
+    const hugPillowMat = new THREE.MeshStandardMaterial({
+      color: '#fdf2f8', // soft pastel sakura/blush velvet
+      roughness: 0.88,
+      metalness: 0.04,
+    });
+    this.hugPillowAccentMat = new THREE.MeshBasicMaterial({
+      color: '#ec4899',
+      transparent: true,
+      opacity: 0.85,
+    });
+    this.hugPillowMesh = new THREE.Mesh(hugPillowGeo, hugPillowMat);
+    this.hugPillowMesh.name = 'bed_hug_pillow';
+    this.hugPillowMesh.castShadow = true;
+    this.hugPillowMesh.receiveShadow = true;
+    // Align horizontally along the bed Z-axis
+    this.hugPillowMesh.rotation.x = Math.PI / 2;
+    // Position on top of mattress: y = mattressTopY + 0.11 = 0.40 + 0.11 = 0.51
+    this.hugPillowMesh.position.set(0.18, 0.51, -0.10);
+    this.hugPillowMesh.visible = false;
+
+    // Cute pastel decorative seam rings on both ends
+    const seamGeo = new THREE.TorusGeometry(0.096, 0.007, 12, 28);
+    const seamTop = new THREE.Mesh(seamGeo, this.hugPillowAccentMat);
+    seamTop.rotation.x = Math.PI / 2;
+    seamTop.position.set(0, 0.20, 0);
+    this.hugPillowMesh.add(seamTop);
+
+    const seamBottom = new THREE.Mesh(seamGeo, this.hugPillowAccentMat);
+    seamBottom.rotation.x = Math.PI / 2;
+    seamBottom.position.set(0, -0.20, 0);
+    this.hugPillowMesh.add(seamBottom);
+
+    this.bedPropGroup.add(this.hugPillowMesh);
 
     // 7. Soft Plush Duvet / Blanket (comfortably covering lower body from waist Z = -0.14 to Z = +0.98)
     const duvet = new THREE.Mesh(
@@ -651,6 +706,9 @@ export class StageEnvironmentController {
   public setBedVisible(visible: boolean): void {
     this.bedVisible = visible;
     this.bedPropGroup.visible = this.bedVisible && !this.isOverlayTransparent;
+    if (this.hugPillowMesh) {
+      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible && !this.isOverlayTransparent;
+    }
     // Automatically hide stool when bed is visible so they never collide
     if (this.bedVisible) {
       this.seatPropGroup.visible = false;
@@ -659,11 +717,55 @@ export class StageEnvironmentController {
     }
   }
 
+  public setHugPillowVisible(visible: boolean, side: 'right' | 'left' = 'right'): void {
+    this.hugPillowVisible = visible;
+    if (this.hugPillowMesh) {
+      this.hugPillowMesh.visible = visible && this.bedVisible && !this.isOverlayTransparent;
+      this.hugPillowMesh.position.x = side === 'left' ? -0.18 : 0.18;
+    }
+  }
+
+  public getBedMetrics(): BedMetrics {
+    if (this.mattressMesh) {
+      this.mattressMesh.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(this.mattressMesh);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      return {
+        mattressTopY: box.max.y,
+        bedCenterX: center.x,
+        bedCenterZ: center.z,
+        bedWidth: box.max.x - box.min.x,
+        bedLength: box.max.z - box.min.z,
+        bedMinX: box.min.x,
+        bedMaxX: box.max.x,
+        bedMinZ: box.min.z,
+        bedMaxZ: box.max.z,
+        pillowCenter: new THREE.Vector3(0, 0.485, -0.79),
+      };
+    }
+    return {
+      mattressTopY: 0.40,
+      bedCenterX: 0.0,
+      bedCenterZ: -0.10,
+      bedWidth: 1.14,
+      bedLength: 2.08,
+      bedMinX: -0.57,
+      bedMaxX: 0.57,
+      bedMinZ: -1.14,
+      bedMaxZ: 0.94,
+      pillowCenter: new THREE.Vector3(0, 0.485, -0.79),
+    };
+  }
+
   public setOverlayTransparent(transparent: boolean): void {
     this.isOverlayTransparent = transparent;
     this.stageRing.visible = !transparent;
     this.seatPropGroup.visible = this.seatVisible && !this.bedVisible && !transparent;
     this.bedPropGroup.visible = this.bedVisible && !transparent;
+    if (this.hugPillowMesh) {
+      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible && !transparent;
+    }
     this.propsGroup.visible = !transparent;
     this.customRoomGroup.visible = !transparent;
     this.particles.visible =
@@ -701,6 +803,9 @@ export class StageEnvironmentController {
     (this.stageRing.material as THREE.MeshBasicMaterial).color.set(meta.ringColor);
     this.seatAccentRingMat.color.set(meta.ringColor);
     this.bedAccentStripMat.color.set(meta.ringColor);
+    if (this.hugPillowAccentMat) {
+      this.hugPillowAccentMat.color.set(meta.ringColor);
+    }
     this.particleMat.color.set(meta.particleColor);
     this.particleMat.size = meta.particleMode === 'embers' ? 0.024 : 0.018;
     this.rainLines.visible = !this.isOverlayTransparent && meta.particleMode === 'rain';

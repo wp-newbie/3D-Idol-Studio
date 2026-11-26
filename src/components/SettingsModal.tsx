@@ -193,18 +193,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-violet-300">
                 <KeyRound className="h-3.5 w-3.5" />
-                Gemini API Key &amp; Voice Models
+                AI Brain &amp; Voice Engine
               </div>
               <span
                 className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
-                  connectionMode === 'live'
+                  settings.preferLocalAi
+                    ? 'border-purple-400/40 bg-purple-500/15 text-purple-200'
+                    : connectionMode === 'live'
                     ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
                     : connectionMode === 'error'
                     ? 'border-rose-400/45 bg-rose-500/15 text-rose-200'
                     : 'border-amber-400/35 bg-amber-500/15 text-amber-200'
                 }`}
               >
-                {connectionMode === 'live'
+                {settings.preferLocalAi
+                  ? '● Local Offline AI Active'
+                  : connectionMode === 'live'
                   ? '● Live Gemini Connected'
                   : connectionMode === 'error'
                   ? '● Key / Model Error'
@@ -213,6 +217,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4 space-y-3">
+              {/* Prioritize Local Offline AI Toggle */}
+              <div className="flex items-center justify-between rounded-xl border border-purple-500/35 bg-purple-950/25 p-3.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/20 text-purple-300 font-bold text-sm">
+                    ⚡
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-purple-100 text-[12px]">
+                      <span>Prioritize Local Offline AI</span>
+                      <span className="rounded-md border border-purple-400/40 bg-purple-500/20 px-1.5 py-0.5 text-[9px] font-mono text-purple-300">
+                        LM Studio &amp; VOICEVOX
+                      </span>
+                    </div>
+                    <div className="text-[10.5px] text-purple-300/80">
+                      Bypasses Gemini API key completely &amp; runs 100% offline with zero quota limits.
+                    </div>
+                  </div>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settings.preferLocalAi)}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      onUpdateSettings({ preferLocalAi: enabled });
+                      if (enabled && onValidateApiKey) {
+                        void onValidateApiKey('local');
+                      }
+                    }}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-zinc-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+
+              {settings.preferLocalAi && (
+                <div className="rounded-xl border border-purple-400/30 bg-purple-950/30 p-3 space-y-2 text-xs text-purple-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5">
+                      <span>🧠</span>
+                      <span>Brain: <strong>LM Studio :1234 (Qwen 2.5 7B)</strong></span>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span>🎙️</span>
+                      <span>Voice: <strong>VOICEVOX :50021</strong></span>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-purple-500/20">
+                    <span className="text-[10px] text-purple-300/70">
+                      Cloud Gemini API bypassed. No internet or billing required.
+                    </span>
+                    {onValidateApiKey && (
+                      <button
+                        type="button"
+                        disabled={isValidatingKey}
+                        onClick={() => void onValidateApiKey('local')}
+                        className="rounded-lg border border-purple-400/40 bg-purple-500/25 px-2.5 py-1 text-[10.5px] font-semibold text-purple-100 hover:bg-purple-500/40 disabled:opacity-45"
+                      >
+                        {isValidatingKey ? 'Testing Local...' : 'Test Local Connection'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               {settings.useBuiltInKey && builtInAvailable ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-400/35 bg-emerald-950/30 px-3.5 py-2.5">
                   <div className="flex items-center gap-2 text-xs text-emerald-100">
@@ -247,8 +315,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ) : (
                 <div>
                   <label className="mb-1 flex items-center justify-between text-[10px] font-semibold text-zinc-400">
-                    <span>Gemini API Key (supports AQ. and AIza... via X-goog-api-key)</span>
+                    <span>API Key (Cloud Gemini Key, or "local" for LM Studio)</span>
                     <span className="flex items-center gap-2 font-mono text-[9.5px] text-zinc-500">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftKey('local');
+                          onUpdateSettings({ useBuiltInKey: false, apiKey: 'local' });
+                        }}
+                        className="text-purple-300 hover:underline"
+                      >
+                        ⚡ Use Local AI (Offline)
+                      </button>
                       {builtInAvailable && (
                         <button
                           type="button"
@@ -499,8 +577,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     }
                     className="w-full rounded-xl border border-white/10 bg-[#121220] px-2.5 py-1.5 text-xs text-white"
                   >
-                    <option value="ja">Japanese (日本語)</option>
-                    <option value="en">English</option>
+                    <option value="ja">Japanese (EN Subtitles)</option>
                   </select>
                 </div>
 

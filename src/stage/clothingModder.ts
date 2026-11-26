@@ -412,16 +412,97 @@ export function detectClothingMeshes(
   return found;
 }
 
+export function isBodySkinMaterial(matName: string): boolean {
+  if (!matName) return false;
+  if (/_FACE\b|_HAIR\b|_CLOTH\b|_EYE\b|face|mouth|eye|brow|lash/i.test(matName)) {
+    return false;
+  }
+  return /body.*skin|skin.*body|body_\d+_skin|^skin$|_skin\b|^body$/i.test(matName);
+}
+
+const cyclingShortsTextureCache = new Map<string, THREE.CanvasTexture>();
+
+export function getCyclingShortsTexture(
+  baseTexture: THREE.Texture,
+  colorHex = '#141418'
+): THREE.CanvasTexture | null {
+  const image = baseTexture.image as HTMLImageElement | ImageBitmap | HTMLCanvasElement | undefined;
+  if (!image) return null;
+
+  const key = `${baseTexture.uuid || baseTexture.name || 'skin'}::${colorHex}`;
+  const existing = cyclingShortsTextureCache.get(key);
+  if (existing) return existing;
+
+  const w = (image as HTMLImageElement).naturalWidth || image.width || 1024;
+  const h = (image as HTMLImageElement).naturalHeight || image.height || 1024;
+  if (!w || !h) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.drawImage(image, 0, 0, w, h);
+
+  // Canonical VRoid body UV bounds for pelvic / thigh region:
+  // Left hip/thigh: U in [0.760, 0.998], V in [0.520, 0.608]
+  // Right hip/thigh: U in [0.002, 0.240], V in [0.520, 0.608]
+  const vTop = Math.floor(h * 0.520);
+  const vBottom = Math.floor(h * 0.608);
+  const vHeight = vBottom - vTop;
+
+  // Draw sleek cycling / modesty shorts
+  ctx.fillStyle = colorHex;
+  const leftX = Math.floor(w * 0.760);
+  const leftW = Math.ceil(w * 0.238);
+  ctx.fillRect(leftX, vTop, leftW, vHeight);
+
+  const rightX = Math.floor(w * 0.002);
+  const rightW = Math.ceil(w * 0.238);
+  ctx.fillRect(rightX, vTop, rightW, vHeight);
+
+  // Athletic waistband accent at the top
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+  const waistH = Math.max(3, Math.floor(vHeight * 0.08));
+  ctx.fillRect(leftX, vTop, leftW, waistH);
+  ctx.fillRect(rightX, vTop, rightW, waistH);
+
+  // Clean hemline trim at the bottom
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  const hemH = Math.max(2, Math.floor(vHeight * 0.05));
+  ctx.fillRect(leftX, vBottom - hemH, leftW, hemH);
+  ctx.fillRect(rightX, vBottom - hemH, rightW, hemH);
+
+  const canvasTex = new THREE.CanvasTexture(canvas);
+  canvasTex.colorSpace = THREE.SRGBColorSpace;
+  canvasTex.flipY = baseTexture.flipY;
+  canvasTex.wrapS = THREE.RepeatWrapping;
+  canvasTex.wrapT = THREE.RepeatWrapping;
+  canvasTex.needsUpdate = true;
+
+  cyclingShortsTextureCache.set(key, canvasTex);
+  return canvasTex;
+}
+
 export function applyOutfitModsToScene(params: {
   root: THREE.Object3D;
   meshVisibility: Record<string, boolean>;
   materialMods: Record<string, MaterialMod>;
   isImportedModel: boolean;
   textureCache: Map<string, THREE.Texture>;
+  cyclingShorts?: boolean;
   onTextureLoaded?: () => void;
 }): void {
-  const { root, meshVisibility, materialMods, isImportedModel, textureCache, onTextureLoaded } =
-    params;
+  const {
+    root,
+    meshVisibility,
+    materialMods,
+    isImportedModel,
+    textureCache,
+    cyclingShorts = true,
+    onTextureLoaded,
+  } = params;
   const loader = new THREE.TextureLoader();
 
   const applyTextureUrl = (
@@ -528,9 +609,32 @@ export function applyOutfitModsToScene(params: {
             }
           });
         }
-      } else if (anyMat.map !== snap.map) {
-        anyMat.map = snap.map;
-        anyMat.needsUpdate = true;
+      } else {
+        // Modesty Cycling Shorts layer (under-skirt protection on body skin)
+        const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
+        if (cyclingShorts && isSkinMat && snap.map) {
+          const shortsTex = getCyclingShortsTexture(snap.map);
+          if (shortsTex) {
+            anyMat.map = shortsTex;
+            anyMat.needsUpdate = true;
+          } else if (snap.map.image instanceof HTMLImageElement && !snap.map.image.complete) {
+            snap.map.image.addEventListener(
+              'load',
+              () => {
+                const loadedTex = getCyclingShortsTexture(snap.map!);
+                if (loadedTex) {
+                  anyMat.map = loadedTex;
+                  anyMat.needsUpdate = true;
+                  onTextureLoaded?.();
+                }
+              },
+              { once: true }
+            );
+          }
+        } else if (anyMat.map !== snap.map) {
+          anyMat.map = snap.map;
+          anyMat.needsUpdate = true;
+        }
       }
     }
   });

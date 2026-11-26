@@ -1,4 +1,11 @@
-import type { DialogueSegment, MoodType } from '../types/studio';
+import type {
+  AvatarPosture,
+  DialogueSegment,
+  MoodType,
+  ProceduralEmoteId,
+  RoamBehavior,
+  VocalArchetype,
+} from '../types/studio';
 
 const VALID_MOODS: MoodType[] = [
   'Deadpan',
@@ -16,6 +23,49 @@ const AFFINITY_TAG_REGEX = /\[AFFINITY\s*:\s*([+-]?\d+)\s*\]/gi;
 const INTENSITY_TAG_REGEX = /\[INTENSITY\s*:\s*([0-9]*\.?[0-9]+)\s*\]/gi;
 const THOUGHT_TAG_REGEX = /\[THOUGHT\s*:\s*([^\]]+)\]/gi;
 const FEELING_TAG_REGEX = /\[FEELING\s*:\s*([^\]]+)\]/gi;
+const ARCHETYPE_TAG_REGEX = /\[ARCHETYPE\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
+const EQUIP_OUTFIT_TAG_REGEX = /\[EQUIP_OUTFIT\s*:\s*([^\]]+)\]/gi;
+const TOGGLE_LAYER_TAG_REGEX = /\[TOGGLE_LAYER\s*:\s*([^\]=]+)=(on|off|true|false)\s*\]/gi;
+const POSTURE_TAG_REGEX = /\[POSTURE\s*:\s*(seated|standing|sleeping)\s*\]/gi;
+const MOVE_TAG_REGEX = /\[MOVE\s*:\s*(walk|peek|sit_taskbar|approach_user)\s*\]/gi;
+const EMOTE_TAG_REGEX = /\[(?:EMOTE|POSE)\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
+const GAZE_TAG_REGEX = /\[GAZE\s*:\s*(camera|mouse|look_away|shy_down|screen)\s*\]/gi;
+const EXPRESSION_TAG_REGEX = /\[EXPRESSION\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
+
+export interface WardrobeOutfitAction {
+  slotTarget: string;
+}
+
+export interface WardrobeLayerAction {
+  layerName: string;
+  visible: boolean;
+}
+
+export function extractOutfitAction(text: string): WardrobeOutfitAction | null {
+  let action: WardrobeOutfitAction | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(EQUIP_OUTFIT_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const target = match[1].trim();
+    if (target) action = { slotTarget: target };
+  }
+  return action;
+}
+
+export function extractLayerActions(text: string): WardrobeLayerAction[] {
+  const actions: WardrobeLayerAction[] = [];
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(TOGGLE_LAYER_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const layerName = match[1].trim();
+    const val = match[2].trim().toLowerCase();
+    const visible = val === 'on' || val === 'true';
+    if (layerName) {
+      actions.push({ layerName, visible });
+    }
+  }
+  return actions;
+}
 
 export function extractMoodFromText(text: string, fallback: MoodType = 'Deadpan'): MoodType {
   let detected: MoodType = fallback;
@@ -87,6 +137,93 @@ export function extractNuancedFeeling(text: string): string | null {
   return feeling;
 }
 
+export function extractArchetypeFromText(text: string): VocalArchetype | null {
+  let archetype: VocalArchetype | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(ARCHETYPE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim().toLowerCase();
+    if (
+      raw === 'sharp_tsundere' ||
+      raw === 'gothic_diva' ||
+      raw === 'deadpan_sleepy' ||
+      raw === 'cool_guarded_tsundere'
+    ) {
+      archetype = raw as VocalArchetype;
+    }
+  }
+  return archetype;
+}
+
+export function extractPostureAction(text: string): AvatarPosture | null {
+  let posture: AvatarPosture | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(POSTURE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim().toLowerCase();
+    if (raw === 'seated' || raw === 'standing' || raw === 'sleeping') {
+      posture = raw;
+    }
+  }
+  return posture;
+}
+
+export function extractMoveAction(text: string): RoamBehavior | null {
+  let move: RoamBehavior | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(MOVE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim().toLowerCase();
+    if (raw === 'walk' || raw === 'peek' || raw === 'sit_taskbar' || raw === 'approach_user') {
+      move = raw as RoamBehavior;
+    }
+  }
+  return move;
+}
+
+export function extractEmoteAction(text: string): ProceduralEmoteId | null {
+  let emote: ProceduralEmoteId | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(EMOTE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim().toLowerCase();
+    if (raw) emote = raw as ProceduralEmoteId;
+  }
+  return emote;
+}
+
+export function extractGazeAction(
+  text: string
+): 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen' | null {
+  let gaze: 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen' | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(GAZE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim().toLowerCase();
+    if (
+      raw === 'camera' ||
+      raw === 'mouse' ||
+      raw === 'look_away' ||
+      raw === 'shy_down' ||
+      raw === 'screen'
+    ) {
+      gaze = raw;
+    }
+  }
+  return gaze;
+}
+
+export function extractExpressionAction(text: string): string | null {
+  let expr: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(EXPRESSION_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) expr = raw;
+  }
+  return expr;
+}
+
 export function stripHiddenTags(text: string): string {
   return text
     .replace(MOOD_TAG_REGEX, '')
@@ -94,6 +231,14 @@ export function stripHiddenTags(text: string): string {
     .replace(INTENSITY_TAG_REGEX, '')
     .replace(THOUGHT_TAG_REGEX, '')
     .replace(FEELING_TAG_REGEX, '')
+    .replace(ARCHETYPE_TAG_REGEX, '')
+    .replace(EQUIP_OUTFIT_TAG_REGEX, '')
+    .replace(TOGGLE_LAYER_TAG_REGEX, '')
+    .replace(POSTURE_TAG_REGEX, '')
+    .replace(MOVE_TAG_REGEX, '')
+    .replace(EMOTE_TAG_REGEX, '')
+    .replace(GAZE_TAG_REGEX, '')
+    .replace(EXPRESSION_TAG_REGEX, '')
     .trim();
 }
 
@@ -115,7 +260,17 @@ export function extractSpokenDialogue(rawText: string): string {
     const spoken = (match[1] ?? match[2] ?? match[3] ?? '').trim();
     if (spoken.length > 0) quoted.push(spoken);
   }
-  return quoted.join(' ').trim();
+  if (quoted.length > 0) {
+    return quoted.join(' ').trim();
+  }
+
+  // Fallback if model omitted quotes: extract Japanese character sequences
+  const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(withoutActionsAndSubs);
+  if (hasJapanese) {
+    return withoutActionsAndSubs.trim();
+  }
+
+  return '';
 }
 
 export function extractEnglishSubtitle(rawText: string): string {
@@ -127,7 +282,20 @@ export function extractEnglishSubtitle(rawText: string): string {
     const inner = (match[1] ?? match[2] ?? '').trim();
     if (inner.length > 0) subs.push(inner);
   }
-  return subs.join(' ').trim();
+  if (subs.length > 0) {
+    return subs.join(' ').trim();
+  }
+
+  // Fallback: check for English text outside quotes/actions
+  const withoutQuotes = withoutTags
+    .replace(/\*[^*]+\*/g, ' ')
+    .replace(/"[^"]+"|“[^”]+”|「([^」]+)」/g, ' ')
+    .trim();
+  if (withoutQuotes && /[A-Za-z]{2,}/.test(withoutQuotes)) {
+    return withoutQuotes.replace(/^[-–—:\s]+/, '').trim();
+  }
+
+  return '';
 }
 
 export function parseDialogueResponse(
@@ -141,12 +309,29 @@ export function parseDialogueResponse(
   emotionIntensity: number;
   innerThought: string | null;
   nuancedFeeling: string | null;
+  archetype: VocalArchetype | null;
+  outfitAction: WardrobeOutfitAction | null;
+  layerActions: WardrobeLayerAction[];
+  postureAction: AvatarPosture | null;
+  moveAction: RoamBehavior | null;
+  emoteAction: ProceduralEmoteId | null;
+  poseAction: ProceduralEmoteId | null;
+  gazeAction: 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen' | null;
+  expressionAction: string | null;
 } {
   const mood = extractMoodFromText(rawText, fallbackMood);
   const affinityDelta = extractAffinityDelta(rawText);
   const emotionIntensity = extractEmotionIntensity(rawText, mood);
   const innerThought = extractInnerThought(rawText);
   const nuancedFeeling = extractNuancedFeeling(rawText);
+  const archetype = extractArchetypeFromText(rawText);
+  const outfitAction = extractOutfitAction(rawText);
+  const layerActions = extractLayerActions(rawText);
+  const postureAction = extractPostureAction(rawText);
+  const moveAction = extractMoveAction(rawText);
+  const emoteAction = extractEmoteAction(rawText);
+  const gazeAction = extractGazeAction(rawText);
+  const expressionAction = extractExpressionAction(rawText);
   const cleaned = stripHiddenTags(rawText);
   const spokenText = extractSpokenDialogue(rawText);
 
@@ -197,5 +382,14 @@ export function parseDialogueResponse(
     emotionIntensity,
     innerThought,
     nuancedFeeling,
+    archetype,
+    outfitAction,
+    layerActions,
+    postureAction,
+    moveAction,
+    emoteAction,
+    poseAction: emoteAction,
+    gazeAction,
+    expressionAction,
   };
 }

@@ -134,9 +134,11 @@ function hydratePersonaDefaults(p: Persona, seedMap: Map<string, Persona>): Pers
       ? p.outfitSlots.map((slot) => ({
           ...slot,
           yawOffset:
-            typeof slot.yawOffset === 'number' && Number.isFinite(slot.yawOffset)
-              ? slot.yawOffset
-              : 0,
+            slot.modelVaultId === null
+              ? 0
+              : typeof slot.yawOffset === 'number' && Number.isFinite(slot.yawOffset)
+                ? slot.yawOffset
+                : 0,
         }))
       : seed?.outfitSlots ?? [],
   };

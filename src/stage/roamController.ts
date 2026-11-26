@@ -78,6 +78,7 @@ export class AutonomousRoamController {
   private approachUserCooldown = 0; // 2-minute cooldown between cursor visits
   private approachUserDuration = 0; // 5-8 seconds duration when visiting cursor
   private isApproachingUser = false;
+  private crossDisplayCooldown = 0;
   private smoothBones: Record<TrackedBone, { x: number; y: number; z: number }>;
 
   constructor() {
@@ -112,6 +113,9 @@ export class AutonomousRoamController {
     }
 
     this.isApproachingUser = false;
+    if (typeof cmd.startFromX === 'number') {
+      this.currentX = THREE.MathUtils.clamp(cmd.startFromX, -0.96, 0.96);
+    }
     this.targetX = THREE.MathUtils.clamp(cmd.targetX, -0.94, 0.94);
     this.targetY = THREE.MathUtils.clamp(cmd.targetY, -0.45, 0.72);
     this.targetZ = THREE.MathUtils.clamp(cmd.targetZ ?? 0, -0.35, 0.45);
@@ -129,6 +133,7 @@ export class AutonomousRoamController {
     this.currentX = 0;
     this.currentY = 0;
     this.currentZ = 0;
+    this.facingYaw = 0;
     this.behavior = 'idle';
   }
 
@@ -176,6 +181,7 @@ export class AutonomousRoamController {
     sleepiness?: number;
     energy?: number;
     curiosity?: number;
+    onCrossDisplayEdge?: (direction: 'left' | 'right') => void;
   }): RoamFrameStatus {
     const {
       dt,
@@ -197,7 +203,12 @@ export class AutonomousRoamController {
       sleepiness = 20,
       energy = 80,
       curiosity = 50,
+      onCrossDisplayEdge,
     } = params;
+
+    if (this.crossDisplayCooldown > 0) {
+      this.crossDisplayCooldown -= dt;
+    }
 
     // Countdown 2-minute cooldown between cursor visits
     if (this.approachUserCooldown > 0) {
@@ -331,6 +342,17 @@ export class AutonomousRoamController {
       this.walkPhase += dt * 7.4;
     }
 
+    // Trigger monitor display transition when character strolls off left or right edge in desktop roam
+    if (desktopRoamMode && onCrossDisplayEdge && !this.isDragging && this.crossDisplayCooldown <= 0) {
+      if (this.currentX <= -0.92 && dx < -0.01 && this.behavior === 'walk') {
+        this.crossDisplayCooldown = 9.0;
+        onCrossDisplayEdge('left');
+      } else if (this.currentX >= 0.92 && dx > 0.01 && this.behavior === 'walk') {
+        this.crossDisplayCooldown = 9.0;
+        onCrossDisplayEdge('right');
+      }
+    }
+
     // Compute exact screen-space world coordinates using camera frustum in Desktop Widget Mode
     let targetWorldX = this.currentX * 0.58;
     let targetWorldY = this.currentY * 0.16;
@@ -387,7 +409,7 @@ export class AutonomousRoamController {
     } else if (this.behavior === 'peek') {
       desiredYaw = this.currentX < -0.15 ? 0.38 : this.currentX > 0.15 ? -0.38 : 0;
     } else if (this.behavior === 'crossed_arms_wait' || mood === 'Pouty' || mood === 'Annoyed') {
-      desiredYaw = 0.14;
+      desiredYaw = desktopRoamMode ? 0.14 : 0;
     }
     this.facingYaw = THREE.MathUtils.lerp(this.facingYaw, desiredYaw, Math.min(1, dt * 5.5));
     avatarContainer.rotation.y = this.facingYaw;
@@ -416,44 +438,47 @@ export class AutonomousRoamController {
       const targets: Record<TrackedBone, { x: number; y: number; z: number }> = {
         hips: {
           x: 0,
-          y: Math.sin(elapsed * 0.7) * 0.02,
-          z: bodyLang.hipWeightShift,
+          y: Math.sin(elapsed * 0.7) * 0.015,
+          z: bodyLang.hipWeightShift * 0.45,
         },
         spine: {
           x:
-            breath * 0.015 +
-            bodyLang.spineLeanX +
-            (isMusicPlaying ? musicBeat * 0.055 : 0),
-          y: Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.075 : 0.025),
-          z: isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.045 + musicBass * 0.06) : 0,
+            breath * 0.012 +
+            bodyLang.spineLeanX * 0.35 +
+            (isMusicPlaying ? musicBeat * 0.04 : 0),
+          y: Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.05 : 0.018),
+          z: isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.035 + musicBass * 0.05) : 0,
         },
         chest: {
-          x: breath * 0.018 + bodyLang.spineLeanX * 0.45,
+          x: breath * 0.015 + bodyLang.spineLeanX * 0.22,
           y: 0,
           z: 0,
         },
+        // Arms hang naturally alongside hips/ribcage with slight forward bias (never bent backwards behind torso)
         leftUpperArm: {
           x:
-            0.08 +
-            bodyLang.shoulderDroop * 0.4 -
-            (isMusicPlaying ? musicBeat * 0.14 : 0) +
-            bodyLang.shoulderFidget,
-          y: 0,
-          z: armSign * (1.15 + bodyLang.shoulderDroop * 0.65 + armSway),
+            -0.03 -
+            bodyLang.shoulderDroop * 0.15 -
+            (isMusicPlaying ? musicBeat * 0.12 : 0) +
+            bodyLang.shoulderFidget * 0.25,
+          y: 0.02,
+          z: armSign * (1.22 + bodyLang.shoulderDroop * 0.25 + armSway),
         },
         rightUpperArm: {
           x:
-            0.08 +
-            bodyLang.shoulderDroop * 0.4 -
-            (isMusicPlaying ? musicBeat * 0.14 : 0) -
-            bodyLang.shoulderFidget,
-          y: 0,
-          z: -armSign * (1.15 + bodyLang.shoulderDroop * 0.65 - armSway),
+            -0.03 -
+            bodyLang.shoulderDroop * 0.15 -
+            (isMusicPlaying ? musicBeat * 0.12 : 0) -
+            bodyLang.shoulderFidget * 0.25,
+          y: -0.02,
+          z: -armSign * (1.22 + bodyLang.shoulderDroop * 0.25 - armSway),
         },
-        leftLowerArm: { x: 0, y: 0.18, z: armSign * 0.14 },
-        rightLowerArm: { x: 0, y: -0.18, z: -armSign * 0.14 },
-        leftHand: { x: 0, y: 0, z: armSign * 0.06 },
-        rightHand: { x: 0, y: 0, z: -armSign * 0.06 },
+        // Forearms rest with gentle natural elbow flexion forward into +Z
+        leftLowerArm: { x: 0.10, y: -0.16, z: armSign * 0.04 },
+        rightLowerArm: { x: 0.10, y: 0.16, z: -armSign * 0.04 },
+        // Relaxed natural hands resting alongside thighs
+        leftHand: { x: 0.04, y: -0.04, z: armSign * 0.02 },
+        rightHand: { x: 0.04, y: 0.04, z: -armSign * 0.02 },
         leftUpperLeg: { x: 0, y: 0, z: 0 },
         rightUpperLeg: { x: 0, y: 0, z: 0 },
         leftLowerLeg: { x: 0, y: 0, z: 0 },
@@ -483,17 +508,39 @@ export class AutonomousRoamController {
         targets.rightUpperLeg.x = -swing;
         targets.leftLowerLeg.x = -kneeL;
         targets.rightLowerLeg.x = -kneeR;
-        targets.leftUpperArm.x = -swing * 0.68;
-        targets.rightUpperArm.x = swing * 0.68;
+        targets.leftUpperArm.x = -0.03 - swing * 0.55;
+        targets.rightUpperArm.x = -0.03 + swing * 0.55;
+        targets.leftLowerArm.x = 0.10 + Math.max(0, -swing) * 0.22;
+        targets.rightLowerArm.x = 0.10 + Math.max(0, swing) * 0.22;
       } else if (this.behavior === 'sit_taskbar') {
         const forwardSign = isVrm0 ? 1 : -1;
-        const kick = Math.sin(elapsed * 2.4) * 0.12;
-        targets.leftUpperLeg.x = forwardSign * 1.22;
-        targets.rightUpperLeg.x = forwardSign * 1.22;
-        targets.leftLowerLeg.x = -forwardSign * (1.05 - kick);
-        targets.rightLowerLeg.x = -forwardSign * (1.05 + kick);
-        targets.leftUpperArm.z = armSign * 1.05;
-        targets.rightUpperArm.z = -armSign * 1.05;
+        // Modest, polite sitting posture: thighs and knees kept together so underwear is NEVER exposed
+        const gentleSway = Math.sin(elapsed * 1.8) * 0.04;
+        targets.leftUpperLeg.x = forwardSign * 1.08;
+        targets.rightUpperLeg.x = forwardSign * 1.08;
+        targets.leftUpperLeg.z = armSign * 0.095; // Inward adduction: brings left knee to centerline
+        targets.rightUpperLeg.z = -armSign * 0.095; // Inward adduction: brings right knee to centerline
+        targets.leftUpperLeg.y = forwardSign * 0.04; // Slight internal rotation keeps thighs pressed together
+        targets.rightUpperLeg.y = -forwardSign * 0.04;
+        targets.leftLowerLeg.x = -forwardSign * (1.08 + gentleSway);
+        targets.rightLowerLeg.x = -forwardSign * (1.08 - gentleSway);
+        targets.leftLowerLeg.z = -armSign * 0.025; // Calves and ankles stay together
+        targets.rightLowerLeg.z = armSign * 0.025;
+        // Resting hands neatly down forward on lap / thighs (never bent backwards)
+        targets.leftUpperArm.x = -0.12;
+        targets.rightUpperArm.x = -0.12;
+        targets.leftUpperArm.z = armSign * 1.25;
+        targets.rightUpperArm.z = -armSign * 1.25;
+        targets.leftLowerArm.x = 0.35;
+        targets.rightLowerArm.x = 0.35;
+        targets.leftLowerArm.y = -0.35;
+        targets.rightLowerArm.y = 0.35;
+        targets.leftLowerArm.z = armSign * 0.12;
+        targets.rightLowerArm.z = -armSign * 0.12;
+        targets.leftHand.x = 0.08;
+        targets.rightHand.x = 0.08;
+        targets.leftHand.z = armSign * 0.04;
+        targets.rightHand.z = -armSign * 0.04;
       } else if (bodyLang.coldRubArms > 0.25 && !isSleeping) {
         const c = bodyLang.coldRubArms;
         const rub = Math.sin(elapsed * 5.2) * 0.08 * c;

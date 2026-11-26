@@ -6,3 +6,4 @@ release/
 public/vault-sync/
 *.log
 .DS_Store
+scratch/

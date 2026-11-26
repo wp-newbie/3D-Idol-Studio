@@ -6,7 +6,7 @@ import type {
   VoiceSettings,
 } from '../types/studio';
 import { MOOD_META } from '../data/presets';
-import { extractEnglishSubtitle, extractSpokenDialogue } from './dialogueParser';
+import { extractSpokenDialogue } from './dialogueParser';
 import { resolveEffectiveApiKey, sanitizeApiKey } from './apiKeyResolver';
 import {
   extractRecommendedModelFromError,
@@ -84,6 +84,16 @@ class StudioVoiceEngine {
   private synthStartedAt = 0;
   private listeners = new Set<(speaking: boolean) => void>();
 
+  public async unlockAudio(): Promise<void> {
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      try {
+        await this.audioCtx.resume();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   public subscribe(cb: (speaking: boolean) => void): () => void {
     this.listeners.add(cb);
     cb(this.isSpeakingFlag);
@@ -137,7 +147,6 @@ class StudioVoiceEngine {
 
     if (!this.audioEl) {
       const el = new Audio();
-      el.crossOrigin = 'anonymous';
 
       el.onplay = () => {
         this.activeMode = 'audio';
@@ -330,8 +339,11 @@ class StudioVoiceEngine {
     });
 
     const spokenText = extractSpokenDialogue(params.rawText);
-    const englishSubtitle = extractEnglishSubtitle(params.rawText);
-    if (!spokenText && !englishSubtitle) {
+
+    // Strictly speak ONLY Japanese dialogue (Kanji / Kana)
+    const japaneseText = spokenText || '';
+    if (!japaneseText) {
+      console.info('[TTS] No Japanese dialogue line detected; skipping audio playback.');
       return { usedEngine: 'skipped', spokenText: '', modulation };
     }
 
@@ -339,15 +351,32 @@ class StudioVoiceEngine {
 
     const modulatedVoice: VoiceSettings = {
       ...params.voice,
+      language: 'ja',
       pitch: modulation.effectivePitch,
       speed: modulation.effectiveRate,
     };
 
     const apiKey = sanitizeApiKey(resolveEffectiveApiKey(params.settings));
-    if (apiKey && !params.settings.offlineVoiceOnly) {
+    const preferLocal = Boolean(params.settings.preferLocalAi) || apiKey.toLowerCase() === 'local';
+
+    // 1. If Local AI is prioritized, use offline VOICEVOX immediately
+    if (preferLocal) {
+      try {
+        const voicevoxAudio = await this.fetchVoicevoxTts(japaneseText, 8);
+        if (voicevoxAudio) {
+          await this.playAudioBytes(voicevoxAudio.bytes, voicevoxAudio.mimeType, modulatedVoice);
+          return { usedEngine: 'gemini-tts', spokenText: japaneseText, modulation };
+        }
+      } catch (err) {
+        console.warn('[TTS] VOICEVOX local TTS error:', err);
+      }
+    }
+
+    // 2. Cloud Gemini TTS (when local is not prioritized)
+    if (!preferLocal && apiKey && !params.settings.offlineVoiceOnly) {
       try {
         const audioData = await this.requestGeminiTts({
-          spokenText: spokenText || englishSubtitle,
+          spokenText: japaneseText,
           voice: modulatedVoice,
           settings: params.settings,
           stylePrompt: modulation.stylePrompt,
@@ -355,22 +384,53 @@ class StudioVoiceEngine {
         });
         if (audioData) {
           await this.playAudioBytes(audioData.bytes, audioData.mimeType, modulatedVoice);
-          return { usedEngine: 'gemini-tts', spokenText: spokenText || englishSubtitle, modulation };
+          return { usedEngine: 'gemini-tts', spokenText: japaneseText, modulation };
         }
       } catch (err) {
         console.warn(
-          '[TTS] Gemini TTS unavailable, falling back to native SpeechSynthesis:',
+          '[TTS] Gemini TTS unavailable, falling back to VOICEVOX / Web Speech:',
           err
         );
       }
     }
 
-    await this.playSpeechSynthesisFallback(
-      spokenText || englishSubtitle,
-      modulatedVoice,
-      englishSubtitle
+    // 3. VOICEVOX fallback for cloud failures
+    if (!preferLocal) {
+      try {
+        const voicevoxAudio = await this.fetchVoicevoxTts(japaneseText, 8);
+        if (voicevoxAudio) {
+          await this.playAudioBytes(voicevoxAudio.bytes, voicevoxAudio.mimeType, modulatedVoice);
+          return { usedEngine: 'gemini-tts', spokenText: japaneseText, modulation };
+        }
+      } catch (err) {
+        console.warn('[TTS] VOICEVOX local TTS fallback unavailable:', err);
+      }
+    }
+
+    // High-speed natural Japanese online TTS fallback
+    try {
+      const googleAudio = await this.fetchGoogleJapaneseTts(japaneseText);
+      if (googleAudio) {
+        await this.playAudioBytes(googleAudio.bytes, googleAudio.mimeType, modulatedVoice);
+        return { usedEngine: 'gemini-tts', spokenText: japaneseText, modulation };
+      }
+    } catch (err) {
+      console.warn('[TTS] Google Japanese TTS fallback unavailable:', err);
+    }
+
+    // Local native Japanese Web Speech fallback (strictly ja-JP voices only)
+    const playedWebSpeech = await this.playSpeechSynthesisFallback(
+      japaneseText,
+      modulatedVoice
     );
-    return { usedEngine: 'web-speech', spokenText: spokenText || englishSubtitle, modulation };
+    if (playedWebSpeech) {
+      return { usedEngine: 'web-speech', spokenText: japaneseText, modulation };
+    }
+
+    // If completely offline and no Japanese voice installed on OS:
+    // Procedural lip-sync with on-screen English subtitles (NEVER speak English robot voice!)
+    this.startProceduralLipSync(Math.min(5500, Math.max(1800, japaneseText.length * 150)));
+    return { usedEngine: 'web-speech', spokenText: japaneseText, modulation };
   }
 
   private async requestSingleGeminiTts(params: {
@@ -383,6 +443,39 @@ class StudioVoiceEngine {
     | { ok: false; status: number; errBody: string }
   > {
     const { cleanApiKey, model, prompt, voiceName } = params;
+
+    // Electron desktop path: call main-process IPC proxy to bypass renderer origin & CORS limitations
+    const requestTtsIpc =
+      (typeof window !== 'undefined' &&
+        (window.studioAPI?.requestGeminiTts || window.desktopBridge?.requestGeminiTts)) ||
+      null;
+    if (requestTtsIpc) {
+      try {
+        const ipcRes = await requestTtsIpc({
+          apiKey: cleanApiKey,
+          model,
+          prompt,
+          voiceName,
+        });
+        if (ipcRes?.ok && ipcRes.base64) {
+          return {
+            ok: true,
+            bytes: decodeBase64ToUint8(ipcRes.base64),
+            mimeType: ipcRes.mimeType || 'audio/L16;rate=24000',
+          };
+        }
+        if (ipcRes?.status && ipcRes.status !== 200) {
+          return {
+            ok: false,
+            status: ipcRes.status,
+            errBody: ipcRes.errBody || 'IPC requestGeminiTts failed',
+          };
+        }
+      } catch (ipcErr) {
+        console.warn('[TTS] Main process Gemini TTS IPC error, falling back to fetch:', ipcErr);
+      }
+    }
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       model
     )}:generateContent`;
@@ -445,7 +538,7 @@ class StudioVoiceEngine {
     if (!cleanApiKey) return null;
 
     const primaryModel = settings.ttsModel.trim() || 'gemini-2.5-flash-preview-tts';
-    const prompt = `${stylePrompt}\nPerform ONLY the following quoted dialogue line:\n${spokenText}`;
+    const prompt = `${stylePrompt}\nPerform ONLY the following Japanese dialogue in authentic anime Japanese (ja-JP). Do NOT read any English translation or subtitles:\n"${spokenText}"`;
 
     const first = await this.requestSingleGeminiTts({
       cleanApiKey,
@@ -601,63 +694,155 @@ class StudioVoiceEngine {
     });
   }
 
+  private async fetchGoogleJapaneseTts(
+    spokenText: string
+  ): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+    try {
+      const clean = spokenText.slice(0, 240).trim();
+      if (!clean) return null;
+
+      // In Electron desktop app: invoke main process proxy (no CORS, works natively in packaged app)
+      const fetchTtsIpc =
+        (typeof window !== 'undefined' &&
+          (window.studioAPI?.fetchJapaneseTts || window.desktopBridge?.fetchJapaneseTts)) ||
+        null;
+      if (fetchTtsIpc) {
+        try {
+          const res = await fetchTtsIpc(clean);
+          if (res?.ok && res.base64) {
+            return {
+              bytes: decodeBase64ToUint8(res.base64),
+              mimeType: res.mimeType || 'audio/mpeg',
+            };
+          }
+        } catch (ipcErr) {
+          console.warn('[TTS] Main IPC fetchJapaneseTts failed, trying renderer fetch:', ipcErr);
+        }
+      }
+
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=ja&client=tw-ob&q=${encodeURIComponent(
+        clean
+      )}`;
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'audio/mpeg, audio/*;q=0.9',
+        },
+      });
+      if (!res.ok) return null;
+      const arrayBuffer = await res.arrayBuffer();
+      if (arrayBuffer.byteLength < 100) return null;
+      return {
+        bytes: new Uint8Array(arrayBuffer),
+        mimeType: 'audio/mpeg',
+      };
+    } catch (e) {
+      console.warn('[TTS] Google Japanese TTS stream error:', e);
+      return null;
+    }
+  }
+
+  private async fetchVoicevoxTts(
+    spokenText: string,
+    speakerId = 8
+  ): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+    try {
+      const clean = spokenText.slice(0, 240).trim();
+      if (!clean) return null;
+
+      // Electron desktop path: call main-process IPC proxy
+      const synthIpc =
+        (typeof window !== 'undefined' &&
+          (window.studioAPI?.synthesizeVoicevox || window.desktopBridge?.synthesizeVoicevox)) ||
+        null;
+      if (synthIpc) {
+        try {
+          const res = await synthIpc({ text: clean, speakerId });
+          if (res?.ok && res.base64) {
+            return {
+              bytes: decodeBase64ToUint8(res.base64),
+              mimeType: res.mimeType || 'audio/wav',
+            };
+          }
+        } catch (ipcErr) {
+          console.warn('[TTS] IPC synthesizeVoicevox error, falling back to fetch:', ipcErr);
+        }
+      }
+
+      const doFetch = async (path: string, init?: RequestInit) => {
+        try {
+          return await fetch(`http://127.0.0.1:50021${path}`, init);
+        } catch {
+          return await fetch(`http://localhost:50021${path}`, init);
+        }
+      };
+
+      const queryRes = await doFetch(
+        `/audio_query?text=${encodeURIComponent(clean)}&speaker=${speakerId}`,
+        { method: 'POST', signal: AbortSignal.timeout(3000) }
+      );
+      if (!queryRes.ok) return null;
+      const queryJson = await queryRes.json();
+      const synthRes = await doFetch(`/synthesis?speaker=${speakerId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(queryJson),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!synthRes.ok) return null;
+      const arrayBuffer = await synthRes.arrayBuffer();
+      if (arrayBuffer.byteLength < 100) return null;
+      return {
+        bytes: new Uint8Array(arrayBuffer),
+        mimeType: 'audio/wav',
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private startProceduralLipSync(durationMs = 2500): void {
+    const now = performance.now();
+    this.synthStartTime = now;
+    this.synthStartedAt = now;
+    this.synthPulseSeed = Math.random() * 10;
+    this.activeMode = 'speechsynth';
+    this.setSpeakingState(true);
+
+    window.setTimeout(() => {
+      if (this.activeMode === 'speechsynth') {
+        this.activeMode = 'none';
+        this.setSpeakingState(false);
+      }
+    }, durationMs);
+  }
+
   private async playSpeechSynthesisFallback(
     spokenText: string,
-    voice: VoiceSettings,
-    englishSubtitle?: string
-  ): Promise<void> {
-    if (!('speechSynthesis' in window)) return;
+    voice: VoiceSettings
+  ): Promise<boolean> {
+    if (!('speechSynthesis' in window)) return false;
 
     const voices = await this.waitForSpeechVoices(500);
-    const isJa = voice.language === 'ja';
     const jaMatches = voices.filter((v) => v.lang.toLowerCase().startsWith('ja'));
-    const enMatches = voices.filter((v) =>
-      /^en[-_](us|gb)/i.test(v.lang)
-    );
-    const anyEnMatches =
-      enMatches.length > 0
-        ? enMatches
-        : voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
 
-    let textToSpeak = spokenText;
-    let selectedVoice: SpeechSynthesisVoice | null = null;
-    let targetLang = isJa ? 'ja-JP' : 'en-US';
-
-    if (isJa && jaMatches.length > 0) {
-      const preferredJa =
-        voice.gender === 'female'
-          ? jaMatches.find((v) => /google\s*日本語/i.test(v.name)) ||
-            jaMatches.find((v) => /microsoft\s*nanami/i.test(v.name)) ||
-            jaMatches.find((v) => /haruka|kyoko|ayumi|sayaka|female/i.test(v.name))
-          : jaMatches.find((v) => /microsoft\s*keita/i.test(v.name)) ||
-            jaMatches.find((v) => /ichiro|otoya|male/i.test(v.name));
-      selectedVoice = preferredJa || jaMatches[0];
-      targetLang = selectedVoice.lang || 'ja-JP';
-    } else {
-      // No ja-JP voice installed (common on Windows Electron) OR English mode:
-      // Fall back to best en-US / en-GB or default system voice (voices[0]) using English subtitle text.
-      const pool = anyEnMatches.length > 0 ? anyEnMatches : voices;
-      if (pool.length > 0) {
-        const preferredEn =
-          voice.gender === 'female'
-            ? pool.find((v) => /aria|jenny|zira|samantha|google us english|natural.*female|female/i.test(v.name))
-            : pool.find((v) => /guy|david|mark|daniel|george|male/i.test(v.name));
-        selectedVoice = preferredEn || pool[0];
-        targetLang = selectedVoice.lang || 'en-US';
-      } else {
-        targetLang = 'en-US';
-      }
-
-      if (isJa && englishSubtitle && englishSubtitle.trim().length > 0) {
-        textToSpeak = englishSubtitle.trim();
-        console.info(
-          '[TTS] No ja-JP system voice found in Electron; falling back to English subtitle voice:',
-          selectedVoice?.name || targetLang
-        );
-      }
+    if (jaMatches.length === 0) {
+      // Do not speak English when Japanese voice is missing; return false so procedural lip sync runs
+      return false;
     }
 
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    const preferredJa =
+      voice.gender === 'female'
+        ? jaMatches.find((v) => /google\s*日本語/i.test(v.name)) ||
+          jaMatches.find((v) => /microsoft\s*nanami/i.test(v.name)) ||
+          jaMatches.find((v) => /haruka|kyoko|ayumi|sayaka|female/i.test(v.name))
+        : jaMatches.find((v) => /microsoft\s*keita/i.test(v.name)) ||
+          jaMatches.find((v) => /ichiro|otoya|male/i.test(v.name));
+    const selectedVoice = preferredJa || jaMatches[0];
+    const targetLang = selectedVoice.lang || 'ja-JP';
+
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = targetLang;
+    utterance.voice = selectedVoice;
     utterance.lang = targetLang;
     if (selectedVoice) {
       utterance.voice = selectedVoice;
@@ -706,6 +891,7 @@ class StudioVoiceEngine {
       window.speechSynthesis.resume();
     }
     window.speechSynthesis.speak(utterance);
+    return true;
   }
 }
 

@@ -1,11 +1,23 @@
-import type { CustomBackdropKind, VaultModelMeta, VaultVrmaMeta } from '../types/studio';
+import type {
+  AccessoryAttachTarget,
+  CustomBackdropKind,
+  VaultAccessoryMeta,
+  VaultModelMeta,
+  VaultVrmaMeta,
+} from '../types/studio';
+import {
+  detectAssetFormat,
+  extractPlayableGlbFromBuffer,
+  inferAccessoryAttachTarget,
+} from '../stage/xwearParser';
 
 const DB_NAME = 'zeta-idol-studio-model-vault';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const MODELS_STORE = 'models';
 const TEXTURES_STORE = 'textures';
 const VRMA_STORE = 'vrma_animations';
 const ENV_STORE = 'stage_environments';
+const ACCESSORIES_STORE = 'accessories';
 
 export const DEFAULT_ANIME_VRM_ID = 'default-anime-vrm-v1';
 const DEFAULT_VRM_SOURCES = [
@@ -41,6 +53,10 @@ export interface StoredEnvironmentRecord {
   createdAt: number;
 }
 
+interface StoredAccessoryRecord extends VaultAccessoryMeta {
+  buffer: ArrayBuffer;
+}
+
 function openVaultDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -58,6 +74,9 @@ function openVaultDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(ENV_STORE)) {
         db.createObjectStore(ENV_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(ACCESSORIES_STORE)) {
+        db.createObjectStore(ACCESSORIES_STORE, { keyPath: 'id' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -71,8 +90,8 @@ export async function saveModelToVault(params: {
   thumbnailDataUrl?: string | null;
   isDefaultSample?: boolean;
 }): Promise<VaultModelMeta> {
-  const lower = params.fileName.toLowerCase();
-  const format: 'vrm' | 'glb' = lower.endsWith('.vrm') ? 'vrm' : 'glb';
+  const format = detectAssetFormat(params.fileName);
+  const extracted = await extractPlayableGlbFromBuffer(params.buffer, params.fileName);
   const id =
     params.id || `mdl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -80,11 +99,11 @@ export async function saveModelToVault(params: {
     id,
     fileName: params.fileName,
     format,
-    sizeBytes: params.buffer.byteLength,
-    thumbnailDataUrl: params.thumbnailDataUrl ?? null,
+    sizeBytes: extracted.glbBuffer.byteLength,
+    thumbnailDataUrl: params.thumbnailDataUrl ?? extracted.thumbnailDataUrl ?? null,
     isDefaultSample: Boolean(params.isDefaultSample),
     createdAt: Date.now(),
-    buffer: params.buffer,
+    buffer: extracted.glbBuffer,
   };
 
   const db = await openVaultDb();
@@ -395,8 +414,123 @@ export async function getEnvironmentFromVault(
   return record ?? null;
 }
 
+export async function saveAccessoryToVault(params: {
+  fileName: string;
+  name?: string;
+  buffer: ArrayBuffer;
+  defaultTarget?: AccessoryAttachTarget;
+}): Promise<VaultAccessoryMeta> {
+  const format = detectAssetFormat(params.fileName);
+  const extracted = await extractPlayableGlbFromBuffer(params.buffer, params.fileName);
+  const cleanName =
+    params.name?.trim() ||
+    extracted.name?.trim() ||
+    params.fileName
+      .replace(/\.(xwear|xavatar|glb|vrm|vroidcustomitem)$/i, '')
+      .replace(/[_-]+/g, ' ')
+      .trim() ||
+    'Custom Accessory';
+
+  const defaultTarget =
+    params.defaultTarget ??
+    extracted.inferredTarget ??
+    inferAccessoryAttachTarget(params.fileName);
+
+  const record: StoredAccessoryRecord = {
+    id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: cleanName,
+    fileName: params.fileName,
+    format,
+    defaultTarget,
+    thumbnailDataUrl: extracted.thumbnailDataUrl,
+    sizeBytes: extracted.glbBuffer.byteLength,
+    createdAt: Date.now(),
+    buffer: extracted.glbBuffer,
+  };
+
+  const db = await openVaultDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACCESSORIES_STORE, 'readwrite');
+    tx.objectStore(ACCESSORIES_STORE).put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+
+  const { buffer: _buf, ...meta } = record;
+  return meta;
+}
+
+export async function listVaultAccessories(): Promise<VaultAccessoryMeta[]> {
+  const db = await openVaultDb();
+  const records = await new Promise<StoredAccessoryRecord[]>((resolve, reject) => {
+    const tx = db.transaction(ACCESSORIES_STORE, 'readonly');
+    const req = tx.objectStore(ACCESSORIES_STORE).getAll();
+    req.onsuccess = () => resolve((req.result as StoredAccessoryRecord[]) || []);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return records
+    .map(({ buffer: _buf, ...meta }) => meta)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function getAccessoryBuffer(
+  id: string
+): Promise<{ meta: VaultAccessoryMeta; buffer: ArrayBuffer } | null> {
+  const db = await openVaultDb();
+  const record = await new Promise<StoredAccessoryRecord | undefined>((resolve, reject) => {
+    const tx = db.transaction(ACCESSORIES_STORE, 'readonly');
+    const req = tx.objectStore(ACCESSORIES_STORE).get(id);
+    req.onsuccess = () => resolve(req.result as StoredAccessoryRecord | undefined);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  if (!record) return null;
+  const { buffer, ...meta } = record;
+  return { meta, buffer };
+}
+
+export async function deleteVaultAccessory(id: string): Promise<void> {
+  const db = await openVaultDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACCESSORIES_STORE, 'readwrite');
+    tx.objectStore(ACCESSORIES_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
+
+/**
+ * Dexie-compatible Vault Database helper for IndexedDB `zeta-idol-studio-model-vault`.
+ */
+export const vaultDB = {
+  models: {
+    toArray: () => listVaultModels(),
+    get: (id: string) => getVaultModelBuffer(id),
+    delete: (id: string) => deleteVaultModel(id),
+  },
+  textures: {
+    get: (id: string) => getTextureFromVault(id),
+    delete: (id: string) => deleteTextureFromVault(id),
+  },
+  vrma: {
+    toArray: () => listVaultVrmas(),
+    delete: (id: string) => deleteVaultVrma(id),
+  },
+  environments: {
+    get: (id: string) => getEnvironmentFromVault(id),
+  },
+  accessories: {
+    toArray: () => listVaultAccessories(),
+    get: (id: string) => getAccessoryBuffer(id),
+    delete: (id: string) => deleteVaultAccessory(id),
+  },
+};

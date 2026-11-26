@@ -569,8 +569,7 @@ export const PersonaBuilderModal: React.FC<PersonaBuilderModalProps> = ({
                   }
                   className="w-full rounded-lg border border-white/10 bg-[#121220] px-2 py-1.5 text-xs text-white"
                 >
-                  <option value="ja">Japanese Anime (日本語)</option>
-                  <option value="en">English Tsundere</option>
+                  <option value="ja">Japanese Anime (EN Subtitles)</option>
                 </select>
               </div>
               <div>

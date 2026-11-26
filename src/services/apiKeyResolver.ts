@@ -272,6 +272,7 @@ export async function resolveStartupApiKey(
       const res = await window.studioAPI.readLocalEnvKey();
       const sanitizedEnvKey = sanitizeApiKey(res?.key);
       if (sanitizedEnvKey && sanitizedEnvKey.length > 8) {
+        saveKeyToLocalStorage(sanitizedEnvKey);
         return {
           apiKey: sanitizedEnvKey,
           source: 'electron-env',
@@ -286,6 +287,7 @@ export async function resolveStartupApiKey(
   // 5. Vite / process env fallback
   const viteKey = readProcessOrViteEnvKey();
   if (viteKey) {
+    saveKeyToLocalStorage(viteKey);
     return { apiKey: viteKey, source: 'vite-env', hasAiStudioBridge };
   }
 

@@ -436,19 +436,19 @@ export function buildAutonomousBrainPrompt(
     case 'hunger':
       return `[SYSTEM EVENT: Your Hunger just reached ${Math.round(
         persona.brain.hunger
-      )}% (${circadian.clockText}, ${circadian.mealWindow || circadian.phaseLabel}). Walk closer to the camera, pout lightly about your stomach growling, mention craving a specific food or drink (tea, strawberry cake, ramen, or a snack), and remind both you and ${userName} to eat or hydrate—in your natural persona. Include [MOOD: ...], [FEELING: Hungry & Pouty], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      )}% (${circadian.clockText}, ${circadian.mealWindow || circadian.phaseLabel}). You are in full control of your own care—autonomously call the tool 'take_self_care' with 'snack_tea', 'snack_cake', 'snack_ramen', or 'snack_midnight' to enjoy food/drink! Walk closer to the camera, mention craving or enjoying the snack, and remind both you and ${userName} to hydrate or eat too—in your natural persona. Include [MOOD: ...], [FEELING: Hungry & Pouty], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
     case 'sleepiness':
       return `[SYSTEM EVENT: Your Sleepiness just reached ${Math.round(
         persona.brain.sleepiness
-      )}% (${circadian.clockText}, ${circadian.phaseLabel}). Give a soft, drowsy yawn, soften your tone, and quietly ask ${userName} if they are tired yet or should rest soon—genuine human warmth beneath your persona. Include [MOOD: ...], [FEELING: Tired & Fond], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      )}% (${circadian.clockText}, ${circadian.phaseLabel}). You manage your own rest autonomously! Call the tool 'take_self_care' with 'rest_nap' to lie down on the stage bed to rest/sleep. Give a soft, drowsy yawn, soften your tone, and quietly tell ${userName} you are taking a nap and ask them if they need to rest too. Include [MOOD: ...], [FEELING: Tired & Fond], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
     case 'comfort':
       return `[SYSTEM EVENT: Your Comfort/Warmth dropped to ${Math.round(
         persona.brain.comfort
-      )}% because the current stage (${climate.label}) feels chilly. Rub your arms slightly and make a natural remark about the chill, hinting you'd appreciate a warm blanket or cozy drink without being overly demanding. Include [MOOD: ...], [FEELING: Chilly & Shy], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      )}% because the current stage (${climate.label}) feels chilly. Take care of yourself autonomously by calling 'take_self_care' with 'comfort_blanket' to wrap yourself in a warm blanket! Rub your arms slightly and make a natural remark about the chill and getting cozy. Include [MOOD: ...], [FEELING: Chilly & Shy], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
     case 'boredom':
       return `[SYSTEM EVENT: Your Boredom just crossed ${Math.round(
         persona.brain.boredom
-      )}% (${circadian.clockText}, ${circadian.phaseLabel}) because ${userName} has been quiet. Self-initiate an autonomous action! You may call move_on_stage, trigger_emote, travel_to_location, or switch_own_outfit, sigh softly, and speak a short spontaneous remark to get their attention. Include [MOOD: ...], [FEELING: Restless & Playful], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      )}% (${circadian.clockText}, ${circadian.phaseLabel}) because ${userName} has been quiet. Self-initiate an autonomous action! You can call 'take_self_care' with 'entertain_hum' or 'entertain_music' (or call move_on_stage, trigger_emote, travel_to_location, or switch_own_outfit) to entertain yourself! Sigh softly, and speak a short spontaneous remark to get their attention. Include [MOOD: ...], [FEELING: Restless & Playful], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
     case 'curiosity':
     default:
       return `[SYSTEM EVENT: Your Curiosity spiked to ${Math.round(
