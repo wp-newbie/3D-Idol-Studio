@@ -103,7 +103,12 @@ export interface AutonomousToolCallEvent {
     | 'adjust_sleeping_position'
     | 'change_posture'
     | 'move_to_display'
-    | 'take_self_care';
+    | 'take_self_care'
+    | 'list_running_apps'
+    | 'launch_app'
+    | 'close_app'
+    | 'focus_app'
+    | 'generate_stage';
   args: Record<string, unknown>;
   summary: string;
 }

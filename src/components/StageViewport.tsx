@@ -69,6 +69,7 @@ import {
 import { AvatarPoseController } from '../stage/poseController';
 import { VrmEmotionEngine, type HumanSensationContext } from '../stage/emotionEngine';
 import { AiBrainPopover } from './AiBrainPopover';
+import { StagePainter } from './StagePainter';
 
 interface StageViewportProps {
   persona: Persona;
@@ -119,6 +120,8 @@ interface StageViewportProps {
   onSelectEnvironment: (envId: StageEnvironmentId) => void;
   onUploadCustomEnvironment: (file: File) => void;
   onClearCustomEnvironment: () => void;
+  onGenerateStage?: (prompt: string, style?: string) => void;
+  isStageGenerating?: boolean;
   onModelVaultSynced?: () => void;
   onOpenWardrobe: () => void;
   onAvatarInteraction: (zone: InteractionZone, nextMood: MoodType) => void;
@@ -451,6 +454,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onSelectEnvironment,
   onUploadCustomEnvironment,
   onClearCustomEnvironment,
+  onGenerateStage,
+  isStageGenerating,
   onModelVaultSynced,
   onOpenWardrobe,
   onAvatarInteraction,
@@ -1854,8 +1859,22 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       if (!avatarRoot) return;
       const hostVrm = currentVrmRef.current;
 
+      // Clean up any stale or vroidcustomitem mounted accessories (prevents billboard planes)
+      for (const [id, m] of mountedAccessoriesRef.current.entries()) {
+        const stillEquipped = equipped.find((a) => a.id === id && a.format !== 'vroidcustomitem');
+        if (!stillEquipped) {
+          m.wrapper.parent?.remove(m.wrapper);
+          mountedAccessoriesRef.current.delete(id);
+        }
+      }
+
       for (const acc of equipped) {
         if (cancelled) return;
+        // Texture-based VRoid Custom Items modify clothing materials directly, never render as 3D props
+        if (acc.format === 'vroidcustomitem' || acc.fileName.toLowerCase().endsWith('.vroidcustomitem')) {
+          continue;
+        }
+
         let entry = mountedAccessoriesRef.current.get(acc.id);
 
         if (!entry) {
@@ -2805,6 +2824,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
                 </button>
               </div>
             )}
+
+            <StagePainter
+              isGenerating={Boolean(isStageGenerating)}
+              onGenerate={(p, s) => onGenerateStage?.(p, s)}
+            />
 
             <input
               ref={envInputRef}

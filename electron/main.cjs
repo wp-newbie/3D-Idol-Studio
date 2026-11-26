@@ -547,6 +547,9 @@ ipcMain.on('studio:windowControl', (_event, action) => {
   } else if (action === 'close') mainWindow.close();
 });
 
+// Desktop awareness and app control (see desktopControl.cjs)
+require('./desktopControl.cjs').registerDesktopControl(ipcMain);
+
 async function handleFetchJapaneseTts(_event, spokenText) {
   try {
     const text = String(spokenText || '').slice(0, 180).trim();

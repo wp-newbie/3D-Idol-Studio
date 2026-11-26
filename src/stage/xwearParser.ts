@@ -693,6 +693,7 @@ export interface ExtractedAssetResult {
   thumbnailDataUrl: string | null;
   inferredTarget?: AccessoryAttachTarget;
   name?: string;
+  isTextureMod?: boolean;
   vroidMetadata?: {
     name: string;
     category: string;
@@ -712,12 +713,12 @@ export function buildCostumeGlbFromTexture(
   mimeType = 'image/png',
   itemName = 'VRoidCustomItem'
 ): ArrayBuffer {
-  // Vertices for a wearable costume showcase quad
+  // Degenerate zero-size anchor vertices (prevents rendering flat billboard rectangles in the 3D scene)
   const positions = new Float32Array([
-    -0.28, 0.52, 0.0,
-     0.28, 0.52, 0.0,
-    -0.28, 1.28, 0.0,
-     0.28, 1.28, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
   ]);
   const normals = new Float32Array([
     0.0, 0.0, 1.0,
@@ -772,8 +773,8 @@ export function buildCostumeGlbFromTexture(
     componentType: 5126, // FLOAT
     count: 4,
     type: 'VEC3',
-    max: [0.28, 1.28, 0.0],
-    min: [-0.28, 0.52, 0.0],
+    max: [0.0, 0.0, 0.0],
+    min: [0.0, 0.0, 0.0],
   });
 
   // 2. Normals
@@ -1011,6 +1012,7 @@ export function parseVRoidCustomItemEntries(
     thumbnailDataUrl,
     inferredTarget: inferAccessoryAttachTarget(itemName),
     name: itemName,
+    isTextureMod: true,
     vroidMetadata: {
       name: itemName,
       category,
@@ -1131,4 +1133,71 @@ export async function extractPlayableGlbFromBuffer(
   throw new Error(
     `Could not find a readable 3D mesh, glTF, or VRoid custom item inside "${fileName}". If this file was exported from VRoid Studio or Blender, ensure it is exported as a standard .vrm, .glb, .xwear, or .vroidcustomitem package.`
   );
+}
+
+interface GltfJsonLite {
+  images?: Array<{ bufferView?: number; mimeType?: string }>;
+  bufferViews?: Array<{ byteOffset?: number; byteLength: number }>;
+}
+
+/** Reads the first embedded image out of a GLB (used to recover textures from legacy vault entries). */
+function readEmbeddedGlbImage(glb: ArrayBuffer): { buffer: ArrayBuffer; mime: string } | null {
+  if (glb.byteLength < 20) return null;
+  const view = new DataView(glb);
+  if (view.getUint32(0, true) !== 0x46546c67) return null;
+  let off = 12;
+  let json: GltfJsonLite | null = null;
+  let bin: Uint8Array | null = null;
+  while (off + 8 <= glb.byteLength) {
+    const len = view.getUint32(off, true);
+    const type = view.getUint32(off + 4, true);
+    const start = off + 8;
+    if (start + len > glb.byteLength) break;
+    if (type === 0x4e4f534a) {
+      json = JSON.parse(new TextDecoder().decode(new Uint8Array(glb, start, len))) as GltfJsonLite;
+    } else if (type === 0x004e4942) {
+      bin = new Uint8Array(glb, start, len);
+    }
+    off = start + len;
+  }
+  const img = json?.images?.[0];
+  if (!json || !bin || !img || typeof img.bufferView !== 'number') return null;
+  const bv = json.bufferViews?.[img.bufferView];
+  if (!bv) return null;
+  const begin = bv.byteOffset ?? 0;
+  const bytes = bin.slice(begin, begin + bv.byteLength);
+  return { buffer: bytes.buffer, mime: img.mimeType || 'image/png' };
+}
+
+export interface VroidTextureResult {
+  buffer: ArrayBuffer;
+  mime: string;
+  dataUrl: string;
+  category?: string;
+}
+
+/**
+ * Gets the outfit texture out of a VRoid custom item, whether we are given the original
+ * .vroidcustomitem package or the placeholder GLB older vault entries were saved as.
+ */
+export async function extractVroidTexture(
+  buffer: ArrayBuffer,
+  fileName: string
+): Promise<VroidTextureResult | null> {
+  try {
+    const ex = await extractPlayableGlbFromBuffer(buffer, fileName);
+    if (ex.vroidMetadata) {
+      return {
+        buffer: ex.vroidMetadata.primaryTextureBuffer,
+        mime: ex.vroidMetadata.primaryTextureMime,
+        dataUrl: ex.vroidMetadata.primaryTextureDataUrl,
+        category: ex.vroidMetadata.category,
+      };
+    }
+    const emb = readEmbeddedGlbImage(ex.glbBuffer);
+    if (emb) return { ...emb, dataUrl: bufferToDataUrl(emb.buffer, emb.mime) };
+  } catch (err) {
+    console.warn('[XWearParser] extractVroidTexture failed:', err);
+  }
+  return null;
 }

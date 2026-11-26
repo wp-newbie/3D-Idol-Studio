@@ -31,6 +31,57 @@ const MOVE_TAG_REGEX = /\[MOVE\s*:\s*(walk|peek|sit_taskbar|approach_user)\s*\]/
 const EMOTE_TAG_REGEX = /\[(?:EMOTE|POSE)\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
 const GAZE_TAG_REGEX = /\[GAZE\s*:\s*(camera|mouse|look_away|shy_down|screen)\s*\]/gi;
 const EXPRESSION_TAG_REGEX = /\[EXPRESSION\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
+const LAUNCH_APP_TAG_REGEX = /\[LAUNCH_APP\s*:\s*([^\]]+)\]/gi;
+const CLOSE_APP_TAG_REGEX = /\[CLOSE_APP\s*:\s*([^\]]+)\]/gi;
+const FOCUS_APP_TAG_REGEX = /\[FOCUS_APP\s*:\s*([^\]]+)\]/gi;
+const LIST_APPS_TAG_REGEX = /\[LIST_APPS\]/gi;
+const GENERATE_STAGE_TAG_REGEX = /\[GENERATE_STAGE\s*:\s*([^\]]+)\]/gi;
+
+export function extractGenerateStageAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(GENERATE_STAGE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export interface DesktopAppAction {
+  type: 'launch' | 'close' | 'focus' | 'list';
+  target?: string;
+}
+
+export function extractDesktopAppActions(text: string): DesktopAppAction[] {
+  const actions: DesktopAppAction[] = [];
+  let match: RegExpExecArray | null;
+
+  const launchRegex = new RegExp(LAUNCH_APP_TAG_REGEX.source, 'gi');
+  while ((match = launchRegex.exec(text)) !== null) {
+    const target = match[1].trim();
+    if (target) actions.push({ type: 'launch', target });
+  }
+
+  const closeRegex = new RegExp(CLOSE_APP_TAG_REGEX.source, 'gi');
+  while ((match = closeRegex.exec(text)) !== null) {
+    const target = match[1].trim();
+    if (target) actions.push({ type: 'close', target });
+  }
+
+  const focusRegex = new RegExp(FOCUS_APP_TAG_REGEX.source, 'gi');
+  while ((match = focusRegex.exec(text)) !== null) {
+    const target = match[1].trim();
+    if (target) actions.push({ type: 'focus', target });
+  }
+
+  const listRegex = new RegExp(LIST_APPS_TAG_REGEX.source, 'gi');
+  while ((match = listRegex.exec(text)) !== null) {
+    actions.push({ type: 'list' });
+  }
+
+  return actions;
+}
 
 export interface WardrobeOutfitAction {
   slotTarget: string;
@@ -239,6 +290,11 @@ export function stripHiddenTags(text: string): string {
     .replace(EMOTE_TAG_REGEX, '')
     .replace(GAZE_TAG_REGEX, '')
     .replace(EXPRESSION_TAG_REGEX, '')
+    .replace(LAUNCH_APP_TAG_REGEX, '')
+    .replace(CLOSE_APP_TAG_REGEX, '')
+    .replace(FOCUS_APP_TAG_REGEX, '')
+    .replace(LIST_APPS_TAG_REGEX, '')
+    .replace(GENERATE_STAGE_TAG_REGEX, '')
     .trim();
 }
 
@@ -318,6 +374,8 @@ export function parseDialogueResponse(
   poseAction: ProceduralEmoteId | null;
   gazeAction: 'camera' | 'mouse' | 'look_away' | 'shy_down' | 'screen' | null;
   expressionAction: string | null;
+  appActions: DesktopAppAction[];
+  stageAction: string | null;
 } {
   const mood = extractMoodFromText(rawText, fallbackMood);
   const affinityDelta = extractAffinityDelta(rawText);
@@ -332,6 +390,8 @@ export function parseDialogueResponse(
   const emoteAction = extractEmoteAction(rawText);
   const gazeAction = extractGazeAction(rawText);
   const expressionAction = extractExpressionAction(rawText);
+  const appActions = extractDesktopAppActions(rawText);
+  const stageAction = extractGenerateStageAction(rawText);
   const cleaned = stripHiddenTags(rawText);
   const spokenText = extractSpokenDialogue(rawText);
 
@@ -399,5 +459,7 @@ export function parseDialogueResponse(
     poseAction: emoteAction,
     gazeAction,
     expressionAction,
+    appActions,
+    stageAction,
   };
 }

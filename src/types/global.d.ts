@@ -10,6 +10,35 @@ declare global {
     getApiKey?: () => Promise<string | undefined> | string | undefined;
   }
 
+  interface RunningAppInfo {
+    id: number;
+    name: string;
+    title: string;
+    isActive?: boolean;
+  }
+
+  interface DesktopSnapshot {
+    ok: boolean;
+    error?: string;
+    activeApp?: string | null;
+    openApps?: string[];
+    nowPlaying?: { source: string; title: string; artist?: string } | null;
+    capturedAt?: number;
+  }
+
+  interface AppLaunchResult {
+    ok: boolean;
+    target?: string;
+    error?: string;
+  }
+
+  interface AppCloseResult {
+    ok: boolean;
+    target?: string;
+    killedCount?: number;
+    error?: string;
+  }
+
   interface StudioElectronAPI {
     isElectron: boolean;
     readState: () => Promise<unknown | null>;
@@ -28,6 +57,17 @@ declare global {
     setDesktopRoamMode?: (enabled: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
     setIgnoreMouseEvents?: (ignore: boolean, forward?: boolean) => void;
     getActiveWindowTitle?: () => Promise<{ appName: string | null }>;
+    listRunningApps?: (filter?: string) => Promise<{
+      ok: boolean;
+      apps: RunningAppInfo[];
+      activeApp?: string | null;
+      error?: string;
+    }>;
+    launchApp?: (target: string, args?: string[]) => Promise<AppLaunchResult>;
+    closeApp?: (appNameOrPid: string | number) => Promise<AppCloseResult>;
+    focusApp?: (appNameOrPid: string | number) => Promise<{ ok: boolean; appName?: string; error?: string }>;
+    getDesktopSnapshot?: () => Promise<DesktopSnapshot>;
+    fetchImage?: (url: string) => Promise<{ ok: boolean; base64?: string; mimeType?: string; error?: string }>;
     getSystemIdleAndFullscreenState?: () => Promise<{
       idleSeconds: number;
       isFullscreenApp: boolean;
@@ -94,6 +134,17 @@ declare global {
     ) => Promise<{ ok: boolean; enabled?: boolean; currentDisplay?: number | string | null }>;
     setClickThrough: (ignore: boolean, forward?: boolean) => void;
     getActiveWindowTitle?: () => Promise<{ appName: string | null }>;
+    listRunningApps?: (filter?: string) => Promise<{
+      ok: boolean;
+      apps: RunningAppInfo[];
+      activeApp?: string | null;
+      error?: string;
+    }>;
+    launchApp?: (target: string, args?: string[]) => Promise<AppLaunchResult>;
+    closeApp?: (appNameOrPid: string | number) => Promise<AppCloseResult>;
+    focusApp?: (appNameOrPid: string | number) => Promise<{ ok: boolean; appName?: string; error?: string }>;
+    getDesktopSnapshot?: () => Promise<DesktopSnapshot>;
+    fetchImage?: (url: string) => Promise<{ ok: boolean; base64?: string; mimeType?: string; error?: string }>;
     getDisplays?: () => Promise<{
       displays: import('./studio').DisplayInfo[];
       currentDisplayId: number | string | null;

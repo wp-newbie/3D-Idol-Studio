@@ -436,6 +436,10 @@ export async function saveAccessoryToVault(params: {
     extracted.inferredTarget ??
     inferAccessoryAttachTarget(params.fileName);
 
+  // VRoid custom items are textures, not props: keep the original package so the texture can be
+  // re-applied later (the generated placeholder GLB is only a fallback).
+  const storedBuffer = format === 'vroidcustomitem' ? params.buffer : extracted.glbBuffer;
+
   const record: StoredAccessoryRecord = {
     id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name: cleanName,
@@ -443,9 +447,9 @@ export async function saveAccessoryToVault(params: {
     format,
     defaultTarget,
     thumbnailDataUrl: extracted.thumbnailDataUrl,
-    sizeBytes: extracted.glbBuffer.byteLength,
+    sizeBytes: storedBuffer.byteLength,
     createdAt: Date.now(),
-    buffer: extracted.glbBuffer,
+    buffer: storedBuffer,
   };
 
   const db = await openVaultDb();

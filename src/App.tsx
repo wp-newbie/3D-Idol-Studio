@@ -59,8 +59,20 @@ import {
   saveModelToVault,
   saveTextureToVault,
   saveVrmaToVault,
+  getAccessoryBuffer,
 } from './storage/modelVault';
-import { extractPlayableGlbFromBuffer } from './stage/xwearParser';
+import {
+  extractPlayableGlbFromBuffer,
+  extractVroidTexture,
+  type VroidTextureResult,
+} from './stage/xwearParser';
+import {
+  buildDesktopContextNote,
+  describeDesktopSnapshot,
+  nowPlayingKey,
+  describeNowPlaying,
+} from './services/desktopContext';
+import { generateStageScenery, type StageSceneryGenParams } from './services/stageGeneratorService';
 import { resolveAiDrivenArchetype } from './services/voiceToneDirector';
 import { parseDialogueResponse } from './services/dialogueParser';
 import {
@@ -126,6 +138,7 @@ export const App: React.FC = () => {
   const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isStageGenerating, setIsStageGenerating] = useState(false);
   const [isSummarizingMemory, setIsSummarizingMemory] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastAffinityDelta, setLastAffinityDelta] = useState<number | null>(null);
@@ -180,6 +193,11 @@ export const App: React.FC = () => {
   const lastCursorActiveAtRef = useRef<number>(Date.now());
   const lastPcAppReactedRef = useRef<string | null>(null);
   const lastPcReactionAtRef = useRef<number>(0);
+  const desktopSnapshotRef = useRef<DesktopSnapshot | null>(null);
+  const lastMusicKeyRef = useRef<string | null | undefined>(undefined);
+  const lastMusicReactionAtRef = useRef<number>(0);
+  const generateStageRef = useRef<(prompt: string, style?: string) => void>(() => {});
+  const isStageGeneratingRef = useRef<boolean>(false);
   const lastUserActivityAtRef = useRef<number>(Date.now());
   const lastIdleCheckInAtRef = useRef<number>(0);
   const isGeneratingRef = useRef<boolean>(false);
@@ -717,6 +735,27 @@ export const App: React.FC = () => {
   }, []);
 
   // Build Autonomous Tool Executor for Gemini Function Calling (`move_on_stage`, `travel_to_location`, `switch_own_outfit`)
+  // Live desktop snapshot (active app, open apps, what is playing). Only polled when 👁️ is enabled.
+  const refreshDesktopSnapshot = useCallback(async (maxAgeMs = 0): Promise<DesktopSnapshot | null> => {
+    const cached = desktopSnapshotRef.current;
+    if (cached && maxAgeMs > 0 && Date.now() - (cached.capturedAt ?? 0) < maxAgeMs) return cached;
+    const api = window.studioAPI?.getDesktopSnapshot || window.desktopBridge?.getDesktopSnapshot;
+    if (!api) return cached;
+    try {
+      const snap = await Promise.race<DesktopSnapshot | null>([
+        api(),
+        new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3500)),
+      ]);
+      if (snap?.ok) {
+        desktopSnapshotRef.current = snap;
+        return snap;
+      }
+    } catch {
+      // keep last known snapshot
+    }
+    return desktopSnapshotRef.current;
+  }, []);
+
   const buildToolExecutor = useCallback((): AutonomousToolExecutor => {
     return {
       moveOnStage: ({ targetX, targetY, behavior }) => {
@@ -835,6 +874,55 @@ export const App: React.FC = () => {
         const summary = `Engaged in self-care activity "${activity}" (${reason})`;
         return summary;
       },
+      listRunningApps: () => {
+        if (!studioRef.current.settings.noticeActiveWindow) {
+          return "I can't see Producer's desktop right now because the 👁️ Notice Active Window option is off. Ask them to turn it on if they want me to look.";
+        }
+        void refreshDesktopSnapshot(0);
+        const described = describeDesktopSnapshot(desktopSnapshotRef.current);
+        setAutonomousActionToast('🖥️ Checking what is open...');
+        window.setTimeout(() => setAutonomousActionToast(null), 2500);
+        return described ? `${described}.` : 'Nothing visible on the desktop right now.';
+      },
+      launchApp: ({ target, reason }: { target: string; reason: string }) => {
+        const api = window.studioAPI || window.desktopBridge;
+        if (!api?.launchApp) return 'App launching is only available in the desktop build.';
+        setAutonomousActionToast(`🚀 Opening ${target}...`);
+        void api.launchApp(target).then((res) => {
+          setAutonomousActionToast(
+            res?.ok ? `🚀 Opened: ${target}` : `⚠️ Could not open ${target}: ${res?.error || 'unknown error'}`
+          );
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        });
+        return `Asked Windows to open ${target} (${reason})`;
+      },
+      closeApp: ({ appName, reason }: { appName: string; reason: string }) => {
+        const api = window.studioAPI || window.desktopBridge;
+        if (!api?.closeApp) return 'Closing apps is only available in the desktop build.';
+        setAutonomousActionToast(`🛑 Closing ${appName}...`);
+        void api.closeApp(appName).then((res) => {
+          setAutonomousActionToast(
+            res?.ok ? `🛑 Asked ${appName} to close` : `⚠️ Could not close ${appName}: ${res?.error || 'not found'}`
+          );
+          window.setTimeout(() => setAutonomousActionToast(null), 3500);
+        });
+        return `Asked ${appName} to close like clicking its X; it may ask to save first (${reason})`;
+      },
+      focusApp: ({ appName }: { appName: string }) => {
+        const api = window.studioAPI || window.desktopBridge;
+        if (!api?.focusApp) return 'Switching windows is only available in the desktop build.';
+        void api.focusApp(appName).then((res) => {
+          setAutonomousActionToast(
+            res?.ok ? `🔍 Switched to ${appName}` : `⚠️ No window found for ${appName}`
+          );
+          window.setTimeout(() => setAutonomousActionToast(null), 3000);
+        });
+        return `Asked Windows to bring ${appName} to the front`;
+      },
+      generateStage: ({ prompt, style }: { prompt: string; style?: string }) => {
+        generateStageRef.current(prompt, style);
+        return `Started painting a new stage backdrop: "${prompt}". It appears in a few seconds.`;
+      },
     };
   }, [
     activeDisplayTarget,
@@ -892,10 +980,17 @@ export const App: React.FC = () => {
         }
       }
 
-      const queuedHiddenNotes =
+      const pendingNotes =
         role === 'user' && persona.pendingSystemEvents?.length
           ? [...persona.pendingSystemEvents]
           : [];
+
+      // Live desktop context (opt-in via 👁️): what is in front, what is open, what is playing.
+      let desktopNote: string | null = null;
+      if (currentState.settings.noticeActiveWindow) {
+        desktopNote = buildDesktopContextNote(await refreshDesktopSnapshot(8000));
+      }
+      const queuedHiddenNotes = desktopNote ? [desktopNote, ...pendingNotes] : pendingNotes;
 
       const personaId = persona.id;
       const userEmpathyCue = role === 'user' && detectUserEmpathyCue(promptText);
@@ -1076,6 +1171,29 @@ export const App: React.FC = () => {
           const id = expressionCommandSeqRef.current++;
           setExpressionCommand({ id, expression: parsed.expressionAction });
         }
+
+        // Local-model action tags: [LAUNCH_APP: ...] [CLOSE_APP: ...] [FOCUS_APP: ...] [LIST_APPS]
+        // (skipped when the same action already ran as a Gemini tool call this turn)
+        if (parsed.appActions.length > 0) {
+          const ex = buildToolExecutor();
+          const ran = new Set(reply.toolEvents.map((ev) => ev.name));
+          for (const act of parsed.appActions.slice(0, 3)) {
+            if (act.type === 'launch' && act.target && !ran.has('launch_app')) {
+              ex.launchApp?.({ target: act.target, reason: 'asked in chat' });
+            } else if (act.type === 'close' && act.target && !ran.has('close_app')) {
+              ex.closeApp?.({ appName: act.target, reason: 'asked in chat' });
+            } else if (act.type === 'focus' && act.target && !ran.has('focus_app')) {
+              ex.focusApp?.({ appName: act.target });
+            } else if (act.type === 'list' && !ran.has('list_running_apps')) {
+              ex.listRunningApps?.({});
+            }
+          }
+        }
+
+        // AI-triggered scenery: [GENERATE_STAGE: <description>]
+        if (parsed.stageAction && !reply.toolEvents.some((ev) => ev.name === 'generate_stage')) {
+          generateStageRef.current(parsed.stageAction);
+        }
         const toolEventsMsgs: ChatMessage[] = reply.toolEvents.map((ev, idx) => ({
           id: `msg-tool-${Date.now()}-${idx}`,
           role: 'system_event',
@@ -1230,7 +1348,7 @@ export const App: React.FC = () => {
         setIsGenerating(false);
       }
     },
-    [buildToolExecutor, handleCaptureScreen, triggerMemorySummary]
+    [buildToolExecutor, handleCaptureScreen, refreshDesktopSnapshot, triggerMemorySummary]
   );
 
   const handleInspectScreen = useCallback(async () => {
@@ -1282,6 +1400,35 @@ export const App: React.FC = () => {
     const intervalId = window.setInterval(() => void poll(), 15000);
     return () => window.clearInterval(intervalId);
   }, [studio.settings.noticeActiveWindow, triggerPcContextReaction]);
+
+  // Listening along (👁️ opt-in): notice when Producer starts a new song/video and react naturally.
+  useEffect(() => {
+    if (!studio.settings.noticeActiveWindow) {
+      lastMusicKeyRef.current = undefined;
+      return;
+    }
+    const poll = async () => {
+      const snap = await refreshDesktopSnapshot(0);
+      const key = nowPlayingKey(snap);
+      const previous = lastMusicKeyRef.current;
+      lastMusicKeyRef.current = key;
+      // First observation just records what is already playing; only react to changes.
+      if (previous === undefined || !key || key === previous || !snap?.nowPlaying) return;
+
+      const now = Date.now();
+      if (now - lastMusicReactionAtRef.current < 180000) return;
+      if (isGeneratingRef.current || now - lastUserActivityAtRef.current < 20000) return;
+      lastMusicReactionAtRef.current = now;
+
+      const userName = studioRef.current.settings.userName.trim() || 'Producer';
+      void runAiTurn(
+        `[Context: ${userName} just started listening to ${describeNowPlaying(snap.nowPlaying)}. React naturally in your own words: a short comment, humming along, or a question. Don't repeat yourself.]`,
+        'system_event'
+      );
+    };
+    const intervalId = window.setInterval(() => void poll(), 20000);
+    return () => window.clearInterval(intervalId);
+  }, [studio.settings.noticeActiveWindow, refreshDesktopSnapshot, runAiTurn]);
 
   // === Autonomous Idle Check-Ins & Break Reminders (⏰) ===
   const triggerIdleCheckIn = useCallback(
@@ -1919,6 +2066,14 @@ export const App: React.FC = () => {
     meta: VaultAccessoryMeta,
     attachTarget?: AccessoryAttachTarget
   ) => {
+    // VRoid custom items are outfit textures, not 3D props: apply them to the matching clothing piece.
+    if (meta.format === 'vroidcustomitem' || /\.vroidcustomitem$/i.test(meta.fileName)) {
+      void (async () => {
+        const rec = await getAccessoryBuffer(meta.id);
+        if (rec) await applyVroidBuffer(rec.buffer, meta.fileName, meta.name);
+      })();
+      return;
+    }
     const target = attachTarget ?? meta.defaultTarget;
     const equipped: EquippedAccessory = {
       id: `eq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -2105,39 +2260,11 @@ export const App: React.FC = () => {
 
     if (isVroid) {
       void (async () => {
-        try {
-          const buffer = await file.arrayBuffer();
-          const extracted = await extractPlayableGlbFromBuffer(buffer, file.name);
-          const dataUrl =
-            extracted.vroidMetadata?.primaryTextureDataUrl || extracted.thumbnailDataUrl;
-          if (dataUrl) {
-            const savedTex = await saveTextureToVault({
-              fileName: `${file.name.replace(/\.[^.]+$/, '')}_texture.png`,
-              mimeType: extracted.vroidMetadata?.primaryTextureMime || 'image/png',
-              dataUrl,
-              sizeBytes: extracted.vroidMetadata?.primaryTextureBuffer.byteLength || file.size,
-            });
-
-            updateActiveSlot((slot) => ({
-              ...slot,
-              materialMods: {
-                ...slot.materialMods,
-                [meshName]: {
-                  ...slot.materialMods[meshName],
-                  textureVaultId: savedTex.id,
-                  textureDataUrl: dataUrl,
-                  textureFileName: file.name,
-                },
-              },
-            }));
-            triggerOutfitReaction(
-              activeSlot.name,
-              `extracted and applied VRoid custom outfit texture "${file.name}" onto ${pieceName}`
-            );
-            return;
-          }
-        } catch (err) {
-          console.warn('Failed to extract texture from vroidcustomitem in texture uploader:', err);
+        const tex = await extractVroidTexture(await file.arrayBuffer(), file.name);
+        if (tex) {
+          await applyVroidTexture(meshName, pieceName, tex, file.name);
+        } else {
+          setApiErrorToast(`Could not read an outfit texture from "${file.name}".`);
         }
       })();
       return;
@@ -2201,6 +2328,108 @@ export const App: React.FC = () => {
     await deleteVaultVrma(id);
     setVaultVrmas(await listVaultVrmas());
   };
+
+  const applyVroidTexture = async (
+    meshName: string,
+    pieceName: string,
+    tex: VroidTextureResult,
+    fileName: string
+  ) => {
+    const savedTex = await saveTextureToVault({
+      fileName: `${fileName.replace(/\.[^.]+$/, '')}_texture.png`,
+      mimeType: tex.mime,
+      dataUrl: tex.dataUrl,
+      sizeBytes: tex.buffer.byteLength,
+    });
+    updateActiveSlot((slot) => ({
+      ...slot,
+      materialMods: {
+        ...slot.materialMods,
+        [meshName]: {
+          ...slot.materialMods[meshName],
+          textureVaultId: savedTex.id,
+          textureDataUrl: tex.dataUrl,
+          textureFileName: fileName,
+        },
+      },
+    }));
+    setAutonomousActionToast(`👗 Applied "${fileName}" to ${pieceName}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    triggerOutfitReaction(
+      activeSlot.name,
+      `applied VRoid custom outfit texture "${fileName}" onto ${pieceName}`
+    );
+  };
+
+  const pickMeshForVroidItem = (
+    category: string | undefined,
+    label: string
+  ): MeshDescriptor | undefined => {
+    const hay = `${category || ''} ${label}`.toLowerCase();
+    const meshes = detectedMeshesRef.current;
+    const named = (m: MeshDescriptor, re: RegExp) => re.test(`${m.name} ${m.label}`);
+    if (/shoe|boot|foot|sneaker|sock/.test(hay)) {
+      return meshes.find((m) => m.category === 'Footwear' || named(m, /shoe|boot|foot/i));
+    }
+    if (/hair|bang|ahoge/.test(hay)) {
+      return meshes.find((m) => m.category === 'Hair' || named(m, /hair/i));
+    }
+    if (/bottom|skirt|pant|short/.test(hay)) {
+      return meshes.find((m) => m.category === 'Bottoms' || named(m, /bottom|skirt/i));
+    }
+    if (/dress|onepiece|gown|top|shirt|jacket|hoodie|coat|sweater/.test(hay)) {
+      return meshes.find((m) => m.category === 'Tops' || named(m, /top|dress|cloth|shirt/i));
+    }
+    return undefined;
+  };
+
+  const applyVroidBuffer = async (buffer: ArrayBuffer, fileName: string, label: string) => {
+    const tex = await extractVroidTexture(buffer, fileName);
+    if (!tex) {
+      setApiErrorToast(`Could not read an outfit texture from "${fileName}".`);
+      return;
+    }
+    const mesh = pickMeshForVroidItem(tex.category, `${label} ${fileName}`);
+    if (!mesh) {
+      setApiErrorToast(
+        `"${label}" is an outfit texture (not a 3D prop). I couldn't tell which clothing piece it belongs to. Open Wardrobe, pick the piece, then Upload texture.`
+      );
+      return;
+    }
+    await applyVroidTexture(mesh.name, mesh.label, tex, fileName);
+  };
+
+  const handleGenerateStage = async (prompt: string, style?: string) => {
+    const clean = prompt.trim();
+    if (!clean) return;
+    if (isStageGeneratingRef.current) {
+      setAutonomousActionToast('🎨 Already painting a stage, one moment...');
+      window.setTimeout(() => setAutonomousActionToast(null), 2500);
+      return;
+    }
+    isStageGeneratingRef.current = true;
+    setIsStageGenerating(true);
+    setAutonomousActionToast('🎨 Painting a new stage...');
+    try {
+      const res = await generateStageScenery({
+        prompt: clean,
+        style: style as StageSceneryGenParams['style'],
+        apiKey: resolveEffectiveApiKey(studioRef.current.settings),
+      });
+      if (res.ok && res.environment) {
+        const env = res.environment;
+        updateActivePersona((p) => ({ ...p, customEnvironment: env, updatedAt: Date.now() }));
+        setAutonomousActionToast(`🎨 New stage ready: ${clean.slice(0, 48)}`);
+      } else {
+        setAutonomousActionToast(`⚠️ Stage painting failed: ${res.error || 'unknown error'}`);
+      }
+    } finally {
+      isStageGeneratingRef.current = false;
+      setIsStageGenerating(false);
+      window.setTimeout(() => setAutonomousActionToast(null), 4000);
+    }
+  };
+  generateStageRef.current = (p, s) => void handleGenerateStage(p, s);
 
   const handleSelectEnvironment = (stageEnvironment: StageEnvironmentId) => {
     updateActivePersona((p) => ({
@@ -2713,6 +2942,8 @@ export const App: React.FC = () => {
             onDeleteVrma={(id) => void handleDeleteVrma(id)}
             onSelectEnvironment={handleSelectEnvironment}
             onUploadCustomEnvironment={(file) => void handleUploadCustomEnvironment(file)}
+            onGenerateStage={(p, s) => void handleGenerateStage(p, s)}
+            isStageGenerating={isStageGenerating}
             onClearCustomEnvironment={handleClearCustomEnvironment}
             onModelVaultSynced={() => {
               void listVaultModels().then((models) => setVaultModels(models));
