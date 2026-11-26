@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
 import type { MoodType, RoamBehavior, RoamCommand } from '../types/studio';
 import type { EmotionBodyLanguage } from './emotionEngine';
+import { applyNaturalArms, DEFAULT_NATURAL_ARMS } from './naturalArmPose';
 
 export interface RoamFrameStatus {
   normX: number;
@@ -53,6 +54,15 @@ const TRACKED_BONES: TrackedBone[] = [
   'leftLowerLeg',
   'rightLowerLeg',
 ];
+
+const NATURAL_ARM_BONES = new Set<TrackedBone>([
+  'leftUpperArm',
+  'rightUpperArm',
+  'leftLowerArm',
+  'rightLowerArm',
+  'leftHand',
+  'rightHand',
+]);
 
 /**
  * Self-Directed Full-Screen Desktop Widget & Stage Roaming Controller.
@@ -606,8 +616,24 @@ export class AutonomousRoamController {
         targets.spine.z = leanDir * 0.16;
       }
 
+      // Relaxed idle arms are solved from character-frame directions (same result on VRM 0.x and 1.0,
+      // no stray roll). Every other arm behaviour (dance, walk swing, crossed arms, sitting, ...)
+      // keeps using the Euler targets above.
+      const armsBusy =
+        isMusicPlaying ||
+        this.isDragging ||
+        isMoving ||
+        this.behavior === 'sit_taskbar' ||
+        this.behavior === 'stretch_look' ||
+        (!isSleeping &&
+          (bodyLang.coldRubArms > 0.25 ||
+            this.behavior === 'crossed_arms_wait' ||
+            bodyLang.armsCrossTension > 0.35));
+      const naturalArms = !armsBusy;
+
       const boneLerp = Math.min(1, dt * (this.isDragging ? 11.0 : 6.5));
       for (const boneName of TRACKED_BONES) {
+        if (naturalArms && NATURAL_ARM_BONES.has(boneName)) continue;
         const s = this.smoothBones[boneName];
         const tgt = targets[boneName];
         s.x = THREE.MathUtils.lerp(s.x, tgt.x, boneLerp);
@@ -617,6 +643,58 @@ export class AutonomousRoamController {
         const node = vrm.humanoid.getNormalizedBoneNode(boneName as VRMHumanBoneName);
         if (node) {
           node.rotation.set(s.x, s.y, s.z);
+        }
+      }
+
+      if (naturalArms) {
+        const bone = (name: VRMHumanBoneName) => vrm.humanoid.getNormalizedBoneNode(name);
+        const lu = bone('leftUpperArm');
+        const ll = bone('leftLowerArm');
+        const lh = bone('leftHand');
+        const ru = bone('rightUpperArm');
+        const rl = bone('rightLowerArm');
+        const rh = bone('rightHand');
+        if (lu && ll && lh && ru && rl && rh) {
+          const droop = bodyLang.shoulderDroop;
+          const fidget = bodyLang.shoulderFidget;
+          applyNaturalArms(
+            [
+              {
+                upper: lu,
+                lower: ll,
+                hand: lh,
+                side: 1,
+                outwardOffset: -droop * 0.08 - armSway,
+                forwardOffset: droop * 0.15 - fidget * 0.25,
+              },
+              {
+                upper: ru,
+                lower: rl,
+                hand: rh,
+                side: -1,
+                outwardOffset: -droop * 0.08 + armSway,
+                forwardOffset: droop * 0.15 + fidget * 0.25,
+              },
+            ],
+            vrm.scene.parent,
+            DEFAULT_NATURAL_ARMS,
+            boneLerp
+          );
+          // Keep the Euler smoothing state in sync so switching back to a scripted pose never pops
+          const sync: Array<[TrackedBone, THREE.Object3D]> = [
+            ['leftUpperArm', lu],
+            ['leftLowerArm', ll],
+            ['leftHand', lh],
+            ['rightUpperArm', ru],
+            ['rightLowerArm', rl],
+            ['rightHand', rh],
+          ];
+          for (const [name, node] of sync) {
+            const s = this.smoothBones[name];
+            s.x = node.rotation.x;
+            s.y = node.rotation.y;
+            s.z = node.rotation.z;
+          }
         }
       }
     }
