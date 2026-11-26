@@ -434,26 +434,16 @@ export function buildAutonomousBrainPrompt(
 
   switch (reason) {
     case 'hunger':
-      return `[SYSTEM EVENT: Your Hunger just reached ${Math.round(
-        persona.brain.hunger
-      )}% (${circadian.clockText}, ${circadian.mealWindow || circadian.phaseLabel}). You are in full control of your own care—autonomously call the tool 'take_self_care' with 'snack_tea', 'snack_cake', 'snack_ramen', or 'snack_midnight' to enjoy food/drink! Walk closer to the camera, mention craving or enjoying the snack, and remind both you and ${userName} to hydrate or eat too—in your natural persona. Include [MOOD: ...], [FEELING: Hungry & Pouty], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      return `[Context: You're feeling a bit hungry around ${circadian.clockText}. Mention craving a snack in your natural persona.]`;
     case 'sleepiness':
-      return `[SYSTEM EVENT: Your Sleepiness just reached ${Math.round(
-        persona.brain.sleepiness
-      )}% (${circadian.clockText}, ${circadian.phaseLabel}). You manage your own rest autonomously! Call the tool 'take_self_care' with 'rest_nap' to lie down on the stage bed to rest/sleep. Give a soft, drowsy yawn, soften your tone, and quietly tell ${userName} you are taking a nap and ask them if they need to rest too. Include [MOOD: ...], [FEELING: Tired & Fond], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      return `[Context: You are feeling sleepy (${circadian.clockText}). Softly yawn and mention taking a rest in character.]`;
     case 'comfort':
-      return `[SYSTEM EVENT: Your Comfort/Warmth dropped to ${Math.round(
-        persona.brain.comfort
-      )}% because the current stage (${climate.label}) feels chilly. Take care of yourself autonomously by calling 'take_self_care' with 'comfort_blanket' to wrap yourself in a warm blanket! Rub your arms slightly and make a natural remark about the chill and getting cozy. Include [MOOD: ...], [FEELING: Chilly & Shy], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      return `[Context: The studio feels chilly (${climate.label}). Make a brief, natural remark about getting warm and cozy.]`;
     case 'boredom':
-      return `[SYSTEM EVENT: Your Boredom just crossed ${Math.round(
-        persona.brain.boredom
-      )}% (${circadian.clockText}, ${circadian.phaseLabel}) because ${userName} has been quiet. Self-initiate an autonomous action! You can call 'take_self_care' with 'entertain_hum' or 'entertain_music' (or call move_on_stage, trigger_emote, travel_to_location, or switch_own_outfit) to entertain yourself! Sigh softly, and speak a short spontaneous remark to get their attention. Include [MOOD: ...], [FEELING: Restless & Playful], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      return `[Context: Things have been quiet. Speak up playfully to get ${userName}'s attention in character.]`;
     case 'curiosity':
     default:
-      return `[SYSTEM EVENT: Your Curiosity spiked to ${Math.round(
-        persona.brain.curiosity
-      )}% (${circadian.clockText}, ${circadian.phaseLabel}). Peek closer to the camera or trigger an emote using your tools, and make a spontaneous, human observation about the time of day or what ${userName} is working on. Include [MOOD: ...], [FEELING: Curious & Fond], [INTENSITY: 0.0-1.0], and [THOUGHT: ...].]`;
+      return `[Context: It is ${circadian.clockText}. Make a casual, natural observation about what ${userName} is working on or the day.]`;
   }
 }
 
@@ -490,7 +480,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'The warm cup feels so comforting in my hands... he really noticed.',
-        prompt: `[CARE EVENT: ${userName} brought you a steaming cup of Warm Tea / Coffee! React warmly with a subtle sipping/head-nod moment, keeping your authentic personality while showing genuine human appreciation. Include [MOOD: Warm] [FEELING: Warm & Grateful] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} just brought you a warm cup of tea/coffee. React warmly and naturally in character.]`,
       };
     case 'snack_cake':
       return {
@@ -506,7 +496,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Strawberry cake?! Act cool, act cool... okay, one bite is heavenly.',
-        prompt: `[CARE EVENT: ${userName} surprised you with a slice of fresh Strawberry Cake / Pastry! React happily while trying (and failing a little) to hide how thrilled you are. Include [MOOD: Shy] [FEELING: Delighted & Flustered] [AFFINITY: +3] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} surprised you with a slice of fresh strawberry cake. React in your cute, flustered persona.]`,
       };
     case 'snack_ramen':
       return {
@@ -522,7 +512,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'A proper hot meal... I did not realize how hungry I was until now.',
-        prompt: `[CARE EVENT: ${userName} made/brought a steaming bowl of Hot Ramen / a hearty meal for both of you! React with genuine relief and warmth, reminding them to eat too. Include [MOOD: Warm] [FEELING: Full & Cozy] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} brought a hot meal/ramen for you. React with happy relief and remind them to eat too.]`,
       };
     case 'snack_midnight':
       return {
@@ -539,7 +529,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Sneaking a midnight snack together... honestly, this feels kind of special.',
-        prompt: `[CARE EVENT: ${userName} shared a secret Midnight Snack with you! React with playful, quiet late-night camaraderie—teasing them lightly about eating late while happily taking a bite. Include [MOOD: Amused] [FEELING: Conspiratorial & Cozy] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: You and ${userName} are sharing a quiet midnight snack. Say something playful and cozy in character.]`,
       };
     case 'rest_nap':
       return {
@@ -552,7 +542,7 @@ export function buildCareActivityEffect(
           isSleeping: true,
         },
         thoughtText: 'Mmm... just closing my eyes for a little while. Stay nearby, okay...?',
-        prompt: `[CARE EVENT: ${userName} told you to rest your eyes and take a peaceful nap on stage. Yawn softly, murmur a quiet, half-asleep goodnight, and drift into a gentle doze. Include [MOOD: Warm] [FEELING: Dozing Peacefully] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} told you to rest and take a peaceful nap. Yawn softly and murmur a quiet goodnight.]`,
       };
     case 'wake_up':
       return {
@@ -567,7 +557,7 @@ export function buildCareActivityEffect(
           energy: Math.min(100, b.energy + 20),
         },
         thoughtText: 'Mmm... did I really fall asleep right in front of him? Embarrassing...',
-        prompt: `[CARE EVENT: ${userName} gently woke you up from your nap! Blink drowsily, rub your eyes in embarrassment at having fallen asleep in front of them, and greet them softly. Include [MOOD: Shy] [FEELING: Sleepy & Fond] [AFFINITY: +1] [THOUGHT: ...].]`,
+        prompt: `[Context: You are waking up gently from your nap in front of ${userName}. Greet them softly.]`,
       };
     case 'entertain_hum':
       return {
@@ -582,7 +572,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Humming together like this feels effortless... I love this rhythm.',
-        prompt: `[CARE EVENT: ${userName} invited you to hum a quiet song together! Drop the boredom completely, hum a soft phrase, and share a warm, musical moment in character. Include [MOOD: Warm] [FEELING: Peaceful & Musical] [AFFINITY: +3] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} invited you to hum a quiet song together. Share a warm, musical moment.]`,
       };
     case 'entertain_rps':
       return {
@@ -597,7 +587,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Jankenpon! There is zero chance I am losing to Producer!',
-        prompt: `[CARE EVENT: ${userName} challenged you to a quick game of Rock-Paper-Scissors (Jankenpon)! Pick Rock, Paper, or Scissors playfully in character, teasing them with competitive energy. Include [MOOD: Amused] [FEELING: Competitive & Playful] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} challenged you to rock-paper-scissors (Jankenpon)! Playfully pick your move in character.]`,
       };
     case 'entertain_story':
       return {
@@ -612,7 +602,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Sharing stories when the studio is quiet is one of my favorite things.',
-        prompt: `[CARE EVENT: ${userName} asked you to share a short story or a memory from your time together. Share a heartfelt, nostalgic or amusing brief anecdote (referencing your Memory Journal if available) in character. Include [MOOD: Warm] [FEELING: Nostalgic & Fond] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} asked you to share a story or memory from your time together. Tell a brief, heartwarming anecdote.]`,
       };
     case 'entertain_music':
       return {
@@ -627,7 +617,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'Ooh, changing the stage music! Let us pick something unforgettable.',
-        prompt: `[CARE EVENT: ${userName} opened the stage audio mixer to change the music with you! React enthusiastically in character, asking what mood or beat they want to play next. Include [MOOD: Proud] [FEELING: Excited & Energetic] [AFFINITY: +2] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} opened the stage audio mixer to pick music. Ask what mood or beat they want next in character.]`,
       };
     case 'comfort_blanket':
     default:
@@ -643,7 +633,7 @@ export function buildCareActivityEffect(
           isSleeping: false,
         },
         thoughtText: 'I-It is so warm... why does he always know right when I get chilly?',
-        prompt: `[CARE EVENT: ${userName} gently draped a warm blanket over your shoulders and turned up the cozy studio light! React with a flustered, genuinely touched tsundere response as the warmth settles in. Include [MOOD: Flustered] [FEELING: Cozy & Touched] [AFFINITY: +3] [THOUGHT: ...].]`,
+        prompt: `[Context: ${userName} gently draped a warm blanket over your shoulders. React in your cozy tsundere persona.]`,
       };
   }
 }

@@ -897,43 +897,40 @@ export const App: React.FC = () => {
           ? [...persona.pendingSystemEvents]
           : [];
 
-      const outgoingMsg: ChatMessage = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        role,
-        rawText: promptText,
-        segments: [{ kind: 'dialogue', text: promptText }],
-        spokenText: '',
-        timestamp: Date.now(),
-      };
-
       const personaId = persona.id;
       const userEmpathyCue = role === 'user' && detectUserEmpathyCue(promptText);
-      const isNapPrompt = promptText.includes('take a peaceful nap');
+      const isNapPrompt = promptText.includes('nap') || promptText.includes('sleep');
 
       if (role === 'user') {
         lastUserActivityAtRef.current = Date.now();
         if (userEmpathyCue) {
           setMicroTellCommand({ id: microTellSeqRef.current++, kind: 'sigh' });
         }
-      }
 
-      setStudio((prev) => ({
-        ...prev,
-        personas: prev.personas.map((p) =>
-          p.id === personaId
-            ? {
-              ...p,
-              brain:
-                role === 'user' && p.brain.isSleeping
-                  ? { ...p.brain, isSleeping: false }
-                  : p.brain,
-              messages: [...p.messages, outgoingMsg],
-              pendingSystemEvents: role === 'user' ? [] : p.pendingSystemEvents,
-              updatedAt: Date.now(),
-            }
-            : p
-        ),
-      }));
+        const outgoingMsg: ChatMessage = {
+          id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          role: 'user',
+          rawText: promptText,
+          segments: [{ kind: 'dialogue', text: promptText }],
+          spokenText: '',
+          timestamp: Date.now(),
+        };
+
+        setStudio((prev) => ({
+          ...prev,
+          personas: prev.personas.map((p) =>
+            p.id === personaId
+              ? {
+                ...p,
+                brain: p.brain.isSleeping ? { ...p.brain, isSleeping: false } : p.brain,
+                messages: [...p.messages, outgoingMsg],
+                pendingSystemEvents: [],
+                updatedAt: Date.now(),
+              }
+              : p
+          ),
+        }));
+      }
 
       setIsGenerating(true);
 
@@ -1584,7 +1581,8 @@ export const App: React.FC = () => {
         shouldTriggerAutonomousImpulse &&
         !isGeneratingRef.current &&
         !isSpeakingRef.current &&
-        !current.settings.doNotDisturb
+        !current.settings.doNotDisturb &&
+        secondsSinceUserActivity > 45
       ) {
         triggerBrainImpulse(shouldTriggerAutonomousImpulse, false);
       } else {
@@ -1710,7 +1708,7 @@ export const App: React.FC = () => {
         hair_tug: 'playfully tugged your hair',
         outfit_tap: 'touched your outfit',
       };
-      const systemEvent = `[SYSTEM EVENT: ${userName} just ${actionMap[zone]}. React immediately in your Japanese Tsundere persona!]`;
+      const systemEvent = `[Context: ${userName} just ${actionMap[zone]}. React naturally in character.]`;
       void runAiTurn(systemEvent, 'system_event');
     },
     [runAiTurn, updateActivePersona]
@@ -1719,7 +1717,7 @@ export const App: React.FC = () => {
   const triggerOutfitReaction = useCallback(
     (outfitName: string, changeSummary: string) => {
       const userName = studioRef.current.settings.userName.trim() || 'Producer';
-      const systemEvent = `[SYSTEM EVENT: ${userName} just changed your outfit to "${outfitName}" (${changeSummary}). React immediately in Japanese Tsundere character!]`;
+      const systemEvent = `[Context: ${userName} styled you in "${outfitName}" (${changeSummary}). React naturally in character.]`;
 
       if (studioRef.current.settings.autoReactOnOutfitChange) {
         void runAiTurn(systemEvent, 'system_event');

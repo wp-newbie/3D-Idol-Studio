@@ -9,7 +9,6 @@ import {
   Send,
   Sparkles,
   Volume2,
-  Wand2,
 } from 'lucide-react';
 import type { ChatMessage, Persona } from '../types/studio';
 import { getAffinityTier, MOOD_META, VOCAL_ARCHETYPES } from '../data/presets';
@@ -257,13 +256,19 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3.5">
         {persona.messages.map((msg) => {
           if (msg.role === 'system_event') {
+            const cleanText = msg.rawText
+              .replace(/^\[(?:CARE EVENT|SYSTEM EVENT|Context):\s*/i, '')
+              .replace(/\]$/, '')
+              .replace(/\s*Include\s*\[.*\]\.?$/i, '')
+              .replace(/\s*React\s+.*$/i, '')
+              .trim();
+            if (!cleanText) return null;
             return (
-              <div
-                key={msg.id}
-                className="flex items-center gap-2 rounded-xl border border-rose-400/20 bg-rose-950/25 px-3 py-2 text-[11px] text-rose-200/85"
-              >
-                <Wand2 className="h-3.5 w-3.5 shrink-0 text-rose-300" />
-                <span className="font-mono leading-snug">{msg.rawText}</span>
+              <div key={msg.id} className="flex justify-center my-1">
+                <div className="flex items-center gap-1.5 rounded-full border border-pink-500/20 bg-pink-950/25 px-3 py-0.5 text-[10.5px] font-medium text-pink-300/80 shadow-sm">
+                  <span>✨</span>
+                  <span>{cleanText}</span>
+                </div>
               </div>
             );
           }
@@ -352,13 +357,14 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                       </div>
                     );
                   }
+                  const isEnglish = /[A-Za-z]{2,}/.test(seg.text);
                   return (
                     <div
                       key={idx}
                       className="flex items-start gap-1.5 rounded-xl border border-violet-500/20 bg-violet-950/25 px-2.5 py-1.5 text-[11px] text-violet-200"
                     >
                       <span className="shrink-0 rounded bg-violet-500/30 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-violet-300">
-                        EN SUB
+                        {isEnglish ? 'EN SUB' : 'THOUGHT'}
                       </span>
                       <span className="leading-snug">{seg.text}</span>
                     </div>

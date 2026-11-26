@@ -335,6 +335,14 @@ export function parseDialogueResponse(
   const cleaned = stripHiddenTags(rawText);
   const spokenText = extractSpokenDialogue(rawText);
 
+  // Normalize any unclosed quotes or parentheses to prevent trailing fragments
+  let normalized = cleaned;
+  if ((normalized.match(/"/g) || []).length % 2 === 1) normalized += '"';
+  if ((normalized.match(/“/g) || []).length > (normalized.match(/”/g) || []).length) normalized += '”';
+  if ((normalized.match(/「/g) || []).length > (normalized.match(/」/g) || []).length) normalized += '」';
+  if ((normalized.match(/\(/g) || []).length > (normalized.match(/\)/g) || []).length) normalized += ')';
+  if ((normalized.match(/（/g) || []).length > (normalized.match(/）/g) || []).length) normalized += '）';
+
   const segments: DialogueSegment[] = [];
   const tokenRegex =
     /(\*[^*]+\*|"[^"]+"|“[^”]+”|「[^」]+」|\([^)]+\)|（[^）]+）)/g;
@@ -342,8 +350,8 @@ export function parseDialogueResponse(
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = tokenRegex.exec(cleaned)) !== null) {
-    const preceding = cleaned.slice(lastIndex, match.index).trim();
+  while ((match = tokenRegex.exec(normalized)) !== null) {
+    const preceding = normalized.slice(lastIndex, match.index).trim();
     if (preceding) segments.push({ kind: 'action', text: preceding });
 
     const token = match[0].trim();
@@ -367,11 +375,11 @@ export function parseDialogueResponse(
     lastIndex = tokenRegex.lastIndex;
   }
 
-  const tail = cleaned.slice(lastIndex).trim();
+  const tail = normalized.slice(lastIndex).trim();
   if (tail) segments.push({ kind: 'action', text: tail });
 
-  if (segments.length === 0 && cleaned) {
-    segments.push({ kind: 'dialogue', text: cleaned });
+  if (segments.length === 0 && normalized) {
+    segments.push({ kind: 'dialogue', text: normalized });
   }
 
   return {
