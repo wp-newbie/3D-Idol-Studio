@@ -17,6 +17,7 @@ import { getAffinityTier, VOCAL_ARCHETYPES } from '../data/presets';
 import { getCircadianContext, getStageClimate } from './aiBrainService';
 import { resolveEffectiveApiKey } from './apiKeyResolver';
 import { pickContextualOfflineReply } from './offlineDemoPool';
+import { isProperBilingualReply, stripHiddenTags } from './dialogueParser';
 import {
   formatWardrobeInventoryPrompt,
   retrieveWardrobeInventory,
@@ -473,9 +474,15 @@ function buildSystemInstruction(
   const formatBlock = `COMMUNICATION STYLE (NATURAL HUMAN DIALOGUE — Speak Freely Like a Real Person):
 - Speak directly and naturally from your own first-person perspective as a real living companion talking with ${userName}.
 - DO NOT write third-person roleplay narration or asterisks describing your actions (NEVER write "*You take the warm tea...*" or "*You sit down on the taskbar*"). Your 3D avatar visually handles your movement and body language!
-- Speak in natural, expressive anime Japanese, followed by an English subtitle translation in parentheses:
-  "Natural spoken Japanese dialogue"
-  (Natural English subtitle translation)
+- OUTPUT FORMAT (STRICT, every single reply, no exceptions):
+  Line 1: what you SAY, in natural spoken Japanese (hiragana / katakana / kanji, never romaji, never English), inside straight double quotes.
+  Line 2: the English translation of exactly that line, in parentheses. This is a SUBTITLE of your words, NOT a description of what you are doing.
+  Line 3: stage tags in square brackets.
+  Correct example:
+  "ありがとう、Producerさん。このお茶、すごく落ち着く…"
+  (Thank you, Producer. This tea is really calming...)
+  [MOOD: Warm] [FEELING: Grateful & Cozy] [POSE: gentle_bow] [GAZE: camera]
+  WRONG (never do this): English words inside the quotes; parentheses that contain actions such as (sipping tea, looking up at you) or (moving to sit down).
 - Keep responses conversational, concise, and lively (1 to 2 natural sentences MAXIMUM).
 - NEVER repeat yourself or summarize multiple past events. Stay focused only on what is happening right now in this exact moment.
 - Append brief stage action tags at the very end of your response for your 3D avatar animation:
@@ -633,9 +640,10 @@ function buildFullConversationContents(
   }
 
   const combinedLatest =
-    hiddenSystemNotes.length > 0
+    (hiddenSystemNotes.length > 0
       ? `${hiddenSystemNotes.join('\n')}\n\n${latestUserPrompt}`
-      : latestUserPrompt;
+      : latestUserPrompt) +
+    '\n\n[Format reminder: "Japanese line in quotes", then (English translation of that line), then tags. Never put English inside the quotes and never describe actions in the parentheses.]';
 
   if (attachedImage) {
     turns.push({
@@ -1401,7 +1409,7 @@ export async function validateGeminiApiKey(params: {
   }
 }
 
-export async function generatePersonaReply(params: {
+async function generatePersonaReplyOnce(params: {
   persona: Persona;
   settings: StudioSettings;
   userPrompt: string;
@@ -1732,4 +1740,113 @@ export async function summarizeConversationMemories(params: {
     facts.push(`Recent studio topic with ${settings.userName}: "${lastUser}"`);
   }
   return facts.slice(0, 2);
+}
+
+const TO_ENGLISH_PROMPT =
+  "You are a subtitle translator. Translate the user's Japanese into natural English subtitle text. Output ONLY the English translation: no quotes, no notes, no Japanese.";
+
+function toJapanesePrompt(persona: Persona): string {
+  return `You are a translator for a Japanese virtual idol (${persona.name}, ${
+    persona.traits || 'proud with a secretly sweet side'
+  }). Translate the user's text into natural, expressive SPOKEN Japanese exactly as she would say it. Output ONLY the Japanese text: no quotes, no romaji, no notes, no English.`;
+}
+
+function pickSpokenText(rawText: string): string {
+  const body = stripHiddenTags(rawText).replace(/\*[^*]*\*/g, ' ');
+  const quoted: string[] = [];
+  const quoteRegex = /"([^"]+)"|“([^”]+)”|「([^」]+)」/g;
+  let m: RegExpExecArray | null;
+  while ((m = quoteRegex.exec(body)) !== null) {
+    const t = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+    if (t) quoted.push(t);
+  }
+  if (quoted.length > 0) return quoted.join(' ').replace(/\s+/g, ' ').trim();
+  return body
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/（[^）]*）/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanTranslation(text: string): string {
+  return stripHiddenTags(text || '')
+    .replace(/```[a-z]*/gi, '')
+    .replace(/["“”「」]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 260);
+}
+
+/**
+ * Fixes a reply that ignored the "Japanese + English subtitle" format (English dialogue, action
+ * text in the subtitle slot, no subtitle...). Small local models are bad at following the layout
+ * but fine at plain translation, so we take what she said and translate the missing half,
+ * then assemble the layout ourselves. Returns null when the result is not usable.
+ */
+export async function repairBilingualFormat(args: {
+  rawText: string;
+  persona: Persona;
+  settings: StudioSettings;
+  apiKey: string;
+  viaLocal: boolean;
+}): Promise<string | null> {
+  const { rawText, persona, settings, apiKey, viaLocal } = args;
+  const spoken = pickSpokenText(rawText);
+  if (!spoken) return null;
+
+  const translate = async (system: string, text: string): Promise<string> => {
+    const contents: ContentTurn[] = [{ role: 'user', parts: [{ text }] }];
+    const res = viaLocal
+      ? await callLocalLmStudioRestApi({ systemInstruction: system, contents, maxOutputTokens: 220 })
+      : await callGeminiRestApi({
+          apiKey,
+          model: settings.textModel.trim() || DEFAULT_TEXT_MODEL,
+          systemInstruction: system,
+          contents,
+          includeTools: false,
+        });
+    return cleanTranslation(res.text);
+  };
+
+  try {
+    const spokenIsJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(spoken);
+    let japanese: string;
+    let english: string;
+    if (spokenIsJapanese) {
+      japanese = cleanTranslation(spoken);
+      english = await translate(TO_ENGLISH_PROMPT, japanese);
+    } else {
+      english = cleanTranslation(spoken);
+      japanese = await translate(toJapanesePrompt(persona), english);
+    }
+    const tags = (rawText.match(/\[[A-Z_]+(?:\s*:\s*[^\]]*)?\]/g) || []).join(' ');
+    const candidate = `"${japanese}"\n(${english})${tags ? `\n${tags}` : ''}`;
+    return isProperBilingualReply(candidate) ? candidate : null;
+  } catch (err) {
+    console.warn('[Persona] Bilingual format repair failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Generates her reply. When the voice is Japanese, the reply is checked for the
+ * "Japanese in quotes + English translation in parentheses" shape and, if the model got it
+ * wrong (common with small local models), it is rewritten once before it reaches chat and TTS.
+ */
+export async function generatePersonaReply(
+  params: Parameters<typeof generatePersonaReplyOnce>[0]
+): ReturnType<typeof generatePersonaReplyOnce> {
+  const reply = await generatePersonaReplyOnce(params);
+  if (reply.isFallback || params.persona.voice.language !== 'ja') return reply;
+  if (isProperBilingualReply(reply.rawText)) return reply;
+
+  const repaired = await repairBilingualFormat({
+    rawText: reply.rawText,
+    persona: params.persona,
+    settings: params.settings,
+    apiKey: resolveEffectiveApiKey(params.settings),
+    viaLocal: reply.providerNote.startsWith('Offline Local AI'),
+  });
+  if (!repaired) return reply;
+  return { ...reply, rawText: repaired, providerNote: `${reply.providerNote} · format fixed` };
 }

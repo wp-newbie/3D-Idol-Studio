@@ -302,6 +302,28 @@ export function stripMoodTag(text: string): string {
   return stripHiddenTags(text);
 }
 
+const JAPANESE_CHAR = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/;
+
+/**
+ * True when a reply follows the "Japanese line + English subtitle in parentheses" format:
+ * the words she says (outside parentheses) contain Japanese, and there is a parenthetical that
+ * reads as English text. Used to catch models that answer in English or put stage directions in
+ * the subtitle slot.
+ */
+export function isProperBilingualReply(rawText: string): boolean {
+  const body = stripHiddenTags(rawText).replace(/\*[^*]*\*/g, ' ');
+  const outsideParens = body.replace(/\([^)]*\)/g, ' ').replace(/（[^）]*）/g, ' ');
+  if (!JAPANESE_CHAR.test(outsideParens)) return false;
+
+  const subRegex = /\(([^)]+)\)|（([^）]+)）/g;
+  let match: RegExpExecArray | null;
+  while ((match = subRegex.exec(body)) !== null) {
+    const inner = match[1] ?? match[2] ?? '';
+    if ((inner.match(/[A-Za-z]{3,}/g) || []).length >= 2) return true;
+  }
+  return false;
+}
+
 export function extractSpokenDialogue(rawText: string): string {
   const withoutTags = stripHiddenTags(rawText);
   const withoutActionsAndSubs = withoutTags
