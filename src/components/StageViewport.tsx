@@ -2930,6 +2930,14 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             <Music className="h-3.5 w-3.5" />
             Load .MP3 / .WAV Music Track
           </button>
+          <button
+            type="button"
+            onClick={() => void musicSync.playBuiltinDemoSong()}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-pink-500/35 bg-pink-500/10 py-1.5 text-xs font-semibold text-pink-200 transition hover:bg-pink-500/20 hover:border-pink-500/50"
+          >
+            <span>✨</span>
+            <span>Play Built-in Idol Demo Beat (128 BPM)</span>
+          </button>
         </div>
       )}
 

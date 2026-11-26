@@ -720,6 +720,52 @@ async function handleSynthesizeVoicevox(_event, params) {
   }
 }
 
+async function handleTranscribeAudio(_event, params) {
+  try {
+    const { base64Audio, mimeType = 'audio/webm', lang = 'ja' } = params;
+    if (!base64Audio) return { ok: false, error: 'Empty audio buffer.' };
+
+    const buffer = Buffer.from(base64Audio, 'base64');
+    const formData = new FormData();
+    const blob = new Blob([buffer], { type: mimeType });
+    formData.append('file', blob, `input.${mimeType.includes('wav') ? 'wav' : 'webm'}`);
+    formData.append('model', 'whisper-1');
+    formData.append('language', lang.startsWith('ja') ? 'ja' : 'en');
+
+    // Attempt OpenAI-compatible local Whisper endpoints (e.g. LM Studio, Faster-Whisper, Whisper.cpp)
+    const endpoints = [
+      'http://127.0.0.1:1234/v1/audio/transcriptions',
+      'http://127.0.0.1:8000/v1/audio/transcriptions',
+      'http://127.0.0.1:9000/v1/audio/transcriptions',
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          body: formData,
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.text) {
+            return { ok: true, text: json.text.trim() };
+          }
+        }
+      } catch {
+        // try next endpoint
+      }
+    }
+
+    return {
+      ok: false,
+      error: 'No local Whisper / STT server detected on http://127.0.0.1:1234 or :8000. Start a local Faster-Whisper server for 100% offline speech recognition.',
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
 // Register both studio: and desktop: channels for backwards and cross-component compatibility
 ipcMain.handle('studio:fetchJapaneseTts', handleFetchJapaneseTts);
 ipcMain.handle('desktop:fetchJapaneseTts', handleFetchJapaneseTts);
@@ -731,6 +777,8 @@ ipcMain.handle('studio:queryLocalAi', handleQueryLocalAi);
 ipcMain.handle('desktop:queryLocalAi', handleQueryLocalAi);
 ipcMain.handle('studio:synthesizeVoicevox', handleSynthesizeVoicevox);
 ipcMain.handle('desktop:synthesizeVoicevox', handleSynthesizeVoicevox);
+ipcMain.handle('studio:transcribeAudio', handleTranscribeAudio);
+ipcMain.handle('desktop:transcribeAudio', handleTranscribeAudio);
 
 app.whenReady().then(() => {
   // Allow audio/media permissions without blocking voice playback or microphone capture

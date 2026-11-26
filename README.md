@@ -138,5 +138,20 @@ F:\Personal
 
 ---
 
+## 🗺️ Roadmap & Feature Suggestions
+
+Here are the prioritized upcoming features currently planned or in development for **Zeta 3D Idol Studio**:
+
+| Status | Feature | Description |
+| :---: | :--- | :--- |
+| 🚀 **In Progress** | **🎙️ Hands-Free Voice Chat (Local STT)** | Direct hands-free voice loop using local Faster-Whisper / Web Speech API (Microphone $\rightarrow$ Local Qwen 2.5 $\rightarrow$ VOICEVOX $\rightarrow$ Real-time 3D VRM Lip-Sync) with zero typing. |
+| 🚀 **In Progress** | **💃 3D Concert & Dance Motion Player** | Dedicated concert choreography player synchronizing idol dance motions, step-touch rhythms, stage lasers, and spotlights to imported MP3/WAV tracks or built-in idol beats. |
+| 📋 **Planned** | **🧠 Long-Term Vector Memory (RAG)** | Persistent recall using `text-embedding-nomic-embed-text-v1.5` (loaded in LM Studio) so Zeta remembers past conversations, milestones, and Producer preferences across days. |
+| 📋 **Planned** | **📹 Webcam Face & Head Tracking** | Real-time gaze and head-tilt mirroring via MediaPipe Face Mesh, creating natural eye contact with the Producer as you move. |
+| 📋 **Planned** | **📡 VTuber Streaming & OBS Broadcast** | Broadcast real-time 3D VRM motion and blendshapes over UDP using the **VMC (Virtual Motion Capture)** protocol for OBS, Warudo, and live stream chat integration. |
+| 📋 **Planned** | **❤️ Producer Affection & Dynamic Routines** | Growth bond mechanics unlocking special idol poses, alternate voice tones, and dynamic time-of-day interactions (morning rehearsals, late-night chats). |
+
+---
+
 ## 📄 License
 Private & Proprietary — Zeta 3D Idol Studio.

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   checkLocalAi: () => ipcRenderer.invoke('studio:checkLocalAi'),
   queryLocalAi: (params) => ipcRenderer.invoke('studio:queryLocalAi', params),
   synthesizeVoicevox: (params) => ipcRenderer.invoke('studio:synthesizeVoicevox', params),
+  transcribeAudio: (params) => ipcRenderer.invoke('studio:transcribeAudio', params),
 });
 
 contextBridge.exposeInMainWorld('studioAPI', {
@@ -53,4 +54,5 @@ contextBridge.exposeInMainWorld('studioAPI', {
   checkLocalAi: () => ipcRenderer.invoke('studio:checkLocalAi'),
   queryLocalAi: (params) => ipcRenderer.invoke('studio:queryLocalAi', params),
   synthesizeVoicevox: (params) => ipcRenderer.invoke('studio:synthesizeVoicevox', params),
+  transcribeAudio: (params) => ipcRenderer.invoke('studio:transcribeAudio', params),
 });

@@ -67,6 +67,11 @@ declare global {
       text: string;
       speakerId?: number;
     }) => Promise<{ ok: boolean; base64?: string; mimeType?: string; error?: string }>;
+    transcribeAudio?: (params: {
+      base64Audio: string;
+      mimeType?: string;
+      lang?: string;
+    }) => Promise<{ ok: boolean; text?: string; error?: string }>;
     requestGeminiTts?: (params: {
       apiKey: string;
       model?: string;
@@ -124,6 +129,11 @@ declare global {
       text: string;
       speakerId?: number;
     }) => Promise<{ ok: boolean; base64?: string; mimeType?: string; error?: string }>;
+    transcribeAudio?: (params: {
+      base64Audio: string;
+      mimeType?: string;
+      lang?: string;
+    }) => Promise<{ ok: boolean; text?: string; error?: string }>;
     requestGeminiTts?: (params: {
       apiKey: string;
       model?: string;

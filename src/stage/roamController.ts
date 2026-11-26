@@ -437,52 +437,82 @@ export class AutonomousRoamController {
 
       const targets: Record<TrackedBone, { x: number; y: number; z: number }> = {
         hips: {
-          x: 0,
-          y: Math.sin(elapsed * 0.7) * 0.015,
-          z: bodyLang.hipWeightShift * 0.45,
+          x: isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.035 + musicBeat * 0.045) : 0,
+          y: isMusicPlaying
+            ? Math.abs(Math.sin(elapsed * 5.6)) * (0.025 + musicBeat * 0.04)
+            : Math.sin(elapsed * 0.7) * 0.015,
+          z: isMusicPlaying ? Math.sin(elapsed * 2.8) * 0.08 : bodyLang.hipWeightShift * 0.45,
         },
         spine: {
           x:
             breath * 0.012 +
             bodyLang.spineLeanX * 0.35 +
-            (isMusicPlaying ? musicBeat * 0.04 : 0),
-          y: Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.05 : 0.018),
-          z: isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.035 + musicBass * 0.05) : 0,
+            (isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0),
+          y: Math.sin(elapsed * (isMusicPlaying ? 2.8 : 0.55)) * (isMusicPlaying ? 0.08 : 0.018),
+          z: isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0,
         },
         chest: {
           x: breath * 0.015 + bodyLang.spineLeanX * 0.22,
           y: 0,
           z: 0,
         },
-        // Arms hang naturally alongside hips/ribcage with slight forward bias (never bent backwards behind torso)
+        // Arms hang naturally alongside hips, or perform live idol dance choreography when music plays
         leftUpperArm: {
-          x:
-            -0.03 -
-            bodyLang.shoulderDroop * 0.15 -
-            (isMusicPlaying ? musicBeat * 0.12 : 0) +
-            bodyLang.shoulderFidget * 0.25,
+          x: isMusicPlaying
+            ? -0.15 - musicBeat * 0.18
+            : -0.03 -
+              bodyLang.shoulderDroop * 0.15 +
+              bodyLang.shoulderFidget * 0.25,
           y: 0.02,
-          z: armSign * (1.22 + bodyLang.shoulderDroop * 0.25 + armSway),
+          z: isMusicPlaying
+            ? armSign * (0.95 - Math.sin(elapsed * 2.8) * 0.22)
+            : armSign * (1.22 + bodyLang.shoulderDroop * 0.25 + armSway),
         },
         rightUpperArm: {
-          x:
-            -0.03 -
-            bodyLang.shoulderDroop * 0.15 -
-            (isMusicPlaying ? musicBeat * 0.12 : 0) -
-            bodyLang.shoulderFidget * 0.25,
+          x: isMusicPlaying
+            ? -0.28 - musicBeat * 0.25
+            : -0.03 -
+              bodyLang.shoulderDroop * 0.15 -
+              bodyLang.shoulderFidget * 0.25,
           y: -0.02,
-          z: -armSign * (1.22 + bodyLang.shoulderDroop * 0.25 - armSway),
+          z: isMusicPlaying
+            ? -armSign * (0.75 + Math.sin(elapsed * 2.8) * 0.35)
+            : -armSign * (1.22 + bodyLang.shoulderDroop * 0.25 - armSway),
         },
-        // Forearms rest with gentle natural elbow flexion forward into +Z
-        leftLowerArm: { x: 0.10, y: -0.16, z: armSign * 0.04 },
-        rightLowerArm: { x: 0.10, y: 0.16, z: -armSign * 0.04 },
+        // Forearms: gentle natural elbow flexion, or rhythmic idol pumps during concert music
+        leftLowerArm: {
+          x: 0.10,
+          y: isMusicPlaying ? 0.35 + Math.sin(elapsed * 1.4) * 0.20 : -0.16,
+          z: armSign * 0.04,
+        },
+        rightLowerArm: {
+          x: 0.10,
+          y: isMusicPlaying ? -0.45 - Math.sin(elapsed * 2.8) * 0.32 : 0.16,
+          z: -armSign * 0.04,
+        },
         // Relaxed natural hands resting alongside thighs
         leftHand: { x: 0.04, y: -0.04, z: armSign * 0.02 },
         rightHand: { x: 0.04, y: 0.04, z: -armSign * 0.02 },
-        leftUpperLeg: { x: 0, y: 0, z: 0 },
-        rightUpperLeg: { x: 0, y: 0, z: 0 },
-        leftLowerLeg: { x: 0, y: 0, z: 0 },
-        rightLowerLeg: { x: 0, y: 0, z: 0 },
+        leftUpperLeg: {
+          x: isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.08 + musicBeat * 0.10) : 0,
+          y: 0,
+          z: 0,
+        },
+        rightUpperLeg: {
+          x: isMusicPlaying ? -Math.sin(elapsed * 2.8) * (0.08 + musicBeat * 0.10) : 0,
+          y: 0,
+          z: 0,
+        },
+        leftLowerLeg: {
+          x: isMusicPlaying ? -Math.max(0, Math.sin(elapsed * 2.8)) * (0.16 + musicBeat * 0.14) : 0,
+          y: 0,
+          z: 0,
+        },
+        rightLowerLeg: {
+          x: isMusicPlaying ? -Math.max(0, -Math.sin(elapsed * 2.8)) * (0.16 + musicBeat * 0.14) : 0,
+          y: 0,
+          z: 0,
+        },
       };
 
       if (this.isDragging) {

@@ -39,13 +39,19 @@ class MicSpeechController {
   private analyser: AnalyserNode | null = null;
   private rafId = 0;
   private callbacks: MicCallbacks | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
 
   public isSupported(): boolean {
     const w = window as unknown as {
       SpeechRecognition?: SpeechRecognitionCtor;
       webkitSpeechRecognition?: SpeechRecognitionCtor;
     };
-    return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
+    return Boolean(
+      w.SpeechRecognition ||
+        w.webkitSpeechRecognition ||
+        (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia)
+    );
   }
 
   public getListening(): boolean {
@@ -63,10 +69,8 @@ class MicSpeechController {
     const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
 
     if (!Ctor) {
-      callbacks.onStateChange(
-        false,
-        'Browser SpeechRecognition API is unavailable in this environment.'
-      );
+      // Electron / Browser environment without Web Speech API -> Fallback to Native MediaRecorder + Local Whisper
+      await this.startMediaRecorderFallback(lang, callbacks);
       return;
     }
 
@@ -128,6 +132,93 @@ class MicSpeechController {
     }
   }
 
+  private async startMediaRecorderFallback(
+    lang: 'ja-JP' | 'en-US',
+    callbacks: MicCallbacks
+  ): Promise<void> {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        callbacks.onStateChange(false, 'Microphone capture is unavailable.');
+        return;
+      }
+
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.isListening = true;
+      this.recordedChunks = [];
+      callbacks.onStateChange(true);
+      callbacks.onInterim('🎤 Listening... (Click mic again when finished)');
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
+
+      this.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          this.recordedChunks.push(e.data);
+        }
+      };
+
+      this.mediaRecorder.onstop = async () => {
+        const chunks = [...this.recordedChunks];
+        this.recordedChunks = [];
+        this.cleanupAudio();
+        this.isListening = false;
+        callbacks.onStateChange(false);
+
+        if (chunks.length === 0) return;
+
+        callbacks.onInterim('⏳ Transcribing speech...');
+        const blob = new Blob(chunks, { type: mimeType });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = (reader.result as string)?.split(',')[1];
+          if (!base64) return;
+
+          const transcribeIpc =
+            (typeof window !== 'undefined' &&
+              (window.studioAPI?.transcribeAudio || window.desktopBridge?.transcribeAudio)) ||
+            null;
+
+          if (transcribeIpc) {
+            try {
+              const res = await transcribeIpc({
+                base64Audio: base64,
+                mimeType,
+                lang: lang.startsWith('ja') ? 'ja' : 'en',
+              });
+              if (res?.ok && res.text) {
+                callbacks.onFinal(res.text.trim());
+                return;
+              }
+              if (res?.error) {
+                callbacks.onStateChange(false, res.error);
+                return;
+              }
+            } catch {
+              // fallback
+            }
+          }
+
+          callbacks.onStateChange(
+            false,
+            'Local Whisper STT not running. Start a Faster-Whisper server on port 1234 or 8000 for offline voice recognition.'
+          );
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      this.mediaRecorder.start(250);
+      void this.startWaveformMeter();
+    } catch (err) {
+      this.stop();
+      callbacks.onStateChange(
+        false,
+        err instanceof Error ? err.message : 'Unable to access microphone'
+      );
+    }
+  }
+
   public stop(): void {
     if (this.recognition) {
       try {
@@ -136,6 +227,14 @@ class MicSpeechController {
         // ignore
       }
       this.recognition = null;
+    }
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try {
+        this.mediaRecorder.stop();
+      } catch {
+        // ignore
+      }
+      this.mediaRecorder = null;
     }
     this.cleanupAudio();
     if (this.isListening) {
