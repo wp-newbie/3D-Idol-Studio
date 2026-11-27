@@ -58,13 +58,20 @@ export function applyVrmAppearanceVariant(params: {
 }): void {
   const { vrm, avatarRoot, variant } = params;
 
-  // 1. Maintain natural, consistent human body proportions like a normal person changing clothes
-  //    (always aligned with chairs, desks, and dining tables — zero shrinking/stretching!)
-  avatarRoot.scale.setScalar(1.0);
+  // 1. Apply dynamic AI-generated VRM body & head proportions (unlocked; cleanly resets to 1.0 when variant is null)
+  const bodyScale =
+    variant && typeof variant.bodyScale === 'number' && Number.isFinite(variant.bodyScale)
+      ? Math.max(0.5, variant.bodyScale)
+      : 1.0;
+  avatarRoot.scale.setScalar(bodyScale);
 
   const headBone = vrm?.humanoid?.getRawBoneNode('head');
   if (headBone) {
-    headBone.scale.setScalar(1.0);
+    const headScale =
+      variant && typeof variant.headScale === 'number' && Number.isFinite(variant.headScale)
+        ? Math.max(0.5, variant.headScale)
+        : 1.0;
+    headBone.scale.setScalar(headScale);
   }
   enforceCanonicalBoneScales(vrm);
 

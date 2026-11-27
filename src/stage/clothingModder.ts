@@ -129,6 +129,9 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
       /jeans/i,
       /culottes?/i,
       /pleat/i,
+      /underwear/i,
+      /panties/i,
+      /lingerie/i,
     ],
   },
   {
@@ -619,6 +622,37 @@ export function applyOutfitModsToScene(params: {
         map?: THREE.Texture | null;
         needsUpdate: boolean;
       };
+
+      // NEVER apply outfit recoloring or clothing textures to core skin, face, eyes, brows, lashes,
+      // mouth, teeth, or hair slots on multi-material body meshes (preserves VRM skin/eye/hair integrity!)
+      const isProtectedHairSlot = matCategory === 'Hair' && (mats.length > 1 || hasSkinMat || Boolean(mod?.textureDataUrl || mod?.textureVaultId));
+      if (isSkinOrFace || isProtectedHairSlot) {
+        const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
+        if (isSkinMat && cyclingShorts && snap.map) {
+          const shortsTex = getCyclingShortsTexture(snap.map);
+          if (shortsTex) {
+            anyMat.map = shortsTex;
+            anyMat.needsUpdate = true;
+          } else if (snap.map.image instanceof HTMLImageElement && !snap.map.image.complete) {
+            snap.map.image.addEventListener(
+              'load',
+              () => {
+                const loadedTex = getCyclingShortsTexture(snap.map!);
+                if (loadedTex) {
+                  anyMat.map = loadedTex;
+                  anyMat.needsUpdate = true;
+                  onTextureLoaded?.();
+                }
+              },
+              { once: true }
+            );
+          }
+        } else if (isSkinOrFace && anyMat.map !== snap.map) {
+          anyMat.map = snap.map;
+          anyMat.needsUpdate = true;
+        }
+        continue;
+      }
 
       if (mod?.colorHex) {
         const tint = new THREE.Color(mod.colorHex);
