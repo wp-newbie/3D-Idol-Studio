@@ -973,7 +973,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                               ✨ Active AI VRM: <strong>{activeSlot.vrmVariant.variantName}</strong>
                             </span>
                             <span className="font-mono text-[9px] text-cyan-200/80">
-                              Height {Math.round((activeSlot.vrmVariant.bodyScale || 1) * 100)}%
+                              Natural Proportions
                             </span>
                           </div>
                         )}
@@ -1016,7 +1016,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                           </div>
                         )}
                         <div className="text-[9.5px] text-zinc-400">
-                          Base VRM: <span className="text-cyan-200">{activeVrm?.label}</span> · Click <strong>AI Generate VRM Type</strong> anytime to morph proportions, eyes, hair &amp; sculpted 3D outfit!
+                          Base VRM: <span className="text-cyan-200">{activeVrm?.label}</span> · Click <strong>Think &amp; Generate VRM</strong> anytime to style eyes, hair &amp; sculpted 3D outfit!
                         </div>
                       </div>
                     );

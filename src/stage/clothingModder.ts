@@ -620,6 +620,36 @@ export function applyOutfitModsToScene(params: {
         needsUpdate: boolean;
       };
 
+      // NEVER dye or overwrite core skin, face, or eye materials with clothing/hair materialMods
+      // (prevents merged VRoid Body meshes from tinting skin AND preserves AI VRM eye/skin tones!)
+      if (isSkinOrFace) {
+        const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
+        if (cyclingShorts && isSkinMat && snap.map) {
+          const shortsTex = getCyclingShortsTexture(snap.map);
+          if (shortsTex) {
+            anyMat.map = shortsTex;
+            anyMat.needsUpdate = true;
+          } else if (snap.map.image instanceof HTMLImageElement && !snap.map.image.complete) {
+            snap.map.image.addEventListener(
+              'load',
+              () => {
+                const loadedTex = getCyclingShortsTexture(snap.map!);
+                if (loadedTex) {
+                  anyMat.map = loadedTex;
+                  anyMat.needsUpdate = true;
+                  onTextureLoaded?.();
+                }
+              },
+              { once: true }
+            );
+          }
+        } else if (anyMat.map !== snap.map) {
+          anyMat.map = snap.map;
+          anyMat.needsUpdate = true;
+        }
+        continue;
+      }
+
       if (mod?.colorHex) {
         const tint = new THREE.Color(mod.colorHex);
         if (anyMat.color) anyMat.color.copy(tint);
