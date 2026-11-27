@@ -306,7 +306,7 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
                 {persona.name} is deciding on her own
               </div>
               <p className="text-[10.5px] text-zinc-400">
-                The 5 tiles above are live status indicators only. {persona.name} automatically picks her own meals, hobbies, school study, censored bath care, or trips based on her mood—or press the button above to let her decide right now!
+                The 6 tiles above are live status indicators only. {persona.name} automatically picks her own meals, hobbies, school study, censored bath care, gym/sports &amp; stretching, or trips based on her mood—or press the button above to let her decide right now!
               </p>
             </div>
           )}
@@ -337,6 +337,8 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
                   ? 'border-sky-400/35 bg-sky-950/25'
                   : isStudying
                   ? 'border-blue-400/35 bg-blue-950/25'
+                  : isGymSport
+                  ? 'border-emerald-400/35 bg-emerald-950/25'
                   : 'border-fuchsia-400/35 bg-fuchsia-950/25'
               }`}
             >
@@ -348,6 +350,13 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
                   <span className="flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 font-mono text-[9px] text-emerald-200">
                     <ShieldCheck className="h-2.5 w-2.5" />
                     SFW Censored
+                  </span>
+                )}
+                {isGymSport && (
+                  <span className="rounded-full border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 text-[9px] font-semibold text-emerald-200">
+                    {lifeScene.hobby.hobbyKind === 'stretching'
+                      ? 'AI Stretching'
+                      : 'Gym & Sports'}
                   </span>
                 )}
               </div>
@@ -396,6 +405,7 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
           <div>• <strong>Hobby</strong>: Picks her own activity (painting, music, gaming, baking, etc.).</div>
           <div>• <strong>School</strong>: Chooses high school or college, wears her uniform, &amp; studies with pen &amp; paper.</div>
           <div>• <strong>Bath</strong>: Chooses censored shower (shampoo/soap), towel dry, or toothbrush.</div>
+          <div>• <strong>Gym</strong>: Decides on workouts (weights, treadmill), sports (basketball, tennis), or smooth full-body stretching &amp; dresses for it.</div>
           <div>• <strong>Places</strong>: Picks a mall, beach, cafe, onsen, or park &amp; dresses for it.</div>
         </div>
       </div>
