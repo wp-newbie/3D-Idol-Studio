@@ -1310,7 +1310,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               poseControllerRef.current.restoreStandingHips(vrm, dt);
             }
             if (!activeReaction && !activeEmoteRef.current) {
-              poseControllerRef.current.applyStandingFingerRelax(vrm, dt);
+              if (lifeSceneRef.current?.hobby?.hobbyKind === 'brushing_teeth') {
+                poseControllerRef.current.applyToothbrushFingerGrip(vrm, dt);
+              } else {
+                poseControllerRef.current.applyStandingFingerRelax(vrm, dt);
+              }
             }
           }
           if (nowMs - lastRoamUiReportRef.current > 85) {
@@ -1922,13 +1926,22 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             controlsRef.current.update();
           }
 
+          const fullCoverageGarment =
+            activeSlot.garmentStyle === 'beach_swimsuit' ||
+            activeSlot.garmentStyle === 'bath_wrap' ||
+            activeSlot.garmentStyle === 'cozy_pajamas' ||
+            activeSlot.garmentStyle === 'cozy_hoodie_pants' ||
+            activeSlot.garmentStyle === 'sporty_tee_leggings' ||
+            activeSlot.garmentStyle === 'trench_coat_pants' ||
+            activeSlot.garmentStyle === 'streetwear_jacket_shorts';
+
           applyOutfitModsToScene({
             root: modelRoot,
             meshVisibility: activeSlot.meshVisibility,
             materialMods: activeSlot.materialMods,
             isImportedModel: true,
             textureCache: textureCacheRef.current,
-            cyclingShorts: activeSlot.cyclingShorts ?? true,
+            cyclingShorts: fullCoverageGarment ? false : activeSlot.cyclingShorts ?? true,
             hideNativeGarment: Boolean(
               activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
             ),
@@ -2254,13 +2267,22 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     const avatarRoot = avatarRootRef.current;
     if (!avatarRoot || avatarRoot.children.length === 0) return;
 
+    const fullCoverageGarment =
+      activeSlot.garmentStyle === 'beach_swimsuit' ||
+      activeSlot.garmentStyle === 'bath_wrap' ||
+      activeSlot.garmentStyle === 'cozy_pajamas' ||
+      activeSlot.garmentStyle === 'cozy_hoodie_pants' ||
+      activeSlot.garmentStyle === 'sporty_tee_leggings' ||
+      activeSlot.garmentStyle === 'trench_coat_pants' ||
+      activeSlot.garmentStyle === 'streetwear_jacket_shorts';
+
     applyOutfitModsToScene({
       root: avatarRoot,
       meshVisibility: activeSlot.meshVisibility,
       materialMods: activeSlot.materialMods,
       isImportedModel: true,
       textureCache: textureCacheRef.current,
-      cyclingShorts: activeSlot.cyclingShorts ?? true,
+      cyclingShorts: fullCoverageGarment ? false : activeSlot.cyclingShorts ?? true,
       hideNativeGarment: Boolean(
         activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
       ),

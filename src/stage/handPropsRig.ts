@@ -160,26 +160,45 @@ function buildRightHandProp(
   }
 
   if (mode === 'brushing_teeth') {
-    const handle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.165, 0.014, 0.014),
-      new THREE.MeshStandardMaterial({ color: accentHex, roughness: 0.25 })
-    );
-    handle.position.set(s * 0.065, 0.01, 0.02);
-    const bristles = new THREE.Mesh(
-      new THREE.BoxGeometry(0.032, 0.018, 0.016),
-      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.85 })
-    );
-    bristles.position.set(s * 0.138, 0.022, 0.02);
-    const foam = new THREE.Mesh(
-      new THREE.SphereGeometry(0.016, 10, 10),
-      new THREE.MeshStandardMaterial({
-        color: '#a5f3fc',
-        emissive: '#67e8f9',
-        emissiveIntensity: 0.45,
-      })
-    );
-    foam.position.set(s * 0.14, 0.035, 0.02);
-    g.add(handle, bristles, foam);
+    // Real 3D Toothbrush gripped snugly INSIDE her closed right palm & fingers!
+    // Pivot sits at palm center; updateActivityHandProps aims local +X directly to her live 3D lips/teeth
+    // with zero-overshoot clamping and bristles facing inward toward her teeth.
+    g.userData.handRole = 'toothbrush';
+    g.position.set(s * 0.044, -0.016, 0.014);
+
+    const slideGroup = new THREE.Group();
+    slideGroup.userData.toothbrushSlide = true;
+
+    const handleMat = new THREE.MeshStandardMaterial({ color: accentHex || '#38bdf8', roughness: 0.22 });
+    const gripMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.55 });
+    const bristleMat = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.85 });
+    const foamMat = new THREE.MeshStandardMaterial({
+      color: '#cffafe',
+      emissive: '#67e8f9',
+      emissiveIntensity: 0.42,
+      roughness: 0.35,
+    });
+
+    // Sleek toothbrush handle extending from x=-0.055 (butt behind fist) to x=+0.112 (head)
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.168, 0.011, 0.013), handleMat);
+    handle.position.set(0.028, 0, 0);
+    const rubberGrip = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.0125, 0.0145), gripMat);
+    rubberGrip.position.set(-0.005, 0, 0);
+
+    // Brush head + bristles facing local +Z (oriented directly into her teeth!)
+    const bristles = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.010, 0.014), bristleMat);
+    bristles.position.set(0.102, 0, 0.011);
+
+    // Cute bubbly mint toothpaste foam cluster right on the bristles
+    const foam1 = new THREE.Mesh(new THREE.SphereGeometry(0.011, 10, 8), foamMat);
+    foam1.position.set(0.104, 0.002, 0.019);
+    const foam2 = new THREE.Mesh(new THREE.SphereGeometry(0.0075, 8, 8), foamMat);
+    foam2.position.set(0.094, -0.004, 0.017);
+    const foam3 = new THREE.Mesh(new THREE.SphereGeometry(0.0065, 8, 8), foamMat);
+    foam3.position.set(0.112, 0.005, 0.016);
+
+    slideGroup.add(handle, rubberGrip, bristles, foam1, foam2, foam3);
+    g.add(slideGroup);
     return g;
   }
 
@@ -427,8 +446,10 @@ export function updateActivityHandProps(
   elapsed: number,
   vrm?: VRM | null
 ): void {
-  if (!avatarRoot || !lifeScene?.dining) return;
-  const df = getDiningAnimationFrame(elapsed);
+  const isDining = Boolean(lifeScene?.dining);
+  const isBrushing = !isDining && lifeScene?.hobby?.hobbyKind === 'brushing_teeth';
+  if (!avatarRoot || (!isDining && !isBrushing)) return;
+  const df = isDining ? getDiningAnimationFrame(elapsed) : null;
 
   // Character-frame world transform (+X character left, +Y up, +Z forward)
   const frameObj = avatarRoot.parent || avatarRoot;
@@ -453,6 +474,57 @@ export function updateActivityHandProps(
   _plateWorldPos.set(0, 0.76, 0.42).applyQuaternion(_charWorldQ).add(frameObj.position);
 
   avatarRoot.traverse((obj) => {
+    if (isBrushing && obj.userData?.handRole === 'toothbrush' && obj.parent) {
+      obj.parent.updateWorldMatrix(true, false);
+      obj.parent.getWorldQuaternion(_handWorldQ);
+      obj.updateWorldMatrix(true, false);
+      obj.getWorldPosition(_pinchPos);
+
+      // Gentle side-to-side horizontal tooth-brushing target directly across her lips/teeth!
+      const scrubX = Math.sin(elapsed * 8.8) * 0.016;
+      const scrubY = Math.cos(elapsed * 4.4) * 0.004;
+      _aimTarget
+        .set(scrubX, scrubY, 0.008)
+        .applyQuaternion(_charWorldQ)
+        .add(_mouthWorldPos);
+
+      _aimDirX.copy(_aimTarget).sub(_pinchPos);
+      const distToMouth = _aimDirX.length();
+      if (distToMouth < 1e-4) {
+        _aimDirX.set(1, 0, -0.35).applyQuaternion(_charWorldQ).normalize();
+      } else {
+        _aimDirX.multiplyScalar(1 / distToMouth);
+      }
+      // Keep local +Y upright and local +Z (bristles) pointing straight inward toward her teeth!
+      _aimDirZ.crossVectors(_aimDirX, _worldUp);
+      if (_aimDirZ.lengthSq() < 1e-5) {
+        _aimDirZ.set(0, 0, -1).applyQuaternion(_charWorldQ);
+      } else {
+        _aimDirZ.normalize();
+      }
+      // Ensure +Z (bristle side) faces INWARD (-characterForward) toward her teeth, not out toward camera
+      const charBack = new THREE.Vector3(0, 0, -1).applyQuaternion(_charWorldQ);
+      if (_aimDirZ.dot(charBack) < 0) {
+        _aimDirZ.negate();
+      }
+      _aimDirY.crossVectors(_aimDirZ, _aimDirX).normalize();
+      _aimBasisM.makeBasis(_aimDirX, _aimDirY, _aimDirZ);
+      _aimWorldQ.setFromRotationMatrix(_aimBasisM);
+
+      _localAlignQ.copy(_handWorldQ).invert().multiply(_aimWorldQ);
+      obj.quaternion.copy(_localAlignQ);
+
+      // Zero-overshoot clamping: bristles stop cleanly RIGHT AT her lips/teeth!
+      const brushSlideOffset = Math.min(0.012, Math.max(-0.045, distToMouth - 0.112));
+      for (const child of obj.children) {
+        if (child.userData?.toothbrushSlide) {
+          child.position.x = brushSlideOffset;
+        }
+      }
+      return;
+    }
+
+    if (!df) return;
     if (obj.userData?.handRole === 'eat_chopsticks') {
       obj.visible = df.chopsticksInHand;
       if (obj.visible && obj.parent) {

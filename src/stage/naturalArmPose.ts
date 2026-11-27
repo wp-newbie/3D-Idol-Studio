@@ -1101,13 +1101,14 @@ export function applyHobbyActivityArms(
     lUp = [0.18, -0.76, 0.62];
     lLow = [-0.42, -0.24, 0.87];
   } else if (hobbyKind === 'brushing_teeth') {
-    // Right arm raised to mouth brushing vigorously side-to-side (synced with 3D toothbrush!)
-    const brush = Math.sin(elapsed * 9.5) * 0.12;
-    rUp = [-0.22, -0.34, 0.91];
-    rLow = [0.58 + brush, 0.78 + Math.cos(elapsed * 4.5) * 0.05, 0.26];
-    // Left hand rests lightly near sink counter
-    lUp = [0.18, -0.78, 0.60];
-    lLow = [-0.20, -0.18, 0.96];
+    // Natural right-hand toothbrushing: elbow tucked comfortably forward-out, hand poised right beside
+    // her mouth with gentle horizontal side-to-side brushing oscillation (synced with live mouth-aimed toothbrush!)
+    const brush = Math.sin(elapsed * 8.8) * 0.065;
+    rUp = [-0.26, -0.46, 0.85];
+    rLow = [0.40 + brush, 0.88 + Math.cos(elapsed * 4.4) * 0.035, -0.14];
+    // Left hand rests lightly & naturally near the vanity sink counter
+    lUp = [0.16, -0.84, 0.52];
+    lLow = [-0.18, -0.22, 0.95];
   } else if (hobbyKind === 'showering') {
     // Both arms raised up to hair/head, massaging shampoo into hair in alternating circular motions!
     const scrubL = Math.sin(elapsed * 5.2);
@@ -1217,5 +1218,22 @@ export function applyHobbyActivityArms(
     vrm.scene.parent,
     t
   );
+
+  if (hobbyKind === 'brushing_teeth' && b.rh) {
+    // Turn right palm naturally INWARD toward her mouth/face so fingers grip the toothbrush comfortably!
+    const frameObj = vrm.scene.parent || vrm.scene;
+    frameObj.updateWorldMatrix(true, false);
+    const frameQ = new THREE.Quaternion();
+    frameObj.getWorldQuaternion(frameQ);
+    orientHandInFrame({
+      hand: b.rh,
+      side: -1,
+      isVrm0: vrm.meta?.metaVersion === '0',
+      fingerDir: [0.70, 0.52, -0.48],
+      palmDir: [0.42, -0.22, -0.88],
+      frameQ,
+      t,
+    });
+  }
   return true;
 }

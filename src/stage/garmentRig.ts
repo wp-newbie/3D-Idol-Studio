@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
+import { MToonMaterial, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm';
 import type { GarmentStyleId } from '../types/studio';
 
 export const GARMENT_STYLE_ORDER: GarmentStyleId[] = [
@@ -104,25 +104,6 @@ const GARMENT_TAG = '__zeta_procedural_garment__';
 const textureLoader = new THREE.TextureLoader();
 const garmentTexCache = new Map<string, THREE.Texture>();
 
-// Shared soft anime cel-shading gradient map (matches VRoid MToon bright lit/shade look!)
-let sharedToonGradient: THREE.DataTexture | null = null;
-function getAnimeToonGradient(): THREE.DataTexture {
-  if (sharedToonGradient) return sharedToonGradient;
-  // 3-step bright anime ramp: soft shadow 82%, midtone 93%, full lit 100% (never muddy grey!)
-  const data = new Uint8Array([
-    210, 210, 210, 255,
-    238, 238, 238, 255,
-    255, 255, 255, 255,
-  ]);
-  const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  sharedToonGradient = tex;
-  return tex;
-}
-
 function disposeTree(root: THREE.Object3D): void {
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
@@ -149,8 +130,9 @@ function clearExistingGarments(root: THREE.Object3D): void {
 }
 
 /**
- * Bright, cohesive anime cel-shaded material that blends naturally with VRoid MToon skin & hair
- * instead of rendering as dark muddy PBR grey cylinders.
+ * True `@pixiv/three-vrm` MToonMaterial anime cel-shading!
+ * Clamps multi-light studio illumination IDENTICALLY to VRoid Studio's native MToon face/body/clothes —
+ * ZERO white overexposure blow-out and ZERO muddy PBR grey cylinders!
  */
 function makeAnimeFabricMaterial(
   colorHex: string,
@@ -163,14 +145,14 @@ function makeAnimeFabricMaterial(
     opacity?: number;
     emissiveBoost?: number;
   }
-): THREE.MeshToonMaterial {
-  const baseColor = new THREE.Color(options?.textureDataUrl ? '#ffffff' : colorHex);
-  const emissiveColor = new THREE.Color(colorHex);
-  const mat = new THREE.MeshToonMaterial({
-    color: baseColor,
-    gradientMap: getAnimeToonGradient(),
-    emissive: emissiveColor,
-    emissiveIntensity: options?.emissiveBoost ?? 0.24,
+): MToonMaterial {
+  const lit = new THREE.Color(options?.textureDataUrl ? '#ffffff' : colorHex);
+  const shade = new THREE.Color(options?.textureDataUrl ? '#dfd8e4' : colorHex).multiplyScalar(0.80);
+  const mat = new MToonMaterial({
+    color: lit,
+    shadeColorFactor: shade,
+    shadingToonyFactor: 0.72,
+    shadingShiftFactor: -0.06,
     side: options?.doubleSide ? THREE.DoubleSide : THREE.FrontSide,
     transparent: options?.transparent ?? false,
     opacity: options?.opacity ?? 1.0,
@@ -183,7 +165,6 @@ function makeAnimeFabricMaterial(
     const cached = garmentTexCache.get(key);
     if (cached) {
       mat.map = cached;
-      mat.emissiveIntensity = 0.14;
       mat.needsUpdate = true;
     } else {
       textureLoader.load(url, (tex) => {
@@ -194,7 +175,6 @@ function makeAnimeFabricMaterial(
         tex.needsUpdate = true;
         garmentTexCache.set(key, tex);
         mat.map = tex;
-        mat.emissiveIntensity = 0.14;
         mat.needsUpdate = true;
       });
     }
@@ -204,16 +184,17 @@ function makeAnimeFabricMaterial(
 }
 
 /**
- * Anime MToon-matched skin material so seamless arm/collarbone underlays match her VRoid face & legs
- * without ever blowing out to pure white!
+ * True `@pixiv/three-vrm` MToonMaterial skin shader matching VRoid Studio's native Face/Body skin
+ * under any number of studio lights — NEVER blows out to pure white!
  */
-function makeAnimeSkinMaterial(skinHex: string): THREE.MeshToonMaterial {
-  const col = new THREE.Color(skinHex);
-  return new THREE.MeshToonMaterial({
-    color: col,
-    gradientMap: getAnimeToonGradient(),
-    emissive: col,
-    emissiveIntensity: 0.06,
+function makeAnimeSkinMaterial(skinHex: string): MToonMaterial {
+  const lit = new THREE.Color(skinHex);
+  const shade = lit.clone().multiplyScalar(0.86);
+  return new MToonMaterial({
+    color: lit,
+    shadeColorFactor: shade,
+    shadingToonyFactor: 0.62,
+    shadingShiftFactor: -0.05,
     side: THREE.FrontSide,
   });
 }
@@ -476,6 +457,9 @@ function createContouredTorsoLathe(params: {
   scaleZ?: number;
   bustCenterY?: number;
   bustBoost?: number;
+  rearGluteY?: number;
+  rearGluteBoost?: number;
+  frontBellyBoost?: number;
   fwdSign?: number;
   segments?: number;
 }): THREE.BufferGeometry {
@@ -485,6 +469,9 @@ function createContouredTorsoLathe(params: {
     scaleZ = 0.78,
     bustCenterY = 0.08,
     bustBoost = 0.022,
+    rearGluteY = -0.02,
+    rearGluteBoost = 0,
+    frontBellyBoost = 0,
     fwdSign = 1,
     segments = 28,
   } = params;
@@ -500,16 +487,22 @@ function createContouredTorsoLathe(params: {
 
     let nx = x * scaleX;
     let nz = z * scaleZ;
+    const isFront = fwdSign > 0 ? z > 0 : z < 0;
+    const dirFrac = Math.min(1, Math.abs(z) / Math.max(0.02, Math.hypot(x, z)));
 
     // Gentle anime bust contour on the front side only (smooth Gaussian falloff)
-    if (bustBoost > 0) {
-      const isFront = fwdSign > 0 ? z > 0 : z < 0;
-      if (isFront) {
-        const dy = (y - bustCenterY) / 0.055;
-        const vertFactor = Math.exp(-dy * dy);
-        const frontFrac = Math.min(1, Math.abs(z) / Math.max(0.02, Math.hypot(x, z)));
-        nz += fwdSign * bustBoost * vertFactor * frontFrac;
-      }
+    if (bustBoost > 0 && isFront) {
+      const dy = (y - bustCenterY) / 0.055;
+      nz += fwdSign * bustBoost * Math.exp(-dy * dy) * dirFrac;
+    }
+    // Gentle front waist/belly ease so native VRM torso skin never clips out the front
+    if (frontBellyBoost > 0 && isFront) {
+      nz += fwdSign * frontBellyBoost * dirFrac;
+    }
+    // Smooth posterior glute/lower-back contour so buttocks & back waist never clip out the rear!
+    if (rearGluteBoost > 0 && !isFront) {
+      const dy = (y - rearGluteY) / 0.075;
+      nz -= fwdSign * rearGluteBoost * Math.exp(-dy * dy) * dirFrac;
     }
     pos.setXYZ(i, nx, y, nz);
   }
@@ -767,15 +760,23 @@ function addLegPants(params: {
 
     const upGroup = attachGroup(up, `GarmentLegUp_${s.upper}`);
     if (upGroup && up) {
+      // Smooth rounded hip cap tucked cleanly INSIDE pelvis shell (eliminates boxy flat top cylinder rims at hips!)
+      const hipBall = new THREE.Mesh(
+        new THREE.SphereGeometry(0.072 * looseFactor, 14, 12),
+        mat
+      );
+      hipBall.position.set(0, -0.015, 0);
+      upGroup.add(hipBall);
+
       const tube = createBoneSegmentTube({
         bone: up,
         childBone: low,
         fallbackDir: new THREE.Vector3(0, -1, 0),
         fallbackLen: 0.38,
-        startFrac: -0.06,
-        endFrac: shortsOnly ? 0.40 : 1.04,
-        radiusStart: 0.084 * looseFactor,
-        radiusEnd: (shortsOnly ? 0.072 : 0.058) * looseFactor,
+        startFrac: 0.02,
+        endFrac: shortsOnly ? 0.42 : 1.04,
+        radiusStart: 0.074 * looseFactor,
+        radiusEnd: (shortsOnly ? 0.070 : 0.064) * looseFactor,
         mat,
       });
       upGroup.add(tube);
@@ -786,10 +787,10 @@ function addLegPants(params: {
           childBone: low,
           fallbackDir: new THREE.Vector3(0, -1, 0),
           fallbackLen: 0.38,
-          startFrac: 0.35,
-          endFrac: 0.42,
-          radiusStart: 0.075 * looseFactor,
-          radiusEnd: 0.075 * looseFactor,
+          startFrac: 0.36,
+          endFrac: 0.43,
+          radiusStart: 0.073 * looseFactor,
+          radiusEnd: 0.073 * looseFactor,
           mat: cuffMat,
         });
         upGroup.add(hem);
@@ -801,14 +802,14 @@ function addLegPants(params: {
           childBone: low,
           fallbackDir: new THREE.Vector3(0, -1, 0),
           fallbackLen: 0.38,
-          startFrac: 0.04,
+          startFrac: 0.05,
           endFrac: 0.98,
           radiusStart: 0.011,
           radiusEnd: 0.009,
           mat: stripeMat,
           radialSegments: 8,
         });
-        stripe.position.x += s.sign * 0.064 * looseFactor;
+        stripe.position.x += s.sign * 0.068 * looseFactor;
         upGroup.add(stripe);
       }
     }
@@ -817,20 +818,48 @@ function addLegPants(params: {
       const lowGroup = attachGroup(low, `GarmentLegLow_${s.lower}`);
       if (lowGroup) {
         const kneeJoint = new THREE.Mesh(
-          new THREE.SphereGeometry(0.056 * looseFactor, 12, 10),
+          new THREE.SphereGeometry(0.064 * looseFactor, 14, 12),
           mat
         );
-        const shin = createBoneSegmentTube({
-          bone: low,
-          childBone: ft,
-          fallbackDir: new THREE.Vector3(0, -1, 0),
-          fallbackLen: 0.38,
-          startFrac: -0.04,
-          endFrac: endFracLower,
-          radiusStart: 0.058 * looseFactor,
-          radiusEnd: 0.043 * looseFactor,
-          mat,
-        });
+        // Anatomical calf-contoured lower pant leg (posterior calf bulge clearance so calves NEVER poke out the back!)
+        const segVec =
+          ft && ft.position.lengthSq() > 1e-5
+            ? ft.position.clone()
+            : new THREE.Vector3(0, -0.38, 0);
+        const totalLen = segVec.length();
+        const dir = segVec.clone().normalize();
+        const startF = -0.03;
+        const endF = endFracLower;
+        const segLen = Math.max(0.05, totalLen * (endF - startF));
+        const midDist = totalLen * ((startF + endF) * 0.5);
+
+        const shinGeo = new THREE.CylinderGeometry(
+          0.050 * looseFactor,
+          0.066 * looseFactor,
+          segLen,
+          20,
+          10,
+          false
+        );
+        const shinPos = shinGeo.attributes.position;
+        for (let vi = 0; vi < shinPos.count; vi++) {
+          const vx = shinPos.getX(vi);
+          const vy = shinPos.getY(vi);
+          const vz = shinPos.getZ(vi);
+          // t = 0 at knee (+segLen/2 after quaternion align? Note: +Y maps along `dir` = downward -> y=-segLen/2 is knee, y=+segLen/2 is ankle!)
+          const t = THREE.MathUtils.clamp((vy + segLen * 0.5) / segLen, 0, 1);
+          // Smooth calf fullness peaking around t = 0.36 down the shin!
+          const calfWave = Math.exp(-Math.pow((t - 0.36) / 0.28, 2));
+          const radScale = 1.0 + calfWave * 0.16;
+          // Shift calf vertices gently posteriorly (-fwdSign in Z) to completely clear the calf muscle
+          const backShift = -params.fwdSign * calfWave * 0.018 * looseFactor;
+          shinPos.setXYZ(vi, vx * radScale, vy, vz * radScale + backShift);
+        }
+        shinGeo.computeVertexNormals();
+
+        const shin = new THREE.Mesh(shinGeo, mat);
+        shin.position.copy(dir).multiplyScalar(midDist);
+        shin.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
         lowGroup.add(kneeJoint, shin);
 
         if (cuffMat) {
@@ -841,8 +870,8 @@ function addLegPants(params: {
             fallbackLen: 0.38,
             startFrac: Math.max(0.76, endFracLower - 0.1),
             endFrac: endFracLower + 0.02,
-            radiusStart: 0.046 * looseFactor,
-            radiusEnd: 0.043 * looseFactor,
+            radiusStart: 0.053 * looseFactor,
+            radiusEnd: 0.050 * looseFactor,
             mat: cuffMat,
           });
           lowGroup.add(cuff);
@@ -898,9 +927,11 @@ function addArmSleeves(params: {
         upG.add(tube);
 
         const cap = new THREE.Mesh(
-          new THREE.SphereGeometry(0.049 * looseFactor, 14, 12),
+          new THREE.SphereGeometry(0.043 * looseFactor, 14, 12),
           mat
         );
+        cap.scale.set(1.0, 0.85, 0.92);
+        cap.position.set(0, -0.006, 0);
         upG.add(cap);
 
         if ((mode === 'short' || mode === 'cap') && cuffMat) {
@@ -1011,45 +1042,51 @@ function addSculptedTorso(params: {
   const yWaistInChest = -metrics.yChestFromSpine * 0.45;
   const yBustInChest = yTop * 0.48;
 
-  // 1. Continuous sculpted upper-torso & waist bodice attached to `chest` (spans ALL the way down to hips + up to neckline — ZERO torso gap or rib bleed-through!)
+  // 1. Continuous sculpted upper-torso & waist bodice attached to `chest` (spans ALL the way down to hips + up to neckline — ZERO torso gap or belly/back bleed-through!)
   if (chestGroup) {
     const bodiceGeo = createContouredTorsoLathe({
       profile: [
-        [0.114 * scaleX, yBottomInChest],
-        [0.105 * scaleX, yWaistInChest],
-        [0.109 * scaleX, 0.0],
-        [0.118 * scaleX, yBustInChest],
-        [0.110 * scaleX, yTop * 0.82],
-        [necklineHeightFrac > 0.78 ? 0.092 * scaleX : 0.102 * scaleX, yTop],
+        [0.120 * scaleX, yBottomInChest],
+        [0.112 * scaleX, yWaistInChest],
+        [0.114 * scaleX, 0.0],
+        [0.121 * scaleX, yBustInChest],
+        [0.112 * scaleX, yTop * 0.82],
+        [necklineHeightFrac > 0.78 ? 0.094 * scaleX : 0.104 * scaleX, yTop],
         [necklineHeightFrac > 0.78 ? 0.064 * scaleX : 0.088 * scaleX, yTop + 0.008],
       ],
-      scaleX: 1.07,
-      scaleZ: 0.85 * scaleZ,
+      scaleX: 1.09,
+      scaleZ: 0.94 * scaleZ,
       bustCenterY: yBustInChest,
       bustBoost,
+      frontBellyBoost: 0.010,
+      rearGluteY: yBottomInChest,
+      rearGluteBoost: 0.012,
       fwdSign,
       segments: 30,
     });
     chestGroup.add(new THREE.Mesh(bodiceGeo, topMat));
   }
 
-  // 2. Sculpted pelvis / hip brief shell attached to `hips` (overlaps smoothly into waist so sitting/bending never separates!)
+  // 2. Sculpted pelvis / hip brief shell attached to `hips` (full rear-glute & side-hip wrap so skin & underwear NEVER clip through front, sides, or back!)
   if (hipsGroup) {
-    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.48;
+    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.52;
     const pelvisGeo = createContouredTorsoLathe({
       profile: [
-        [0.060 * scaleX, -0.095],
-        [0.102 * scaleX, -0.068],
-        [0.124 * scaleX, -0.025],
-        [0.122 * scaleX, 0.025],
-        [0.106 * scaleX, metrics.ySpineFromHips * 0.95],
-        [0.104 * scaleX, hipTopY],
+        [0.068 * scaleX, -0.102],
+        [0.114 * scaleX, -0.072],
+        [0.132 * scaleX, -0.025],
+        [0.128 * scaleX, 0.025],
+        [0.116 * scaleX, metrics.ySpineFromHips * 0.95],
+        [0.112 * scaleX, hipTopY],
       ],
-      scaleX: 1.08,
-      scaleZ: 0.88 * scaleZ,
+      scaleX: 1.13,
+      scaleZ: 1.04 * scaleZ,
       bustBoost: 0,
+      frontBellyBoost: 0.008,
+      rearGluteY: -0.02,
+      rearGluteBoost: 0.022,
       fwdSign,
-      segments: 28,
+      segments: 30,
     });
     hipsGroup.add(new THREE.Mesh(pelvisGeo, hipsMat || topMat));
   }
@@ -1153,20 +1190,20 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     if (hipsGroup) {
       const hoodieHem = new THREE.Mesh(
         createSculptedSkirtGeometry({
-          topRadius: 0.122,
-          bottomRadius: 0.132,
-          height: 0.11,
+          topRadius: 0.136,
+          bottomRadius: 0.156,
+          height: 0.16,
           pleatCount: 0,
-          scaleX: 1.12,
-          scaleZ: 0.94,
+          scaleX: 1.15,
+          scaleZ: 1.08,
         }),
         topMat
       );
-      hoodieHem.position.set(0, 0.03, 0);
-      const ribBand = new THREE.Mesh(new THREE.TorusGeometry(0.132, 0.014, 10, 28), topAccentMat);
+      hoodieHem.position.set(0, 0.015, 0);
+      const ribBand = new THREE.Mesh(new THREE.TorusGeometry(0.155, 0.015, 10, 28), topAccentMat);
       ribBand.rotation.x = Math.PI / 2;
-      ribBand.scale.set(1.12, 0.94, 1);
-      ribBand.position.set(0, -0.025, 0);
+      ribBand.scale.set(1.15, 1.08, 1);
+      ribBand.position.set(0, -0.065, 0);
       hipsGroup.add(hoodieHem, ribBand);
     }
   } else if (garmentStyle === 'summer_sundress') {
@@ -1499,14 +1536,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     if (hipsGroup) {
       const shirtHem = new THREE.Mesh(
         createSculptedSkirtGeometry({
-          topRadius: 0.118,
-          bottomRadius: 0.132,
-          height: 0.10,
+          topRadius: 0.134,
+          bottomRadius: 0.156,
+          height: 0.16,
           pleatCount: 0,
+          scaleX: 1.15,
+          scaleZ: 1.08,
         }),
         topMat
       );
-      shirtHem.position.set(0, 0.02, 0);
+      shirtHem.position.set(0, 0.01, 0);
       hipsGroup.add(shirtHem);
     }
   } else if (garmentStyle === 'school_blazer') {

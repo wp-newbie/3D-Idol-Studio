@@ -495,6 +495,11 @@ export class AvatarPoseController {
       return THREE.MathUtils.lerp(baseWeight * 0.68, chopCurl, this.diningRightGrip);
     };
 
+    if (activeHobbyKind === 'brushing_teeth' && !activeDiningFrame) {
+      this.applyToothbrushFingerGrip(vrm, dt);
+      return;
+    }
+
     for (const f of FINGER_CURL_BONES) {
       const node = humanoid.getNormalizedBoneNode(f.name);
       if (!node) continue;
@@ -504,6 +509,49 @@ export class AvatarPoseController {
         node.rotation.y = sideSign * curl;
         node.rotation.z = sideSign * curl * 0.32;
       } else {
+        node.rotation.z = sideSign * curl;
+      }
+    }
+  }
+
+  /**
+   * Applies an anatomical closed-fist toothbrush grip on the right hand (fingers wrapped snugly
+   * around the handle + thumb bracing the top) while keeping the left hand softly relaxed.
+   */
+  public applyToothbrushFingerGrip(vrm: VRM, dt: number): void {
+    const humanoid = vrm.humanoid;
+    if (!humanoid) return;
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    const armDownSign = isVrm0 ? 1 : -1;
+    const alpha = expSmooth(10.0, dt);
+    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 1.0, alpha);
+
+    for (const f of FINGER_CURL_BONES) {
+      const node = humanoid.getNormalizedBoneNode(f.name);
+      if (!node) continue;
+      const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+      if (f.side === 'left') {
+        const relax = f.weight * 0.42;
+        if (f.name.includes('Thumb')) {
+          node.rotation.y = sideSign * relax;
+          node.rotation.z = sideSign * relax * 0.25;
+        } else {
+          node.rotation.z = sideSign * relax;
+        }
+        continue;
+      }
+      // Right hand: snug wrap grip around the toothbrush handle!
+      let curl = 0.85;
+      if (f.name.includes('Thumb')) {
+        curl = f.name.includes('Proximal') ? 0.68 : 0.46;
+        node.rotation.y = sideSign * curl;
+        node.rotation.z = sideSign * curl * 0.38;
+      } else {
+        curl = f.name.includes('Intermediate')
+          ? 1.18
+          : f.name.includes('Proximal')
+          ? 0.94
+          : 0.72;
         node.rotation.z = sideSign * curl;
       }
     }

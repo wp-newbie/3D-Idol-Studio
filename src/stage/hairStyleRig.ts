@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { VRM } from '@pixiv/three-vrm';
+import { MToonMaterial, type VRM } from '@pixiv/three-vrm';
 import type { HairStyleId } from '../types/studio';
 
 export interface HairStyleMeta {
@@ -207,28 +207,86 @@ function updateNativeHairSubmeshVisibility(
 /**
  * Samples the loaded VRM's existing hair color so procedural hair extensions blend seamlessly.
  */
-export function sampleNativeHairColorHex(root: THREE.Object3D, fallbackHex = '#3b4d63'): string {
-  let sampled: THREE.Color | null = null;
+export function sampleNativeHairColorHex(root: THREE.Object3D, fallbackHex = '#4f6d82'): string {
+  let sampledColor: THREE.Color | null = null;
+  let hairTexMap: THREE.Texture | null = null;
+
   root.traverse((obj) => {
-    if (sampled || !(obj instanceof THREE.Mesh) || obj.userData?.[HAIR_RIG_TAG]) return;
+    if (hairTexMap || !(obj instanceof THREE.Mesh) || obj.userData?.[HAIR_RIG_TAG]) return;
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     for (const m of mats) {
       if (!m) continue;
       const hay = `${obj.name} ${m.name || ''}`;
       if (!/hair|bang|twintail|ponytail/i.test(hay)) continue;
-      const anyMat = m as THREE.MeshStandardMaterial & { color?: THREE.Color };
-      if (anyMat.color instanceof THREE.Color) {
-        // Ignore pure white un-tinted texture carriers; look for actual colored hair if present
+      const anyMat = m as unknown as { color?: THREE.Color; map?: THREE.Texture | null };
+      if (!hairTexMap && anyMat.map) {
+        hairTexMap = anyMat.map;
+      }
+      if (!sampledColor && anyMat.color instanceof THREE.Color) {
         const hsl = { h: 0, s: 0, l: 0 };
         anyMat.color.getHSL(hsl);
-        if (hsl.l < 0.96 || hsl.s > 0.05) {
-          sampled = anyMat.color.clone();
-          break;
+        if (hsl.l < 0.94 || hsl.s > 0.06) {
+          sampledColor = anyMat.color.clone();
         }
       }
     }
   });
-  return sampled ? `#${(sampled as THREE.Color).getHexString()}` : fallbackHex;
+
+  // Sample median hair pixel directly from the VRM's hair texture so teal/pastel/blonde VRoid hair matches accurately!
+  if (hairTexMap && typeof document !== 'undefined') {
+    const img = (hairTexMap as THREE.Texture).image as
+      | HTMLImageElement
+      | HTMLCanvasElement
+      | ImageBitmap
+      | undefined;
+    const w = img ? (img as HTMLImageElement).naturalWidth || img.width || 0 : 0;
+    const h = img ? (img as HTMLImageElement).naturalHeight || img.height || 0 : 0;
+    if (img && w > 8 && h > 8) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, 32, 32);
+          const data = ctx.getImageData(0, 0, 32, 32).data;
+          const pixels: Array<{ r: number; g: number; b: number; lum: number }> = [];
+          for (let i = 0; i < data.length; i += 4) {
+            const a = data[i + 3];
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const lum = r * 0.3 + g * 0.59 + b * 0.11;
+            if (a > 220 && lum > 24 && lum < 238) {
+              pixels.push({ r, g, b, lum });
+            }
+          }
+          if (pixels.length >= 6) {
+            pixels.sort((a, b) => a.lum - b.lum);
+            const mid = pixels.slice(
+              Math.floor(pixels.length * 0.35),
+              Math.max(Math.floor(pixels.length * 0.65), Math.floor(pixels.length * 0.35) + 3)
+            );
+            let rs = 0;
+            let gs = 0;
+            let bs = 0;
+            for (const p of mid) {
+              rs += p.r;
+              gs += p.g;
+              bs += p.b;
+            }
+            const col = new THREE.Color(rs / mid.length / 255, gs / mid.length / 255, bs / mid.length / 255);
+            if (sampledColor) col.multiply(sampledColor);
+            return `#${col.getHexString()}`;
+          }
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+  }
+
+  return sampledColor ? `#${(sampledColor as THREE.Color).getHexString()}` : fallbackHex;
 }
 
 /**
@@ -348,11 +406,13 @@ function buildHairStyleGroup(params: {
   group.userData[HAIR_RIG_TAG] = true;
 
   const hairTex = createAnimeHairTexture(hairHex, highlightHex);
-  const hairMat = new THREE.MeshStandardMaterial({
-    color: hairTex ? '#ffffff' : hairHex,
+  const baseCol = new THREE.Color(hairHex);
+  const hairMat = new MToonMaterial({
+    color: hairTex ? new THREE.Color('#ffffff') : baseCol,
+    shadeColorFactor: (hairTex ? new THREE.Color('#dce2ea') : baseCol.clone()).multiplyScalar(0.78),
+    shadingToonyFactor: 0.72,
+    shadingShiftFactor: -0.05,
     map: hairTex || undefined,
-    roughness: 0.44,
-    metalness: 0.08,
     side: THREE.DoubleSide,
   });
   const backZ = -fwdSign;

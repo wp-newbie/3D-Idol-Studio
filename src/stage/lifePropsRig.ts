@@ -1588,31 +1588,22 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
     });
 
     if (hobby.hobbyKind === 'brushing_teeth') {
-      // Animated 3D Toothbrush gently brushing side-to-side with minty sparkle foam!
-      const brushGroup = new THREE.Group();
-      brushGroup.position.set(0.06, 1.33, -0.34);
-      const handle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.014, 0.014),
-        new THREE.MeshStandardMaterial({ color: accent, roughness: 0.28 })
+      // Toothbrush is held directly in her right hand (handPropsRig) — keep a neat mint toothpaste tube on the counter!
+      const tube = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.014, 0.018, 0.11, 12),
+        new THREE.MeshStandardMaterial({ color: '#a5f3fc', roughness: 0.3 })
       );
-      const bristles = new THREE.Mesh(
-        new THREE.BoxGeometry(0.032, 0.018, 0.016),
-        new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.8 })
+      tube.rotation.z = Math.PI / 2;
+      tube.rotation.y = 0.25;
+      tube.position.set(0.32, 0.785, -0.04);
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.009, 0.009, 0.018, 10),
+        new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.35 })
       );
-      bristles.position.set(-0.068, 0.012, 0);
-      const mintFoam = new THREE.Mesh(
-        new THREE.SphereGeometry(0.015, 10, 10),
-        new THREE.MeshStandardMaterial({ color: '#a5f3fc', emissive: '#67e8f9', emissiveIntensity: 0.45 })
-      );
-      mintFoam.position.set(-0.072, 0.024, 0);
-      brushGroup.add(handle, bristles, mintFoam);
-      brushGroup.rotation.y = -0.35;
-      brushGroup.userData.brushMotion = {
-        baseX: brushGroup.position.x,
-        baseY: brushGroup.position.y,
-      };
-      vanity.add(brushGroup);
-      animatedNodes.push(brushGroup);
+      cap.rotation.z = Math.PI / 2;
+      cap.rotation.y = 0.25;
+      cap.position.set(0.382, 0.785, -0.024);
+      vanity.add(tube, cap);
     } else {
       // Hairdryer resting on counter for towel-dry refresh
       const dryerBody = new THREE.Mesh(
