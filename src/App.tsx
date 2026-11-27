@@ -1239,7 +1239,7 @@ export const App: React.FC = () => {
               : parsed.moveAction === 'approach_user'
               ? 0.12
               : (Math.random() - 0.5) * 0.65;
-          const targetY = parsed.moveAction === 'sit_taskbar' ? -0.18 : 0;
+          const targetY = 0;
           setRoamCommand({ id, targetX, targetY, behavior: parsed.moveAction });
         }
 
@@ -4476,7 +4476,7 @@ export const App: React.FC = () => {
           : behavior === 'sit_taskbar'
             ? roamNormX
             : 0;
-    const targetY = behavior === 'sit_taskbar' ? -0.18 : 0;
+    const targetY = 0;
     setRoamCommand({ id, targetX, targetY, behavior });
   };
 

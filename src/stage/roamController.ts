@@ -136,7 +136,10 @@ export class AutonomousRoamController {
       this.currentX = THREE.MathUtils.clamp(cmd.startFromX, -0.96, 0.96);
     }
     this.targetX = THREE.MathUtils.clamp(cmd.targetX, -0.94, 0.94);
-    this.targetY = THREE.MathUtils.clamp(cmd.targetY, -0.45, 0.72);
+    this.targetY =
+      cmd.behavior === 'sit_taskbar'
+        ? THREE.MathUtils.clamp(cmd.targetY, 0, 0.72)
+        : THREE.MathUtils.clamp(cmd.targetY, -0.45, 0.72);
     this.targetZ = THREE.MathUtils.clamp(cmd.targetZ ?? 0, -0.35, 0.45);
     this.behavior = cmd.behavior;
     this.nextDecisionIn = 10.0 + Math.random() * 15.0;
@@ -418,11 +421,17 @@ export class AutonomousRoamController {
       );
     }
 
+    // Only actively seated in a chair once she has FINISHED walking to her spot (never walk while sitting!)
+    const isSeatedInChair =
+      this.behavior === 'sit_taskbar' && !isMoving && !this.isDragging;
+    const reportedBehavior: RoamBehavior =
+      this.behavior === 'sit_taskbar' && isMoving ? 'walk' : this.behavior;
+
     // Smooth facing direction (turns naturally along walking direction during Taskbar Stroll!)
     let desiredYaw = 0;
     if (this.isDragging) {
       desiredYaw = THREE.MathUtils.clamp(-this.dragVelocityX * 0.25, -0.35, 0.35);
-    } else if (activeHobbyKind || this.behavior === 'sit_taskbar') {
+    } else if (activeHobbyKind || isSeatedInChair) {
       desiredYaw = 0;
     } else if (isMoving && Math.abs(dx) > 0.02) {
       desiredYaw = dx > 0 ? (desktopRoamMode ? 0.65 : 0.45) : desktopRoamMode ? -0.65 : -0.45;
@@ -742,10 +751,10 @@ export class AutonomousRoamController {
       normX: this.currentX,
       normY: this.currentY,
       normZ: this.currentZ,
-      behavior: this.behavior,
+      behavior: reportedBehavior,
       behaviorLabel: this.isDragging
         ? 'Picked Up (Dragging!)'
-        : ROAM_BEHAVIOR_LABELS[this.behavior],
+        : ROAM_BEHAVIOR_LABELS[reportedBehavior],
       isMoving,
       isDragging: this.isDragging,
     };

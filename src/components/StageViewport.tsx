@@ -1299,7 +1299,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               curiosity: brainNow?.curiosity ?? 50,
               onCrossDisplayEdge,
             });
-            if (roamStatus.behavior === 'sit_taskbar' && !roamStatus.isDragging) {
+            if (
+              roamStatus.behavior === 'sit_taskbar' &&
+              !roamStatus.isMoving &&
+              !roamStatus.isDragging
+            ) {
               poseControllerRef.current.applySeatedHips(vrm, dt);
             } else {
               poseControllerRef.current.restoreStandingHips(vrm, dt);
