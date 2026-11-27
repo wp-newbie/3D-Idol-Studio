@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type {
   AccessoryAttachTarget,
+  ActiveLifeScene,
   AutonomousNeedTrigger,
   AvatarPosture,
   CameraPreset,
@@ -52,6 +53,20 @@ import { musicSync, type MusicTrackState } from '../services/musicSyncService';
 import { CareActivityBar } from './CareActivityBar';
 import { extractEnglishSubtitle, extractSpokenDialogue } from '../services/dialogueParser';
 import { applyOutfitModsToScene, detectClothingMeshes } from '../stage/clothingModder';
+import { syncProceduralAccessoriesToVrm } from '../stage/accessoryRig';
+import {
+  syncProceduralHairStyleToVrm,
+  updateProceduralHairSway,
+} from '../stage/hairStyleRig';
+import {
+  syncProceduralGarmentToVrm,
+  updateProceduralGarmentSway,
+} from '../stage/garmentRig';
+import {
+  syncActivityHandPropsToVrm,
+  updateActivityHandProps,
+} from '../stage/handPropsRig';
+import { LifePropsController } from '../stage/lifePropsRig';
 import {
   applyProceduralEmote,
   loadVrmaClipFromBuffer,
@@ -67,6 +82,11 @@ import {
   ROAM_BEHAVIOR_LABELS,
 } from '../stage/roamController';
 import { AvatarPoseController } from '../stage/poseController';
+import {
+  expSmooth,
+  getDiningAnimationFrame,
+  getHobbyActivityFrame,
+} from '../stage/naturalArmPose';
 import { VrmEmotionEngine, type HumanSensationContext } from '../stage/emotionEngine';
 import { AiBrainPopover } from './AiBrainPopover';
 import { StagePainter } from './StagePainter';
@@ -127,6 +147,7 @@ interface StageViewportProps {
   onAvatarInteraction: (zone: InteractionZone, nextMood: MoodType) => void;
   onUpdateYawOffset?: (yawOffsetRadians: number) => void;
   onUpdateEquippedAccessory?: (accessoryId: string, patch: Partial<EquippedAccessory>) => void;
+  lifeScene?: ActiveLifeScene;
 }
 
 interface ComputedCameraFrames {
@@ -461,6 +482,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onAvatarInteraction,
   onUpdateYawOffset,
   onUpdateEquippedAccessory,
+  lifeScene,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -590,6 +612,9 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   const controlsRef = useRef<OrbitControls | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const envControllerRef = useRef<StageEnvironmentController | null>(null);
+  const lifePropsRef = useRef<LifePropsController | null>(null);
+  const lifeSceneRef = useRef<ActiveLifeScene | undefined>(lifeScene);
+  lifeSceneRef.current = lifeScene;
   const avatarContainerRef = useRef<THREE.Group | null>(null);
   const avatarRootRef = useRef<THREE.Group | null>(null);
   const mountedAccessoriesRef = useRef<
@@ -695,8 +720,12 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
   // Sync studio stool & bed furniture visibility & smooth camera framing when switching posture
   useEffect(() => {
-    const showSeat = posture === 'seated' && !desktopRoamMode;
-    const showBed = posture === 'sleeping' && !desktopRoamMode;
+    const hasCustomChair =
+      Boolean(lifeScene?.chair) ||
+      Boolean(lifeScene?.dining) ||
+      lifeScene?.hobby?.hobbyKind === 'studying';
+    const showSeat = posture === 'seated' && !desktopRoamMode && !hasCustomChair;
+    const showBed = posture === 'sleeping';
     envControllerRef.current?.setBedVisible(showBed);
     envControllerRef.current?.setSeatVisible(showSeat);
     const isHugPillow = showBed && sleepingPosition === 'hugging_pillow';
@@ -731,21 +760,46 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       roamControllerRef.current.resetToCenter();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [posture, desktopRoamMode]);
+  }, [
+    posture,
+    desktopRoamMode,
+    Boolean(lifeScene?.chair),
+    Boolean(lifeScene?.dining),
+    lifeScene?.hobby?.hobbyKind,
+  ]);
+
+  // Sync 3D Dining Table/Chair/Kitchen, Hobby Stations, AI Chairs, and Travel Scenery Props
+  // Visible in BOTH Full Studio AND Desktop Roam (transparent overlay skips opaque sky/ground)!
+  useEffect(() => {
+    const isRoamPerched = roamBehavior === 'sit_taskbar';
+    const isSeated =
+      (posture === 'seated' && !desktopRoamMode) ||
+      isRoamPerched ||
+      (desktopRoamMode &&
+        (Boolean(lifeScene?.dining) ||
+          lifeScene?.hobby?.recommendedPosture === 'seated'));
+    lifePropsRef.current?.sync(
+      lifeScene,
+      true,
+      desktopRoamMode,
+      isSeated,
+      persona.accentColor
+    );
+  }, [lifeScene, desktopRoamMode, posture, roamBehavior, persona.accentColor]);
 
   // Automatically transition to sleeping bed if character falls asleep from human needs / nap prompt
   useEffect(() => {
-    if (persona.brain?.isSleeping && posture !== 'sleeping' && !desktopRoamMode) {
+    if (persona.brain?.isSleeping && posture !== 'sleeping') {
       setPosture('sleeping');
     }
-  }, [persona.brain?.isSleeping, posture, desktopRoamMode]);
+  }, [persona.brain?.isSleeping, posture]);
 
   // Auto-roam transition: when autonomous roaming starts, stand up from stool or bed
   useEffect(() => {
-    if (autoRoamEnabled && posture !== 'standing' && !desktopRoamMode) {
+    if (autoRoamEnabled && posture !== 'standing' && !persona.brain?.isSleeping) {
       setPosture('standing');
     }
-  }, [autoRoamEnabled, posture, desktopRoamMode]);
+  }, [autoRoamEnabled, posture, persona.brain?.isSleeping]);
 
   // Autonomous AI sleep movement: character autonomously shifts sleeping positions while in bed
   useEffect(() => {
@@ -793,11 +847,20 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     if (desktopRoamMode) {
       setOpenPanel('none');
       // Full-monitor widget camera so she stands ~48% screen height right above taskbar & roams full width
-      cameraLerpRef.current = {
-        pos: new THREE.Vector3(0, 1.35, 5.8),
-        target: new THREE.Vector3(0, 1.35, 0),
-        active: true,
-      };
+      // When sleeping in bed during desktop roam, pitch camera to comfortably frame her bed above the taskbar
+      if (posture === 'sleeping') {
+        cameraLerpRef.current = {
+          pos: new THREE.Vector3(1.2, 1.45, 3.2),
+          target: new THREE.Vector3(0, 0.45, 0),
+          active: true,
+        };
+      } else {
+        cameraLerpRef.current = {
+          pos: new THREE.Vector3(0, 1.35, 5.8),
+          target: new THREE.Vector3(0, 1.35, 0),
+          active: true,
+        };
+      }
     } else {
       widgetDragRef.current = null;
       roamControllerRef.current.resetToCenter();
@@ -926,6 +989,16 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     envCtrl.applyPreset(persona.stageEnvironment || 'sunlit_boutique');
     envControllerRef.current = envCtrl;
 
+    // 3D Dining, Kitchen, Hobby, AI Chair & Travel Props Controller
+    const lifeCtrl = new LifePropsController(scene);
+    lifeCtrl.sync(
+      lifeSceneRef.current,
+      true,
+      desktopRoamRef.current,
+      postureRef.current === 'seated'
+    );
+    lifePropsRef.current = lifeCtrl;
+
     // LookAt target for vrm.lookAt.target
     const lookAtTarget = new THREE.Object3D();
     lookAtTarget.position.set(0, 1.4, 2.0);
@@ -1041,8 +1114,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             });
           }
 
-          const isSeatedStage = postureRef.current === 'seated' && !desktopRoamRef.current;
-          const isSleepingStage = postureRef.current === 'sleeping' && !desktopRoamRef.current;
+          const activeLife = lifeSceneRef.current;
+          const isSeatedRoamLife =
+            desktopRoamRef.current &&
+            (Boolean(activeLife?.dining) ||
+              activeLife?.hobby?.recommendedPosture === 'seated');
+          const isSeatedStage =
+            (postureRef.current === 'seated' && !desktopRoamRef.current) ||
+            isSeatedRoamLife;
+          const isSleepingStage = postureRef.current === 'sleeping';
           let roamStatus = {
             normX: 0,
             normY: 0,
@@ -1142,13 +1222,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               });
             }
           } else if (isSeatedStage) {
-            // Keep character smoothly centered on the studio stool facing +Z
-            const posLerp = Math.min(1, dt * 8.0);
-            if (!activeReaction) {
+            // Keep character centered in Full Studio, OR stay at her current desktop position in Desktop Roam
+            const posLerp = expSmooth(7.5, dt);
+            if (!activeReaction && !desktopRoamRef.current) {
               avatarContainer.position.x = THREE.MathUtils.lerp(avatarContainer.position.x, 0, posLerp);
               avatarContainer.position.z = THREE.MathUtils.lerp(avatarContainer.position.z, 0, posLerp);
             }
-            avatarContainer.position.y = THREE.MathUtils.lerp(avatarContainer.position.y, 0, posLerp);
+            if (!desktopRoamRef.current) {
+              avatarContainer.position.y = THREE.MathUtils.lerp(avatarContainer.position.y, 0, posLerp);
+            }
             avatarContainer.rotation.x = THREE.MathUtils.lerp(avatarContainer.rotation.x, 0, posLerp);
             avatarContainer.rotation.y = THREE.MathUtils.lerp(avatarContainer.rotation.y, 0, posLerp);
             avatarContainer.rotation.z = THREE.MathUtils.lerp(avatarContainer.rotation.z, 0, posLerp);
@@ -1173,11 +1255,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
                 musicBeat: music.beatPulse,
                 isMusicPlaying: music.isPlaying,
                 isSleeping: humanCtx.isSleeping,
+                isDining: Boolean(lifeSceneRef.current?.dining),
+                activeHobbyKind: lifeSceneRef.current?.hobby?.hobbyKind ?? null,
               });
             }
           } else {
             // Standing / Desktop Roam mode: smoothly restore upright orientation & lift hips
-            const rotLerp = Math.min(1, dt * 7.0);
+            const rotLerp = expSmooth(7.0, dt);
             avatarContainer.rotation.x = THREE.MathUtils.lerp(avatarContainer.rotation.x, 0, rotLerp);
             avatarContainer.rotation.z = THREE.MathUtils.lerp(avatarContainer.rotation.z, 0, rotLerp);
             if (avatarRootRef.current) {
@@ -1190,7 +1274,6 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               avatarRootRef.current.rotation.z = THREE.MathUtils.lerp(avatarRootRef.current.rotation.z, 0, rotLerp);
             }
 
-            poseControllerRef.current.restoreStandingHips(vrm, dt);
             roamStatus = roamControllerRef.current.update({
               dt,
               elapsed,
@@ -1209,12 +1292,18 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               isMusicPlaying: music.isPlaying,
               hasActiveReactionOrEmote: Boolean(activeReaction || activeEmoteRef.current),
               isSleeping: humanCtx.isSleeping,
+              activeHobbyKind: lifeSceneRef.current?.hobby?.hobbyKind ?? null,
               boredom: brainNow?.boredom ?? 25,
               sleepiness: brainNow?.sleepiness ?? 20,
               energy: brainNow?.energy ?? 80,
               curiosity: brainNow?.curiosity ?? 50,
               onCrossDisplayEdge,
             });
+            if (roamStatus.behavior === 'sit_taskbar' && !roamStatus.isDragging) {
+              poseControllerRef.current.applySeatedHips(vrm, dt);
+            } else {
+              poseControllerRef.current.restoreStandingHips(vrm, dt);
+            }
             if (!activeReaction && !activeEmoteRef.current) {
               poseControllerRef.current.applyStandingFingerRelax(vrm, dt);
             }
@@ -1333,7 +1422,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
             lookAtTargetRef.current.position.lerp(
               new THREE.Vector3(targetX, targetY, targetZ),
-              Math.min(1, dt * 8)
+              expSmooth(7.5, dt)
             );
             if (vrm.lookAt && vrm.lookAt.target !== lookAtTargetRef.current) {
               vrm.lookAt.target = lookAtTargetRef.current;
@@ -1402,7 +1491,34 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             targetRoll += Math.sin(elapsed * 26) * 0.055 * remain;
           }
 
-          const headLerp = Math.min(1, dt * 7.5);
+          updateProceduralHairSway(avatarRootRef.current, elapsed);
+          updateProceduralGarmentSway(avatarRootRef.current, elapsed);
+          lifePropsRef.current?.followPosition(
+            desktopRoamRef.current || roamStatus.behavior === 'sit_taskbar'
+              ? avatarContainer.position
+              : null
+          );
+          lifePropsRef.current?.update(elapsed);
+
+          const diningFrame =
+            lifeSceneRef.current?.dining && !humanCtx.isSleeping
+              ? getDiningAnimationFrame(elapsed)
+              : null;
+          const hobbyActivityFrame =
+            !diningFrame && lifeSceneRef.current?.hobby && !humanCtx.isSleeping
+              ? getHobbyActivityFrame(lifeSceneRef.current.hobby.hobbyKind, elapsed)
+              : null;
+          if (diningFrame && !activeReaction) {
+            targetPitch += diningFrame.headPitch;
+            targetYaw += diningFrame.headYaw;
+            targetRoll += diningFrame.headRoll;
+          } else if (hobbyActivityFrame && !activeReaction) {
+            targetPitch += hobbyActivityFrame.headPitch;
+            targetYaw += hobbyActivityFrame.headYaw;
+            targetRoll += hobbyActivityFrame.headRoll;
+          }
+
+          const headLerp = expSmooth(7.2, dt);
           smoothYaw = THREE.MathUtils.lerp(smoothYaw, targetYaw, headLerp);
           smoothPitch = THREE.MathUtils.lerp(smoothPitch, targetPitch, headLerp);
           smoothRoll = THREE.MathUtils.lerp(smoothRoll, targetRoll, headLerp);
@@ -1458,28 +1574,59 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             }
           };
 
-          const isMouthActive = lipSync.isSpeaking || music.isPlaying;
+          const activeDiningFrame =
+            lifeSceneRef.current?.dining && !humanCtx.isSleeping
+              ? getDiningAnimationFrame(elapsed)
+              : null;
+          const activeHobbyFrame =
+            !activeDiningFrame && lifeSceneRef.current?.hobby && !humanCtx.isSleeping
+              ? getHobbyActivityFrame(lifeSceneRef.current.hobby.hobbyKind, elapsed)
+              : null;
+          const isMouthActive =
+            lipSync.isSpeaking ||
+            music.isPlaying ||
+            Boolean(activeDiningFrame) ||
+            Boolean(activeHobbyFrame && activeHobbyFrame.mouthIh > 0.02);
           const targetAa = lipSync.isSpeaking
             ? Math.min(0.75, lipSync.aa)
             : music.isPlaying
               ? Math.min(0.75, music.aa)
-              : 0;
+              : activeDiningFrame
+                ? activeDiningFrame.mouthAa
+                : 0;
           const targetIh = lipSync.isSpeaking
             ? lipSync.ih
             : music.isPlaying
               ? music.ih
-              : 0;
+              : activeDiningFrame
+                ? activeDiningFrame.mouthIh
+                : activeHobbyFrame
+                  ? activeHobbyFrame.mouthIh
+                  : 0;
           const targetOu = lipSync.isSpeaking
             ? lipSync.ou
             : music.isPlaying
               ? music.ou
-              : 0;
+              : activeDiningFrame
+                ? activeDiningFrame.mouthOu
+                : 0;
+          if (activeDiningFrame && !lipSync.isSpeaking && activeDiningFrame.happySmile > 0.05) {
+            setExpr(['happy', 'joy'], Math.min(0.55, activeDiningFrame.happySmile));
+          } else if (activeHobbyFrame && !lipSync.isSpeaking) {
+            if (activeHobbyFrame.happySmile > 0.05) {
+              setExpr(['happy', 'joy'], Math.min(0.55, activeHobbyFrame.happySmile));
+            }
+            if (activeHobbyFrame.relaxedEyes > 0.05) {
+              setExpr(['relaxed'], Math.min(0.65, activeHobbyFrame.relaxedEyes));
+            }
+          }
           const targetEe = lipSync.isSpeaking ? lipSync.ee : 0;
           const targetOh = lipSync.isSpeaking ? lipSync.oh : bodyLang.yawnOhWeight;
 
-          // Smoothly lerp all 5 visemes (0.25 per frame), snapping cleanly to 0.0 when silent
+          // Frame-rate-independent exponential viseme smoothing, snapping cleanly to 0.0 when silent
+          const visemeLerp = expSmooth(14.5, dt);
           const lerpViseme = (cur: number, tgt: number) => {
-            const next = THREE.MathUtils.lerp(cur, tgt, 0.25);
+            const next = THREE.MathUtils.lerp(cur, tgt, visemeLerp);
             return tgt === 0 && next < 0.004 ? 0 : next;
           };
 
@@ -1540,6 +1687,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         }
 
         vrm.update(dt);
+        updateActivityHandProps(avatarRootRef.current, lifeSceneRef.current, elapsed, vrm);
 
         for (const entry of mountedAccessoriesRef.current.values()) {
           if (entry.wrapper.visible && entry.bonePairs.length > 0) {
@@ -1570,6 +1718,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       envCtrl.clearCustomEnvironment();
+      lifeCtrl.dispose();
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
@@ -1703,7 +1852,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           // Calibrate seated/sleeping hip drop & snap immediately into pose before first render
           if (vrm) {
             poseControllerRef.current.bindVrm(vrm, appliedScale, postureRef.current);
-            if (postureRef.current === 'sleeping' && !desktopRoamRef.current) {
+            if (postureRef.current === 'sleeping') {
               const bed = envControllerRef.current?.getBedMetrics();
               const bedCenterX = bed ? bed.bedCenterX : 0;
               const mattressY = bed ? bed.mattressTopY + 0.085 : 0.485;
@@ -1775,6 +1924,42 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             isImportedModel: true,
             textureCache: textureCacheRef.current,
             cyclingShorts: activeSlot.cyclingShorts ?? true,
+          });
+
+          syncProceduralAccessoriesToVrm({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            accessories: activeSlot.proceduralAccessories || [],
+            accentHex: activeSlot.accessoryColorHex || persona.accentColor,
+          });
+
+          syncProceduralHairStyleToVrm({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            hairStyle: activeSlot.hairStyle || 'default',
+            hairColorHex: activeSlot.hairColorHex ?? null,
+            hairHighlightHex: activeSlot.hairHighlightHex ?? null,
+            tieAccentHex: activeSlot.accessoryColorHex || persona.accentColor,
+          });
+
+          syncProceduralGarmentToVrm({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            garmentStyle: activeSlot.garmentStyle || 'default',
+            topHex: activeSlot.garmentPalette?.topHex,
+            topAccentHex: activeSlot.garmentPalette?.topAccentHex,
+            bottomHex: activeSlot.garmentPalette?.bottomHex,
+            bottomAccentHex: activeSlot.garmentPalette?.bottomAccentHex,
+            accessoryHex: activeSlot.garmentPalette?.accessoryHex || activeSlot.accessoryColorHex || persona.accentColor,
+            topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
+            bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+          });
+
+          syncActivityHandPropsToVrm({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            lifeScene: lifeSceneRef.current,
+            accentHex: persona.accentColor,
           });
 
           onMeshesDetectedRef.current(
@@ -2068,6 +2253,93 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       detectClothingMeshes(avatarRoot, activeSlot.materialMods)
     );
   }, [activeSlot.meshVisibility, activeSlot.materialMods, activeSlot.cyclingShorts]);
+
+  // 3b. Sync LLM-generated / user-toggled procedural 3D bone-tracked accessories
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    syncProceduralAccessoriesToVrm({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      accessories: activeSlot.proceduralAccessories || [],
+      accentHex: activeSlot.accessoryColorHex || persona.accentColor,
+    });
+  }, [
+    activeSlot.proceduralAccessories,
+    activeSlot.accessoryColorHex,
+    activeSlot.id,
+    persona.accentColor,
+    isLoadingModel,
+  ]);
+
+  // 3c. Sync AI-chosen / user-selected 3D procedural hairstyle overlay
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    syncProceduralHairStyleToVrm({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      hairStyle: activeSlot.hairStyle || 'default',
+      hairColorHex: activeSlot.hairColorHex ?? null,
+      hairHighlightHex: activeSlot.hairHighlightHex ?? null,
+      tieAccentHex: activeSlot.accessoryColorHex || persona.accentColor,
+    });
+  }, [
+    activeSlot.hairStyle,
+    activeSlot.hairColorHex,
+    activeSlot.hairHighlightHex,
+    activeSlot.accessoryColorHex,
+    activeSlot.id,
+    persona.accentColor,
+    isLoadingModel,
+  ]);
+
+  // 3d. Sync AI-chosen 3D Garment Silhouette (hoodies, sundresses, shorts, pants, kimono, pajamas, gowns, blazers, trench coats)
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    syncProceduralGarmentToVrm({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      garmentStyle: activeSlot.garmentStyle || 'default',
+      topHex: activeSlot.garmentPalette?.topHex,
+      topAccentHex: activeSlot.garmentPalette?.topAccentHex,
+      bottomHex: activeSlot.garmentPalette?.bottomHex,
+      bottomAccentHex: activeSlot.garmentPalette?.bottomAccentHex,
+      accessoryHex:
+        activeSlot.garmentPalette?.accessoryHex ||
+        activeSlot.accessoryColorHex ||
+        persona.accentColor,
+      topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
+      bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+    });
+  }, [
+    activeSlot.garmentStyle,
+    activeSlot.garmentPalette,
+    activeSlot.accessoryColorHex,
+    activeSlot.id,
+    persona.accentColor,
+    isLoadingModel,
+  ]);
+
+  // 3e. Sync real 3D hand-held activity props (teacup, chopsticks, pen, toothbrush, towel, palette, brush, whisk, book, camera)
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    syncActivityHandPropsToVrm({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      lifeScene,
+      accentHex: persona.accentColor,
+    });
+  }, [
+    lifeScene?.dining?.foodVisual,
+    lifeScene?.dining?.accentHex,
+    lifeScene?.hobby?.hobbyKind,
+    lifeScene?.hobby?.accentHex,
+    persona.accentColor,
+    isLoadingModel,
+  ]);
 
   // 4. Emote & .VRMA Playback Handlers
   const triggerProceduralEmote = (emoteId: ProceduralEmoteId) => {
@@ -2557,18 +2829,28 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               <span>Face Front (0°)</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={onToggleAutoRoam}
-            className={`flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${autoRoamEnabled
+          <div
+            className={`flex cursor-default select-none items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold shadow-glass backdrop-blur-xl transition ${autoRoamEnabled
               ? 'border-emerald-400/50 bg-emerald-950/70 text-emerald-100'
-              : 'border-white/15 bg-[#10101e]/85 text-zinc-400 hover:text-zinc-200'
+              : 'border-white/15 bg-[#10101e]/85 text-zinc-400'
               }`}
-            title={`Auto-Roam & Procedural Idle (${ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior})`}
+            title={
+              autoRoamEnabled
+                ? `${persona.name} chose to Auto-Roam (${ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior}) — controlled autonomously by ${persona.name}`
+                : `${persona.name} is staying put right now — she decides on her own when to Auto-Roam based on her mood & energy`
+            }
           >
             <Footprints className={`h-3.5 w-3.5 ${autoRoamEnabled ? 'text-emerald-300' : ''}`} />
             <span>Auto-Roam</span>
-          </button>
+            <span
+              className={`rounded-full px-1 py-0.2 text-[9px] font-bold uppercase ${autoRoamEnabled
+                ? 'bg-emerald-400/20 text-emerald-200'
+                : 'bg-white/10 text-zinc-400'
+                }`}
+            >
+              AI
+            </span>
+          </div>
 
           <button
             type="button"

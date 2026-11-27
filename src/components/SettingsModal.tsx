@@ -281,6 +281,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
               )}
+              {/* Autonomous Time & Occasion Self-Dressing Toggle (Local LLM) */}
+              <div className="flex items-center justify-between rounded-xl border border-amber-400/30 bg-amber-950/20 p-3.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-200 font-bold text-sm">
+                    👗
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-amber-100 text-[12px]">
+                      <span>Auto-Dress by Time &amp; Occasion</span>
+                      <span className="rounded-md border border-amber-400/35 bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">
+                        LM Studio :1234
+                      </span>
+                    </div>
+                    <div className="text-[10.5px] text-amber-200/75">
+                      Lets your companion design &amp; change her own clothes for morning, afternoon, evening, and late-night using your LM Studio local server.
+                    </div>
+                  </div>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    checked={settings.autoDressByTimeOccasion !== false}
+                    onChange={(e) =>
+                      onUpdateSettings({ autoDressByTimeOccasion: e.target.checked })
+                    }
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-zinc-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-amber-500 peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+
               {settings.useBuiltInKey && builtInAvailable ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-400/35 bg-emerald-950/30 px-3.5 py-2.5">
                   <div className="flex items-center gap-2 text-xs text-emerald-100">

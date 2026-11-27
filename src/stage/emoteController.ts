@@ -7,6 +7,13 @@ import {
   VRMAnimationLoaderPlugin,
 } from '@pixiv/three-vrm-animation';
 import type { ProceduralEmoteId } from '../types/studio';
+import {
+  applyCrossedArms,
+  applyEmoteArms,
+  applyFriendlyWaveArms,
+  applyIdolPeaceArms,
+  applyShyFidgetArms,
+} from './naturalArmPose';
 
 export interface ProceduralEmoteMeta {
   id: ProceduralEmoteId;
@@ -122,13 +129,8 @@ export function applyProceduralEmote(
   if (!humanoid) return false;
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
-  const armSign = isVrm0 ? 1 : -1;
+  const forwardSign = isVrm0 ? 1 : -1;
 
-  const lUpper = humanoid.getNormalizedBoneNode('leftUpperArm');
-  const rUpper = humanoid.getNormalizedBoneNode('rightUpperArm');
-  const lLower = humanoid.getNormalizedBoneNode('leftLowerArm');
-  const rLower = humanoid.getNormalizedBoneNode('rightLowerArm');
-  const rHand = humanoid.getNormalizedBoneNode('rightHand');
   const spine = humanoid.getNormalizedBoneNode('spine');
   const chest = humanoid.getNormalizedBoneNode('chest');
   const head = humanoid.getNormalizedBoneNode('head');
@@ -148,22 +150,7 @@ export function applyProceduralEmote(
   };
 
   if (emote.id === 'crossed_arms') {
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.65, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.58, w);
-    }
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.65, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.58, w);
-    }
-    if (lLower) {
-      lLower.rotation.y = lerp(lLower.rotation.y, 1.35, w);
-      lLower.rotation.z = lerp(lLower.rotation.z, armSign * 0.25, w);
-    }
-    if (rLower) {
-      rLower.rotation.y = lerp(rLower.rotation.y, -1.35, w);
-      rLower.rotation.z = lerp(rLower.rotation.z, -armSign * 0.25, w);
-    }
+    applyCrossedArms(vrm, w);
     if (spine) spine.rotation.y = lerp(spine.rotation.y, 0.14, w);
     if (head) {
       head.rotation.y = lerp(head.rotation.y, -0.28, w);
@@ -171,35 +158,16 @@ export function applyProceduralEmote(
     }
     setExpr(['angry'], (isSpeaking ? 0.65 : 0.42) * w);
   } else if (emote.id === 'friendly_wave') {
-    const wave = Math.sin(age * 9.5) * 0.28;
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, armSign * 0.55, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.35, w);
-    }
-    if (rLower) {
-      rLower.rotation.z = lerp(rLower.rotation.z, armSign * (0.95 + wave), w);
-      rLower.rotation.y = lerp(rLower.rotation.y, -0.2, w);
-    }
-    if (rHand) {
-      rHand.rotation.z = lerp(rHand.rotation.z, wave * 0.6, w);
-    }
+    applyFriendlyWaveArms(vrm, age, w);
+    if (spine) spine.rotation.z = lerp(spine.rotation.z, 0.04, w);
     if (head) {
       head.rotation.z = lerp(head.rotation.z, 0.12, w);
       head.rotation.y = lerp(head.rotation.y, 0.06, w);
     }
-    setExpr(['happy', 'joy'], (isSpeaking ? 0.6 : 0.34) * w);
+    setExpr(['happy', 'joy'], (isSpeaking ? 0.6 : 0.38) * w);
   } else if (emote.id === 'shy_fidget') {
     const fidget = Math.sin(age * 5.5) * 0.06;
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.88, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.32, w);
-    }
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.88, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.32, w);
-    }
-    if (lLower) lLower.rotation.y = lerp(lLower.rotation.y, 0.92 + fidget, w);
-    if (rLower) rLower.rotation.y = lerp(rLower.rotation.y, -0.92 - fidget, w);
+    applyShyFidgetArms(vrm, w, fidget);
     if (spine) spine.rotation.y = lerp(spine.rotation.y, Math.sin(age * 2.8) * 0.08, w);
     if (head) {
       head.rotation.y = lerp(head.rotation.y, -0.24, w);
@@ -210,135 +178,67 @@ export function applyProceduralEmote(
     setExpr(['relaxed'], (isSpeaking ? 0.4 : 0.28) * w);
   } else if (emote.id === 'idol_peace') {
     const bounce = Math.sin(age * 4.2) * 0.04;
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, armSign * 0.35, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.45, w);
-    }
-    if (rLower) {
-      rLower.rotation.z = lerp(rLower.rotation.z, armSign * 1.18, w);
-      rLower.rotation.y = lerp(rLower.rotation.y, -0.45, w);
-    }
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.82, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, 0.12, w);
-    }
-    if (lLower) {
-      lLower.rotation.y = lerp(lLower.rotation.y, 0.85, w);
-    }
+    applyIdolPeaceArms(vrm, age, w);
     if (spine) {
-      spine.rotation.z = lerp(spine.rotation.z, -0.09 + bounce, w);
-      spine.rotation.y = lerp(spine.rotation.y, -0.1, w);
+      spine.rotation.z = lerp(spine.rotation.z, -0.07 + bounce, w);
+      spine.rotation.y = lerp(spine.rotation.y, -0.08, w);
     }
     if (head) {
-      head.rotation.z = lerp(head.rotation.z, 0.16, w);
+      head.rotation.z = lerp(head.rotation.z, 0.14, w);
       head.rotation.x = lerp(head.rotation.x, -0.04, w);
     }
-    setExpr(['happy', 'joy'], (isSpeaking ? 0.65 : 0.35) * w);
+    setExpr(['happy', 'joy'], (isSpeaking ? 0.65 : 0.38) * w);
     setExpr(['blinkLeft'], 0.9 * w);
   } else if (emote.id === 'gentle_bow') {
-    if (spine) spine.rotation.x = lerp(spine.rotation.x, 0.32, w);
-    if (chest) chest.rotation.x = lerp(chest.rotation.x, 0.18, w);
-    if (neck) neck.rotation.x = lerp(neck.rotation.x, 0.14, w);
-    if (head) head.rotation.x = lerp(head.rotation.x, 0.16, w);
-    if (lUpper) lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 1.24, w);
-    if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 1.24, w);
+    applyEmoteArms(vrm, 'gentle_bow', age, w);
+    if (spine) spine.rotation.x = lerp(spine.rotation.x, forwardSign * 0.28, w);
+    if (chest) chest.rotation.x = lerp(chest.rotation.x, forwardSign * 0.16, w);
+    if (neck) neck.rotation.x = lerp(neck.rotation.x, forwardSign * 0.12, w);
+    if (head) head.rotation.x = lerp(head.rotation.x, forwardSign * 0.14, w);
     setExpr(['relaxed'], (isSpeaking ? 0.45 : 0.28) * w);
     setExpr(['blink'], 0.85 * w);
   } else if (emote.id === 'thinking_chin') {
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.42, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.68, w);
-    }
-    if (rLower) {
-      rLower.rotation.y = lerp(rLower.rotation.y, -1.25, w);
-      rLower.rotation.z = lerp(rLower.rotation.z, armSign * 0.62, w);
-    }
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.72, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.15, w);
-    }
+    applyEmoteArms(vrm, 'thinking_chin', age, w);
     if (head) {
-      head.rotation.z = lerp(head.rotation.z, -0.16, w);
-      head.rotation.x = lerp(head.rotation.x, 0.08, w);
-      head.rotation.y = lerp(head.rotation.y, 0.12, w);
+      head.rotation.z = lerp(head.rotation.z, -0.14, w);
+      head.rotation.x = lerp(head.rotation.x, 0.06, w);
+      head.rotation.y = lerp(head.rotation.y, 0.10, w);
     }
     setExpr(['relaxed', 'surprised'], (isSpeaking ? 0.4 : 0.22) * w);
   } else if (emote.id === 'cat_paws') {
-    const pawBounce = Math.sin(age * 6.5) * 0.08;
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.35, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.58 + pawBounce, w);
-    }
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.35, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.58 - pawBounce, w);
-    }
-    if (lLower) {
-      lLower.rotation.y = lerp(lLower.rotation.y, 1.15, w);
-      lLower.rotation.z = lerp(lLower.rotation.z, armSign * 0.42, w);
-    }
-    if (rLower) {
-      rLower.rotation.y = lerp(rLower.rotation.y, -1.15, w);
-      rLower.rotation.z = lerp(rLower.rotation.z, -armSign * 0.42, w);
-    }
+    applyEmoteArms(vrm, 'cat_paws', age, w);
     if (head) {
       head.rotation.z = lerp(head.rotation.z, 0.14, w);
       head.rotation.y = lerp(head.rotation.y, 0.06, w);
     }
     setExpr(['happy', 'joy'], (isSpeaking ? 0.7 : 0.45) * w);
   } else if (emote.id === 'arms_behind_back') {
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 1.12, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, 0.32, w);
-    }
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 1.12, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, 0.32, w);
-    }
-    if (lLower) lLower.rotation.y = lerp(lLower.rotation.y, 0.85, w);
-    if (rLower) rLower.rotation.y = lerp(rLower.rotation.y, -0.85, w);
-    if (spine) spine.rotation.x = lerp(spine.rotation.x, 0.12, w);
+    applyEmoteArms(vrm, 'arms_behind_back', age, w);
+    if (spine) spine.rotation.x = lerp(spine.rotation.x, forwardSign * 0.10, w);
     if (head) {
-      head.rotation.x = lerp(head.rotation.x, -0.08, w);
+      head.rotation.x = lerp(head.rotation.x, -0.06, w);
       head.rotation.z = lerp(head.rotation.z, 0.09, w);
     }
     setExpr(['happy'], (isSpeaking ? 0.5 : 0.3) * w);
   } else if (emote.id === 'lean_forward') {
-    if (spine) spine.rotation.x = lerp(spine.rotation.x, 0.22, w);
-    if (chest) chest.rotation.x = lerp(chest.rotation.x, 0.14, w);
+    applyEmoteArms(vrm, 'lean_forward', age, w);
+    if (spine) spine.rotation.x = lerp(spine.rotation.x, forwardSign * 0.20, w);
+    if (chest) chest.rotation.x = lerp(chest.rotation.x, forwardSign * 0.12, w);
     if (head) {
-      head.rotation.x = lerp(head.rotation.x, -0.16, w);
+      head.rotation.x = lerp(head.rotation.x, -forwardSign * 0.14, w);
       head.rotation.y = lerp(head.rotation.y, 0.04, w);
     }
-    if (lUpper) lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.95, w);
-    if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.95, w);
     setExpr(['surprised'], (isSpeaking ? 0.35 : 0.25) * w);
   } else if (emote.id === 'pout_turn') {
-    if (neck) neck.rotation.y = lerp(neck.rotation.y, 0.32, w);
+    applyEmoteArms(vrm, 'pout_turn', age, w);
+    if (neck) neck.rotation.y = lerp(neck.rotation.y, 0.30, w);
     if (head) {
-      head.rotation.y = lerp(head.rotation.y, 0.22, w);
+      head.rotation.y = lerp(head.rotation.y, 0.20, w);
       head.rotation.x = lerp(head.rotation.x, -0.06, w);
     }
-    if (lUpper) lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.72, w);
-    if (rUpper) rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.72, w);
     setExpr(['angry'], (isSpeaking ? 0.65 : 0.45) * w);
   } else if (emote.id === 'hands_on_hips') {
-    if (lUpper) {
-      lUpper.rotation.z = lerp(lUpper.rotation.z, armSign * 0.75, w);
-      lUpper.rotation.x = lerp(lUpper.rotation.x, -0.22, w);
-    }
-    if (rUpper) {
-      rUpper.rotation.z = lerp(rUpper.rotation.z, -armSign * 0.75, w);
-      rUpper.rotation.x = lerp(rUpper.rotation.x, -0.22, w);
-    }
-    if (lLower) {
-      lLower.rotation.y = lerp(lLower.rotation.y, 1.25, w);
-      lLower.rotation.z = lerp(lLower.rotation.z, -armSign * 0.25, w);
-    }
-    if (rLower) {
-      rLower.rotation.y = lerp(rLower.rotation.y, -1.25, w);
-      rLower.rotation.z = lerp(rLower.rotation.z, armSign * 0.25, w);
-    }
+    applyEmoteArms(vrm, 'hands_on_hips', age, w);
     if (head) {
       head.rotation.x = lerp(head.rotation.x, -0.06, w);
       head.rotation.y = lerp(head.rotation.y, -0.08, w);

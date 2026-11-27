@@ -705,9 +705,9 @@ export class StageEnvironmentController {
 
   public setBedVisible(visible: boolean): void {
     this.bedVisible = visible;
-    this.bedPropGroup.visible = this.bedVisible && !this.isOverlayTransparent;
+    this.bedPropGroup.visible = this.bedVisible;
     if (this.hugPillowMesh) {
-      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible && !this.isOverlayTransparent;
+      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible;
     }
     // Automatically hide stool when bed is visible so they never collide
     if (this.bedVisible) {
@@ -720,7 +720,7 @@ export class StageEnvironmentController {
   public setHugPillowVisible(visible: boolean, side: 'right' | 'left' = 'right'): void {
     this.hugPillowVisible = visible;
     if (this.hugPillowMesh) {
-      this.hugPillowMesh.visible = visible && this.bedVisible && !this.isOverlayTransparent;
+      this.hugPillowMesh.visible = visible && this.bedVisible;
       this.hugPillowMesh.position.x = side === 'left' ? -0.18 : 0.18;
     }
   }
@@ -762,9 +762,9 @@ export class StageEnvironmentController {
     this.isOverlayTransparent = transparent;
     this.stageRing.visible = !transparent;
     this.seatPropGroup.visible = this.seatVisible && !this.bedVisible && !transparent;
-    this.bedPropGroup.visible = this.bedVisible && !transparent;
+    this.bedPropGroup.visible = this.bedVisible;
     if (this.hugPillowMesh) {
-      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible && !transparent;
+      this.hugPillowMesh.visible = this.bedVisible && this.hugPillowVisible;
     }
     this.propsGroup.visible = !transparent;
     this.customRoomGroup.visible = !transparent;

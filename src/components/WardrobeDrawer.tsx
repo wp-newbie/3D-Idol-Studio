@@ -3,11 +3,14 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
   Copy,
   Edit3,
   Eye,
+  Filter,
   ImagePlus,
   Layers,
+  Loader2,
   Palette,
   Plus,
   RotateCcw,
@@ -18,15 +21,18 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Wand2,
   X,
 } from 'lucide-react';
 import type {
   AccessoryAttachTarget,
   ClothingCategory,
   EquippedAccessory,
+  HairStyleId,
   MeshDescriptor,
   OutfitSlot,
   Persona,
+  ProceduralAccessoryId,
   VaultAccessoryMeta,
   VaultModelMeta,
 } from '../types/studio';
@@ -37,9 +43,20 @@ import {
   CLOTHING_CATEGORY_ORDER,
 } from '../stage/clothingModder';
 import {
+  PROCEDURAL_ACCESSORY_META,
+  PROCEDURAL_ACCESSORY_ORDER,
+} from '../stage/accessoryRig';
+import {
+  HAIR_COLOR_SWATCHES,
+  HAIR_STYLE_META,
+  HAIR_STYLE_ORDER,
+} from '../stage/hairStyleRig';
+import {
   formatWardrobeSummaryText,
   retrieveWardrobeInventory,
 } from '../services/MemoryEngine';
+import { getCircadianContext } from '../services/aiBrainService';
+import { OCCASION_QUICK_CHIPS } from '../services/aiOutfitGenerator';
 
 interface WardrobeDrawerProps {
   isOpen: boolean;
@@ -94,14 +111,24 @@ interface WardrobeDrawerProps {
   onRemoveEquippedAccessory: (accessoryId: string) => void;
   onDeleteVaultAccessory: (vaultAccessoryId: string) => void;
   onTriggerAiStylist?: () => void;
+  isGeneratingAiOutfit?: boolean;
+  onGenerateAiOutfit?: (prompt: string, saveAsNewSlot: boolean) => Promise<void> | void;
+  onDesignOutfitForNow?: (occasionOverride?: string) => Promise<void> | void;
+  autoDressByTimeOccasion?: boolean;
+  onToggleAutoDressByTime?: (next: boolean) => void;
+  preferLocalAi?: boolean;
+  onToggleProceduralAccessory?: (accessoryId: ProceduralAccessoryId) => void;
+  onSelectHairStyle?: (hairStyle: HairStyleId) => void;
+  onSelectHairColor?: (hairColorHex: string | null, hairHighlightHex?: string | null) => void;
+  onAiPickHairStyle?: (prompt?: string) => Promise<void> | void;
 }
 
 type WardrobeTab =
-  | 'inventory_overview'
   | 'full_outfits'
+  | 'apparel'
   | 'accessories'
-  | 'clothes_gear'
-  | 'colors_textures';
+  | 'colors_textures'
+  | 'inventory_overview';
 
 export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   isOpen,
@@ -133,9 +160,24 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onRemoveEquippedAccessory,
   onDeleteVaultAccessory,
   onTriggerAiStylist,
+  isGeneratingAiOutfit = false,
+  onGenerateAiOutfit,
+  onDesignOutfitForNow,
+  autoDressByTimeOccasion = true,
+  onToggleAutoDressByTime,
+  preferLocalAi = false,
+  onToggleProceduralAccessory,
+  onSelectHairStyle,
+  onSelectHairColor,
+  onAiPickHairStyle,
 }) => {
   const [tab, setTab] = useState<WardrobeTab>('full_outfits');
+  const [aiOutfitPrompt, setAiOutfitPrompt] = useState('');
+  const [saveAiAsNewSlot, setSaveAiAsNewSlot] = useState(true);
   const [overviewSearch, setOverviewSearch] = useState('');
+  const [apparelFilter, setApparelFilter] = useState<'all' | ClothingCategory>('all');
+  const [accessoryFilter, setAccessoryFilter] = useState<'all' | AccessoryAttachTarget>('all');
+  const [selectedAccessoryId, setSelectedAccessoryId] = useState<string | null>(null);
   const [isCopyingSummary, setIsCopyingSummary] = useState(false);
   const [selectedMeshName, setSelectedMeshName] = useState<string>('');
   const [newSlotName, setNewSlotName] = useState('');
@@ -186,6 +228,11 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
     })).filter((g) => g.items.length > 0);
   }, [detectedMeshes]);
 
+  const filteredGroupedMeshes = useMemo(() => {
+    if (apparelFilter === 'all') return groupedMeshes;
+    return groupedMeshes.filter((g) => g.category === apparelFilter);
+  }, [groupedMeshes, apparelFilter]);
+
   if (!isOpen) return null;
 
   const activeMesh =
@@ -206,19 +253,22 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   };
 
   return (
-    <div className="absolute bottom-4 left-4 top-4 z-30 flex w-[400px] max-w-[92%] flex-col overflow-hidden rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 shadow-glass backdrop-blur-2xl">
+    <div className="absolute bottom-4 left-4 top-4 z-30 flex w-[430px] max-w-[95%] flex-col overflow-hidden rounded-3xl border border-white/[0.12] bg-[#0b0b15]/95 shadow-glass backdrop-blur-2xl">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-white/[0.08] px-4 py-3.5">
         <div className="flex items-center gap-2">
           <span className="text-base" role="img" aria-label="wardrobe">
-            👗
+            👘
           </span>
           <div>
-            <h3 className="font-display text-sm font-bold text-white">
-              Wardrobe / Outfits Studio
+            <h3 className="font-display text-sm font-bold text-white flex items-center gap-1.5">
+              <span>Wardrobe Studio</span>
+              <span className="rounded-full border border-violet-400/30 bg-violet-500/15 px-2 py-0.5 text-[10px] font-mono font-medium text-violet-300">
+                Categorized
+              </span>
             </h3>
             <p className="text-[11px] text-zinc-400">
-              Saved per Persona in IndexedDB · Camera &amp; Chat preserved
+              Outfits · Apparel · Accessories · Shaders · Stylist
             </p>
           </div>
         </div>
@@ -259,27 +309,8 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
         </button>
       </div>
 
-      {/* Five Clear Wardrobe Tabs */}
-      <div className="grid grid-cols-5 gap-1 border-b border-white/[0.08] bg-[#080810]/85 p-1.5 text-[9.5px] font-semibold">
-        <button
-          type="button"
-          onClick={() => setTab('inventory_overview')}
-          className={`flex flex-col items-center justify-center rounded-xl px-1 py-1.5 leading-tight transition ${
-            tab === 'inventory_overview'
-              ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/45'
-              : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
-          }`}
-          title="Overview of all saved wardrobe slots, vault models, and layers"
-        >
-          <span className="flex items-center gap-1">
-            <Layers className="h-3 w-3" />
-            <span>Overview</span>
-          </span>
-          <span className="mt-0.5 text-[8px] font-normal opacity-70">
-            All
-          </span>
-        </button>
-
+      {/* Categorized Hierarchy Tab Bar */}
+      <div className="grid grid-cols-5 gap-1 border-b border-white/[0.08] bg-[#080810]/90 p-1.5 text-[10px] font-semibold">
         <button
           type="button"
           onClick={() => setTab('full_outfits')}
@@ -288,14 +319,33 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               ? 'bg-violet-500/25 text-violet-100 ring-1 ring-violet-400/45'
               : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
           }`}
-          title="Full VRM / XAvatar model variants & IndexedDB vault"
+          title="Complete Outfit Sets, Costumes & Model Slots"
         >
           <span className="flex items-center gap-1">
-            <Shirt className="h-3 w-3" />
+            <Shirt className="h-3 w-3 text-violet-400" />
             <span>Outfits</span>
           </span>
-          <span className="mt-0.5 text-[8px] font-normal opacity-70">
-            Slots ({persona.outfitSlots.length})
+          <span className="mt-0.5 text-[8.5px] font-mono font-normal opacity-75">
+            {persona.outfitSlots.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTab('apparel')}
+          className={`flex flex-col items-center justify-center rounded-xl px-1 py-1.5 leading-tight transition ${
+            tab === 'apparel'
+              ? 'bg-rose-500/25 text-rose-100 ring-1 ring-rose-400/45'
+              : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
+          }`}
+          title="Apparel Pieces: Tops, Bottoms, Dresses, Shoes, Underwear"
+        >
+          <span className="flex items-center gap-1">
+            <SlidersHorizontal className="h-3 w-3 text-rose-400" />
+            <span>Apparel</span>
+          </span>
+          <span className="mt-0.5 text-[8.5px] font-mono font-normal opacity-75">
+            {detectedMeshes.length}
           </span>
         </button>
 
@@ -307,33 +357,14 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               ? 'bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/45'
               : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
           }`}
-          title="Upload & equip .xwear / .xavatar / .glb 3D accessories & dress-up items"
-        >
-          <span className="flex items-center gap-0.5">
-            <span>🎀</span>
-            <span>Add-Ons</span>
-          </span>
-          <span className="mt-0.5 text-[8px] font-normal opacity-70">
-            ({(activeSlot.accessories || []).length})
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setTab('clothes_gear')}
-          className={`flex flex-col items-center justify-center rounded-xl px-1 py-1.5 leading-tight transition ${
-            tab === 'clothes_gear'
-              ? 'bg-rose-500/25 text-rose-100 ring-1 ring-rose-400/45'
-              : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
-          }`}
-          title="Toggle individual clothing pieces & accessories on the active model"
+          title="3D Props, Accessories, Glasses, Wings & Hats"
         >
           <span className="flex items-center gap-1">
-            <SlidersHorizontal className="h-3 w-3" />
-            <span>Pieces</span>
+            <span className="text-[11px]">🎀</span>
+            <span>Props</span>
           </span>
-          <span className="mt-0.5 text-[8px] font-normal opacity-70">
-            ({detectedMeshes.length})
+          <span className="mt-0.5 text-[8.5px] font-mono font-normal opacity-75">
+            {(activeSlot.accessories || []).length} eq
           </span>
         </button>
 
@@ -345,14 +376,33 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               ? 'bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-400/45'
               : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
           }`}
-          title="Material color tint swatches & custom .png diffuse textures"
+          title="Material Color Shaders & Custom Textures"
         >
           <span className="flex items-center gap-1">
-            <Palette className="h-3 w-3" />
-            <span>Colors</span>
+            <Palette className="h-3 w-3 text-cyan-400" />
+            <span>Custom</span>
           </span>
-          <span className="mt-0.5 text-[8px] font-normal opacity-70">
-            Tint
+          <span className="mt-0.5 text-[8.5px] font-mono font-normal opacity-75">
+            Tints
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTab('inventory_overview')}
+          className={`flex flex-col items-center justify-center rounded-xl px-1 py-1.5 leading-tight transition ${
+            tab === 'inventory_overview'
+              ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/45'
+              : 'text-zinc-400 hover:bg-white/[0.03] hover:text-zinc-200'
+          }`}
+          title="AI Auto-Stylist & Full Inventory Overview"
+        >
+          <span className="flex items-center gap-1">
+            <Layers className="h-3 w-3 text-amber-400" />
+            <span>Stylist</span>
+          </span>
+          <span className="mt-0.5 text-[8.5px] font-mono font-normal opacity-75">
+            AI
           </span>
         </button>
       </div>
@@ -714,88 +764,383 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
           </div>
         )}
 
-        {/* TAB 1: Full Outfits (VRM Variants) */}
+        {/* TAB 1: Full Outfits (VRM Variants & Costumes) */}
         {tab === 'full_outfits' && (
-          <>
+          <div className="space-y-4">
+            {/* LLM AI Outfit Generator Card (Local LLM First + Time/Occasion Self-Dressing) */}
+            {onGenerateAiOutfit && (() => {
+              const circadian = getCircadianContext();
+              return (
+                <div className="rounded-2xl border border-fuchsia-400/35 bg-gradient-to-br from-fuchsia-950/35 via-violet-950/25 to-[#0e0e1c] p-3.5 space-y-2.5 shadow-glass">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-fuchsia-100">
+                      <Wand2 className="h-3.5 w-3.5 text-fuchsia-300" />
+                      <span>AI Outfit Designer</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span
+                        className="rounded-full border border-purple-400/40 bg-purple-500/20 px-2 py-0.5 font-mono text-[9px] font-semibold text-purple-200"
+                        title="Runs via your local LM Studio server (:1234) first"
+                      >
+                        ⚡ {preferLocalAi ? 'LM Studio' : 'LM Studio First'}
+                      </span>
+                      <span className="rounded-full border border-amber-400/35 bg-amber-500/15 px-2 py-0.5 font-mono text-[9px] font-semibold text-amber-200">
+                        {circadian.phaseEmoji} {circadian.phaseLabel} · {circadian.clockText}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Autonomous Self-Dressing CTA */}
+                  {onDesignOutfitForNow && (
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-400/25 bg-amber-950/20 p-2">
+                      <button
+                        type="button"
+                        disabled={isGeneratingAiOutfit}
+                        onClick={() => void onDesignOutfitForNow()}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500/85 to-fuchsia-600/90 px-3 py-1.5 text-[11px] font-bold text-white shadow transition hover:brightness-110 disabled:opacity-45"
+                      >
+                        {isGeneratingAiOutfit ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Clock className="h-3.5 w-3.5" />
+                        )}
+                        <span>
+                          {isGeneratingAiOutfit
+                            ? `${persona.name} is designing...`
+                            : `Let ${persona.name} Dress Herself for ${circadian.phaseLabel}`}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  {onToggleAutoDressByTime && (
+                    <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[10.5px] text-zinc-200">
+                      <span className="flex items-center gap-1.5">
+                        <span>🕰️</span>
+                        <span>Auto-dress by time of day &amp; occasion</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={autoDressByTimeOccasion}
+                        onChange={(e) => onToggleAutoDressByTime(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-amber-400"
+                      />
+                    </label>
+                  )}
+
+                  {/* Custom Outfit Prompt */}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={aiOutfitPrompt}
+                      disabled={isGeneratingAiOutfit}
+                      onChange={(e) => setAiOutfitPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && aiOutfitPrompt.trim() && !isGeneratingAiOutfit) {
+                          void onGenerateAiOutfit(aiOutfitPrompt.trim(), saveAiAsNewSlot);
+                        }
+                      }}
+                      placeholder="Describe an occasion or outfit (e.g. rainy cafe knit)..."
+                      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#10101e] px-3 py-1.5 text-xs text-white placeholder-zinc-500 outline-none focus:border-fuchsia-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={isGeneratingAiOutfit || !aiOutfitPrompt.trim()}
+                      onClick={() => {
+                        if (aiOutfitPrompt.trim()) {
+                          void onGenerateAiOutfit(aiOutfitPrompt.trim(), saveAiAsNewSlot);
+                        }
+                      }}
+                      className="flex shrink-0 items-center gap-1.5 rounded-xl bg-gradient-to-r from-fuchsia-600 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-glow transition hover:brightness-110 disabled:opacity-45"
+                    >
+                      {isGeneratingAiOutfit ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                      <span>{isGeneratingAiOutfit ? 'Styling...' : 'Generate'}</span>
+                    </button>
+                  </div>
+
+                  {/* Real-Life Time & Occasion Quick Chips */}
+                  <div className="flex flex-wrap gap-1">
+                    {OCCASION_QUICK_CHIPS.map((chip) => (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        disabled={isGeneratingAiOutfit}
+                        onClick={() => {
+                          setAiOutfitPrompt(chip.prompt);
+                          if (onDesignOutfitForNow) {
+                            void onDesignOutfitForNow(chip.prompt);
+                          } else {
+                            void onGenerateAiOutfit(chip.prompt, saveAiAsNewSlot);
+                          }
+                        }}
+                        className="rounded-lg border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-zinc-200 transition hover:border-fuchsia-400/45 hover:bg-fuchsia-500/15 disabled:opacity-45"
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-0.5 text-[10.5px] text-zinc-400">
+                    <label className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={saveAiAsNewSlot}
+                        onChange={(e) => setSaveAiAsNewSlot(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-fuchsia-500"
+                      />
+                      <span>Save custom prompt as new slot</span>
+                    </label>
+                    {activeSlot.aiStyleNote && (
+                      <span className="truncate max-w-[165px] italic text-fuchsia-200/80" title={activeSlot.aiStyleNote}>
+                        “{activeSlot.aiStyleNote}”
+                      </span>
+                    )}
+                  </div>
+
+                  {onToggleProceduralAccessory && (
+                    <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-zinc-400">
+                        3D Bone-Tracked Accessories
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {PROCEDURAL_ACCESSORY_ORDER.map((accId) => {
+                          const meta = PROCEDURAL_ACCESSORY_META[accId];
+                          const equipped = (activeSlot.proceduralAccessories || []).includes(accId);
+                          return (
+                            <button
+                              key={accId}
+                              type="button"
+                              onClick={() => onToggleProceduralAccessory(accId)}
+                              className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                                equipped
+                                  ? 'border-fuchsia-400/60 bg-fuchsia-500/25 text-fuchsia-100'
+                                  : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/25 hover:text-zinc-200'
+                              }`}
+                            >
+                              <span>{meta.emoji}</span>
+                              <span>{meta.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI Hairstyle Studio (3D Procedural Hairstyles + Dye + LM Studio Picker) */}
+                  {onSelectHairStyle && (
+                    <div className="border-t border-white/[0.07] pt-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[9.5px] font-semibold uppercase tracking-wider text-pink-200/90">
+                          💇‍♀️ AI Hairstyle Studio
+                        </div>
+                        {onAiPickHairStyle && (
+                          <button
+                            type="button"
+                            disabled={isGeneratingAiOutfit}
+                            onClick={() => void onAiPickHairStyle()}
+                            className="flex items-center gap-1 rounded-lg border border-pink-400/40 bg-pink-500/20 px-2 py-0.5 text-[10px] font-semibold text-pink-100 transition hover:bg-pink-500/35 disabled:opacity-45"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            <span>Let {persona.name} Pick Hair</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {HAIR_STYLE_ORDER.map((styleId) => {
+                          const meta = HAIR_STYLE_META[styleId];
+                          const active = (activeSlot.hairStyle || 'default') === styleId;
+                          return (
+                            <button
+                              key={styleId}
+                              type="button"
+                              title={meta.description}
+                              onClick={() => onSelectHairStyle(styleId)}
+                              className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                                active
+                                  ? 'border-pink-400/70 bg-pink-500/25 text-pink-100 shadow-sm'
+                                  : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/25 hover:text-zinc-200'
+                              }`}
+                            >
+                              <span>{meta.emoji}</span>
+                              <span>{meta.shortLabel}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {onSelectHairColor && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          <span className="text-[9.5px] text-zinc-400 mr-0.5">Hair Dye:</span>
+                          {HAIR_COLOR_SWATCHES.map((sw) => {
+                            const selected = (activeSlot.hairColorHex ?? null) === sw.hex;
+                            return (
+                              <button
+                                key={sw.id}
+                                type="button"
+                                title={sw.label}
+                                onClick={() => onSelectHairColor(sw.hex, sw.highlightHex)}
+                                className={`flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9.5px] transition ${
+                                  selected
+                                    ? 'border-pink-300 bg-pink-500/25 text-white'
+                                    : 'border-white/10 bg-white/[0.04] text-zinc-300 hover:border-white/30'
+                                }`}
+                              >
+                                <span
+                                  className="h-2.5 w-2.5 rounded-full border border-white/30"
+                                  style={{
+                                    background: sw.hex
+                                      ? `linear-gradient(135deg, ${sw.hex}, ${sw.highlightHex || sw.hex})`
+                                      : 'conic-gradient(#64748b, #f472b6, #38bdf8, #64748b)',
+                                  }}
+                                />
+                                <span>{sw.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Active Outfit Card Banner */}
+            <div className="rounded-2xl border border-violet-500/30 bg-gradient-to-br from-violet-900/30 via-purple-900/15 to-transparent p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-300 flex items-center gap-1">
+                  <Check className="h-3 w-3 text-emerald-400" />
+                  Currently Worn Outfit
+                </span>
+                <span className="rounded-full bg-violet-500/25 px-2 py-0.5 font-mono text-[9px] font-semibold text-violet-200">
+                  Active Slot
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 text-sm font-bold text-white shadow"
+                  style={{
+                    background: `linear-gradient(135deg, ${persona.accentColor}aa, #171727)`,
+                  }}
+                >
+                  👘
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold text-white">
+                    {activeSlot.name}
+                  </div>
+                  <div className="text-[11px] text-zinc-400 flex items-center gap-2 mt-0.5">
+                    <span>
+                      {(activeSlot.accessories || []).length} Accessories
+                    </span>
+                    <span>·</span>
+                    <span>
+                      {Object.keys(activeSlot.materialMods || {}).length} Custom Tints
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Persona Outfit Slots - 2-Column Visual Card Grid */}
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                  {persona.name}&apos;s Full Outfits
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+                  Wardrobe Outfits Grid ({persona.outfitSlots.length})
                 </span>
-                <span className="text-[10px] text-zinc-500">Hot-Swap VRM Variant</span>
+                <span className="text-[10px] text-zinc-500">
+                  Tap card to switch outfit
+                </span>
               </div>
 
-              <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
                 {persona.outfitSlots.map((slot) => {
                   const isActive = slot.id === activeSlot.id;
+                  const isRenaming = renamingSlotId === slot.id;
                   const vaultMeta = slot.modelVaultId
                     ? vaultModels.find((m) => m.id === slot.modelVaultId)
                     : null;
-                  const isRenaming = renamingSlotId === slot.id;
 
                   return (
                     <div
                       key={slot.id}
                       onClick={() => !isRenaming && onSelectSlot(slot.id)}
-                      className={`group flex cursor-pointer items-center justify-between gap-2 rounded-2xl border p-2.5 transition ${
+                      className={`group relative flex flex-col justify-between overflow-hidden rounded-2xl border p-2.5 transition cursor-pointer ${
                         isActive
-                          ? 'border-violet-400/55 bg-violet-500/15 shadow-glow'
+                          ? 'border-violet-400/80 bg-violet-950/40 ring-1 ring-violet-400/50 shadow-glow'
                           : 'border-white/[0.08] bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      {/* Thumbnail / Icon preview */}
+                      <div className="relative mb-2 aspect-video w-full overflow-hidden rounded-xl bg-black/40 flex items-center justify-center">
                         {vaultMeta?.thumbnailDataUrl ? (
                           <img
                             src={vaultMeta.thumbnailDataUrl}
                             alt={slot.name}
-                            className="h-10 w-10 rounded-xl object-cover border border-white/10"
+                            className="h-full w-full object-cover"
                           />
                         ) : (
                           <div
-                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 text-xs font-bold text-white"
+                            className="flex h-full w-full items-center justify-center text-xs font-bold text-white"
                             style={{
-                              background: `linear-gradient(135deg, ${persona.accentColor}88, #141422)`,
+                              background: `linear-gradient(135deg, ${persona.accentColor}66, #141422)`,
                             }}
                           >
-                            {slot.modelVaultId ? '3D' : 'VRM'}
+                            {slot.modelVaultId ? '3D MODEL' : 'DEFAULT VRM'}
                           </div>
                         )}
-                        <div className="min-w-0 flex-1">
-                          {isRenaming ? (
-                            <input
-                              type="text"
-                              autoFocus
-                              value={renameDraft}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => setRenameDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  if (renameDraft.trim()) onRenameSlot(slot.id, renameDraft.trim());
-                                  setRenamingSlotId(null);
-                                } else if (e.key === 'Escape') {
-                                  setRenamingSlotId(null);
-                                }
-                              }}
-                              onBlur={() => {
-                                if (renameDraft.trim()) onRenameSlot(slot.id, renameDraft.trim());
-                                setRenamingSlotId(null);
-                              }}
-                              className="w-full rounded-lg border border-violet-400 bg-[#121220] px-2 py-0.5 text-xs text-white outline-none"
-                            />
-                          ) : (
-                            <div className="truncate text-xs font-semibold text-zinc-100">
-                              {slot.name}
-                            </div>
-                          )}
-                          <div className="truncate text-[10px] text-zinc-400">
-                            {vaultMeta
-                              ? `${vaultMeta.fileName} (${vaultMeta.format.toUpperCase()})`
-                              : 'Default Anime .VRM (or latest uploaded)'}
+
+                        {isActive && (
+                          <div className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-violet-500 text-white shadow">
+                            <Check className="h-3 w-3" />
                           </div>
+                        )}
+                      </div>
+
+                      {/* Title & info */}
+                      <div className="min-w-0 mb-1.5">
+                        {isRenaming ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={renameDraft}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                if (renameDraft.trim())
+                                  onRenameSlot(slot.id, renameDraft.trim());
+                                setRenamingSlotId(null);
+                              } else if (e.key === 'Escape') {
+                                setRenamingSlotId(null);
+                              }
+                            }}
+                            onBlur={() => {
+                              if (renameDraft.trim())
+                                onRenameSlot(slot.id, renameDraft.trim());
+                              setRenamingSlotId(null);
+                            }}
+                            className="w-full rounded border border-violet-400 bg-[#121220] px-1.5 py-0.5 text-[11px] text-white outline-none"
+                          />
+                        ) : (
+                          <div className="truncate text-xs font-semibold text-zinc-100">
+                            {slot.name}
+                          </div>
+                        )}
+                        <div className="truncate text-[9.5px] text-zinc-400">
+                          {vaultMeta
+                            ? `${vaultMeta.format.toUpperCase()} · ${formatBytes(vaultMeta.sizeBytes)}`
+                            : 'Standard Model Preset'}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      {/* Quick action bar */}
+                      <div className="flex items-center justify-end gap-1 pt-1 border-t border-white/[0.05]">
                         <button
                           type="button"
                           onClick={(e) => {
@@ -803,16 +1148,11 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                             setRenamingSlotId(slot.id);
                             setRenameDraft(slot.name);
                           }}
-                          className="rounded-lg p-1 text-zinc-500 opacity-0 transition hover:bg-white/10 hover:text-zinc-200 group-hover:opacity-100"
+                          className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white transition"
                           title="Rename outfit slot"
                         >
-                          <Edit3 className="h-3.5 w-3.5" />
+                          <Edit3 className="h-3 w-3" />
                         </button>
-                        {isActive && (
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-500 text-white">
-                            <Check className="h-3 w-3" />
-                          </span>
-                        )}
                         {persona.outfitSlots.length > 1 && (
                           <button
                             type="button"
@@ -820,10 +1160,10 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                               e.stopPropagation();
                               onDeleteSlot(slot.id);
                             }}
-                            className="rounded-lg p-1 text-zinc-500 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100"
-                            title="Remove outfit slot"
+                            className="rounded-lg p-1 text-zinc-400 hover:bg-rose-500/25 hover:text-rose-300 transition"
+                            title="Delete outfit slot"
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <Trash2 className="h-3 w-3" />
                           </button>
                         )}
                       </div>
@@ -1042,12 +1382,46 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                 </button>
               </div>
             </div>
-          </>
+          </div>
         )}
 
-        {/* TAB 1B: 3D Accessories & .XWEAR Dress-Up */}
+        {/* TAB 3: 3D Accessories & .XWEAR Dress-Up */}
         {tab === 'accessories' && (
           <div className="space-y-4">
+            {/* Anchor Bone Filter Pills */}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1 text-[10.5px] font-semibold uppercase text-zinc-400">
+                <Filter className="h-3 w-3" />
+                <span>Anchor Bone Filter</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'head', label: '🎩 Head' },
+                    { id: 'neck', label: '🧣 Neck' },
+                    { id: 'chest', label: '🪽 Chest/Wings' },
+                    { id: 'hips', label: '🦊 Waist/Tail' },
+                    { id: 'rightHand', label: '🎤 Props' },
+                    { id: 'auto_fit', label: '👗 Auto-Fit' },
+                  ] as const
+                ).map((bone) => (
+                  <button
+                    key={bone.id}
+                    type="button"
+                    onClick={() => setAccessoryFilter(bone.id as any)}
+                    className={`rounded-lg px-2 py-1 text-[11px] font-medium transition ${
+                      accessoryFilter === bone.id
+                        ? 'bg-fuchsia-500 text-white font-bold shadow'
+                        : 'bg-white/[0.04] text-zinc-400 hover:text-white hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    {bone.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Upload .xwear / .xavatar / .glb / .vrm Accessory */}
             <div className="rounded-2xl border border-dashed border-fuchsia-400/35 bg-fuchsia-950/15 p-3">
               <div className="text-xs font-semibold text-fuchsia-200">
@@ -1126,7 +1500,13 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {(activeSlot.accessories || []).map((acc) => (
+                  {(activeSlot.accessories || [])
+                    .filter((acc) =>
+                      accessoryFilter === 'all' ? true : acc.attachTarget === accessoryFilter
+                    )
+                    .map((acc) => {
+                    const isExpanded = selectedAccessoryId === acc.id;
+                    return (
                     <div
                       key={acc.id}
                       className="space-y-2.5 rounded-2xl border border-fuchsia-400/25 bg-white/[0.03] p-3"
@@ -1138,11 +1518,24 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                               {acc.name}
                             </span>
                             <span className="rounded bg-fuchsia-500/25 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase text-fuchsia-200">
-                              {acc.format}
+                              {acc.attachTarget}
                             </span>
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedAccessoryId(isExpanded ? null : acc.id)
+                            }
+                            className={`rounded-lg px-2 py-0.5 text-[10px] font-semibold border transition ${
+                              isExpanded
+                                ? 'bg-fuchsia-500/30 border-fuchsia-400/50 text-fuchsia-200'
+                                : 'bg-white/5 border-white/10 text-zinc-400 hover:text-white'
+                            }`}
+                          >
+                            {isExpanded ? 'Hide Controls' : 'Fitting ⚙️'}
+                          </button>
                           <button
                             type="button"
                             role="switch"
@@ -1172,257 +1565,159 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-[1fr_auto] items-center gap-2">
-                        <select
-                          value={acc.attachTarget}
-                          onChange={(e) =>
-                            onUpdateEquippedAccessory(acc.id, {
-                              attachTarget: e.target.value as AccessoryAttachTarget,
-                            })
-                          }
-                          className="rounded-lg border border-white/10 bg-[#10101c] px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-fuchsia-400"
-                        >
-                          <option value="auto_fit">Auto-Fit Body (.xwear)</option>
-                          <option value="head">Head</option>
-                          <option value="neck">Neck</option>
-                          <option value="chest">Chest / Back</option>
-                          <option value="hips">Hips / Waist</option>
-                          <option value="rightHand">Right Hand</option>
-                          <option value="leftHand">Left Hand</option>
-                          <option value="root">Avatar Root</option>
-                        </select>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateEquippedAccessory(acc.id, {
-                              position: [0, 0, 0],
-                              rotationDeg: [0, 0, 0],
-                              scale: 1,
-                            })
-                          }
-                          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-zinc-300 hover:bg-white/10"
-                          title="Reset position, rotation & scale"
-                        >
-                          Reset Fit
-                        </button>
-                      </div>
-
-                      {/* Sizing & Scale Controls */}
-                      <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-2.5 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-semibold text-zinc-200">
-                            Accessory Size / Scale
-                          </span>
-                          <span className="font-mono text-[11px] font-bold text-fuchsia-300">
-                            {(acc.scale || 1).toFixed(2)}x ({Math.round((acc.scale || 1) * 100)}%)
-                          </span>
-                        </div>
-
-                        {/* Step Increase / Decrease Buttons */}
-                        <div className="grid grid-cols-4 gap-1.5">
+                      {/* Always-visible Quick Scale Controls */}
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-black/35 px-2.5 py-1.5 border border-white/5">
+                        <span className="text-[10.5px] font-medium text-zinc-300">
+                          Scale: <span className="font-mono font-bold text-fuchsia-300">{(acc.scale || 1).toFixed(2)}x</span>
+                        </span>
+                        <div className="flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => {
                               const next = Math.max(0.05, Math.round(((acc.scale || 1) - 0.1) * 100) / 100);
                               onUpdateEquippedAccessory(acc.id, { scale: next });
                             }}
-                            className="flex items-center justify-center rounded-lg border border-white/10 bg-white/5 py-1 text-[10.5px] font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
-                            title="Decrease size by 10%"
+                            className="h-6 w-6 rounded-lg bg-white/10 text-xs font-bold text-white hover:bg-fuchsia-500/40 flex items-center justify-center transition"
+                            title="Decrease scale"
                           >
-                            -10%
+                            -
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = Math.max(0.05, Math.round(((acc.scale || 1) - 0.05) * 100) / 100);
-                              onUpdateEquippedAccessory(acc.id, { scale: next });
-                            }}
-                            className="flex items-center justify-center rounded-lg border border-rose-400/30 bg-rose-500/15 py-1 text-[10.5px] font-semibold text-rose-200 transition hover:bg-rose-500/25"
-                            title="Decrease size by 5%"
-                          >
-                            -5%
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = Math.min(5.0, Math.round(((acc.scale || 1) + 0.05) * 100) / 100);
-                              onUpdateEquippedAccessory(acc.id, { scale: next });
-                            }}
-                            className="flex items-center justify-center rounded-lg border border-emerald-400/30 bg-emerald-500/15 py-1 text-[10.5px] font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
-                            title="Increase size by 5%"
-                          >
-                            +5%
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = Math.min(5.0, Math.round(((acc.scale || 1) + 0.1) * 100) / 100);
-                              onUpdateEquippedAccessory(acc.id, { scale: next });
-                            }}
-                            className="flex items-center justify-center rounded-lg border border-white/10 bg-white/5 py-1 text-[10.5px] font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
-                            title="Increase size by 10%"
-                          >
-                            +10%
-                          </button>
-                        </div>
-
-                        {/* Quick Sizing Presets */}
-                        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
-                          {[0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0].map((presetScale) => (
-                            <button
-                              key={presetScale}
-                              type="button"
-                              onClick={() => onUpdateEquippedAccessory(acc.id, { scale: presetScale })}
-                              className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[9px] transition ${
-                                Math.abs((acc.scale || 1) - presetScale) < 0.02
-                                  ? 'bg-fuchsia-500 text-white font-bold'
-                                  : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-zinc-200'
-                              }`}
-                            >
-                              {Math.round(presetScale * 100)}%
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Sizing Slider (0.05x to 4.00x) */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9.5px] text-zinc-400">Fine:</span>
                           <input
                             type="range"
                             min={0.05}
-                            max={4.0}
-                            step={0.01}
+                            max={3.0}
+                            step={0.05}
                             value={acc.scale || 1}
                             onChange={(e) =>
                               onUpdateEquippedAccessory(acc.id, {
                                 scale: Number(e.target.value),
                               })
                             }
-                            className="flex-1 accent-fuchsia-400"
+                            className="w-20 accent-fuchsia-400"
                           />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = Math.min(5.0, Math.round(((acc.scale || 1) + 0.1) * 100) / 100);
+                              onUpdateEquippedAccessory(acc.id, { scale: next });
+                            }}
+                            className="h-6 w-6 rounded-lg bg-white/10 text-xs font-bold text-white hover:bg-fuchsia-500/40 flex items-center justify-center transition"
+                            title="Increase scale"
+                          >
+                            +
+                          </button>
                         </div>
+                      </div>
 
-                        {/* 3D Axis Stretch Sizing (Width, Height, Depth) */}
-                        <details className="pt-1">
-                          <summary className="cursor-pointer text-[9.5px] font-medium text-zinc-400 hover:text-zinc-200">
-                            3D Axis Sizing (Width / Height / Depth)
-                          </summary>
-                          <div className="mt-1.5 space-y-1.5 pl-1 border-l border-white/10">
-                            {[
-                              { label: 'Width (X)', idx: 0 },
-                              { label: 'Height (Y)', idx: 1 },
-                              { label: 'Depth (Z)', idx: 2 },
-                            ].map(({ label, idx }) => {
-                              const axisScale = acc.scaleXYZ?.[idx] ?? 1;
-                              return (
-                                <div key={label} className="flex items-center justify-between gap-2">
-                                  <span className="text-[9px] text-zinc-400">
-                                    {label} ({axisScale.toFixed(2)}x)
-                                  </span>
-                                  <input
-                                    type="range"
-                                    min={0.2}
-                                    max={3.0}
-                                    step={0.02}
-                                    value={axisScale}
-                                    onChange={(e) => {
-                                      const nextXYZ: [number, number, number] = [
-                                        acc.scaleXYZ?.[0] ?? 1,
-                                        acc.scaleXYZ?.[1] ?? 1,
-                                        acc.scaleXYZ?.[2] ?? 1,
-                                      ];
-                                      nextXYZ[idx] = Number(e.target.value);
-                                      onUpdateEquippedAccessory(acc.id, { scaleXYZ: nextXYZ });
-                                    }}
-                                    className="w-32 accent-violet-400"
-                                  />
-                                </div>
-                              );
-                            })}
+                      {/* Expanded Fitting Controls Dock */}
+                      {isExpanded && (
+                        <div className="space-y-2 pt-2 border-t border-white/[0.08] text-[10px] text-zinc-400">
+                          <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                            <select
+                              value={acc.attachTarget}
+                              onChange={(e) =>
+                                onUpdateEquippedAccessory(acc.id, {
+                                  attachTarget: e.target.value as AccessoryAttachTarget,
+                                })
+                              }
+                              className="rounded-lg border border-white/10 bg-[#10101c] px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-fuchsia-400"
+                            >
+                              <option value="auto_fit">Auto-Fit Body (.xwear)</option>
+                              <option value="head">Head</option>
+                              <option value="neck">Neck</option>
+                              <option value="chest">Chest / Back</option>
+                              <option value="hips">Hips / Waist</option>
+                              <option value="rightHand">Right Hand</option>
+                              <option value="leftHand">Left Hand</option>
+                              <option value="root">Avatar Root</option>
+                            </select>
+
                             <button
                               type="button"
                               onClick={() =>
-                                onUpdateEquippedAccessory(acc.id, { scaleXYZ: [1, 1, 1] })
-                              }
-                              className="text-[9px] text-zinc-500 hover:text-zinc-300"
-                            >
-                              Reset Axis Scale to 1.0x
-                            </button>
-                          </div>
-                        </details>
-                      </div>
-
-                      <div className="space-y-1.5 text-[10px] text-zinc-400">
-                        {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
-                          <div key={axis} className="flex items-center justify-between gap-2">
-                            <span>
-                              Offset {axis} ({acc.position[idx].toFixed(2)}m)
-                            </span>
-                            <input
-                              type="range"
-                              min={-1.0}
-                              max={1.0}
-                              step={0.01}
-                              value={acc.position[idx]}
-                              onChange={(e) => {
-                                const nextPos: [number, number, number] = [...acc.position];
-                                nextPos[idx] = Number(e.target.value);
-                                onUpdateEquippedAccessory(acc.id, { position: nextPos });
-                              }}
-                              className="w-40 accent-cyan-400"
-                            />
-                          </div>
-                        ))}
-                        {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
-                          <div key={`rot-${axis}`} className="flex items-center justify-between gap-2">
-                            <span>
-                              Rotate {axis} ({acc.rotationDeg[idx]}°)
-                            </span>
-                            <input
-                              type="range"
-                              min={-180}
-                              max={180}
-                              step={1}
-                              value={acc.rotationDeg[idx]}
-                              onChange={(e) => {
-                                const nextRot: [number, number, number] = [...acc.rotationDeg];
-                                nextRot[idx] = Number(e.target.value);
-                                onUpdateEquippedAccessory(acc.id, { rotationDeg: nextRot });
-                              }}
-                              className="w-40 accent-violet-400"
-                            />
-                          </div>
-                        ))}
-                        <div className="flex items-center justify-between gap-2 pt-1">
-                          <span>Color Tint</span>
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="color"
-                              value={acc.colorHex || '#ffffff'}
-                              onChange={(e) =>
                                 onUpdateEquippedAccessory(acc.id, {
-                                  colorHex: e.target.value,
+                                  position: [0, 0, 0],
+                                  rotationDeg: [0, 0, 0],
+                                  scale: 1,
                                 })
                               }
-                              className="h-5 w-8 cursor-pointer rounded border border-white/15 bg-transparent"
-                            />
-                            {acc.colorHex && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onUpdateEquippedAccessory(acc.id, { colorHex: undefined })
+                              className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-zinc-300 hover:bg-white/10"
+                              title="Reset position, rotation & scale"
+                            >
+                              Reset Fit
+                            </button>
+                          </div>
+
+                          {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
+                            <div key={axis} className="flex items-center justify-between gap-2">
+                              <span>
+                                Offset {axis} ({acc.position[idx].toFixed(2)}m)
+                              </span>
+                              <input
+                                type="range"
+                                min={-1.0}
+                                max={1.0}
+                                step={0.01}
+                                value={acc.position[idx]}
+                                onChange={(e) => {
+                                  const nextPos: [number, number, number] = [...acc.position];
+                                  nextPos[idx] = Number(e.target.value);
+                                  onUpdateEquippedAccessory(acc.id, { position: nextPos });
+                                }}
+                                className="w-36 accent-cyan-400"
+                              />
+                            </div>
+                          ))}
+                          {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
+                            <div key={`rot-${axis}`} className="flex items-center justify-between gap-2">
+                              <span>
+                                Rotate {axis} ({acc.rotationDeg[idx]}°)
+                              </span>
+                              <input
+                                type="range"
+                                min={-180}
+                                max={180}
+                                step={1}
+                                value={acc.rotationDeg[idx]}
+                                onChange={(e) => {
+                                  const nextRot: [number, number, number] = [...acc.rotationDeg];
+                                  nextRot[idx] = Number(e.target.value);
+                                  onUpdateEquippedAccessory(acc.id, { rotationDeg: nextRot });
+                                }}
+                                className="w-36 accent-violet-400"
+                              />
+                            </div>
+                          ))}
+                          <div className="flex items-center justify-between gap-2 pt-1">
+                            <span>Color Tint</span>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="color"
+                                value={acc.colorHex || '#ffffff'}
+                                onChange={(e) =>
+                                  onUpdateEquippedAccessory(acc.id, {
+                                    colorHex: e.target.value,
+                                  })
                                 }
-                                className="text-[10px] text-zinc-400 hover:text-rose-300"
-                              >
-                                Clear
-                              </button>
-                            )}
+                                className="h-5 w-8 cursor-pointer rounded border border-white/15 bg-transparent"
+                              />
+                              {acc.colorHex && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdateEquippedAccessory(acc.id, { colorHex: undefined })
+                                  }
+                                  className="text-[10px] text-zinc-400 hover:text-rose-300"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
-                  ))}
+                  );})}
                 </div>
               )}
             </div>
@@ -1491,8 +1786,8 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
           </div>
         )}
 
-        {/* TAB 2: Clothes & Gear (Toggle Pieces) */}
-        {tab === 'clothes_gear' && (
+        {/* TAB 2: Apparel Pieces (Toggle Clothes & Gear) */}
+        {tab === 'apparel' && (
           <div className="space-y-3">
             {/* Quick Controls Bar */}
             <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-2">
@@ -1514,6 +1809,48 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                 <RotateCcw className="h-3.5 w-3.5" />
                 Reset Default
               </button>
+            </div>
+
+            {/* Department Filter Pills */}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1 text-[10.5px] font-semibold uppercase text-zinc-400">
+                <Filter className="h-3 w-3" />
+                <span>Department Filter</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => setApparelFilter('all')}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
+                    apparelFilter === 'all'
+                      ? 'bg-rose-500 text-white font-bold shadow'
+                      : 'bg-white/[0.04] text-zinc-400 hover:text-white hover:bg-white/[0.08]'
+                  }`}
+                >
+                  All ({detectedMeshes.length})
+                </button>
+                {CLOTHING_CATEGORY_ORDER.map((cat) => {
+                  const meta = CLOTHING_CATEGORY_META[cat];
+                  const count = detectedMeshes.filter((m) => m.category === cat).length;
+                  if (count === 0) return null;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setApparelFilter(cat)}
+                      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition ${
+                        apparelFilter === cat
+                          ? 'bg-rose-500 text-white font-bold shadow'
+                          : 'bg-white/[0.04] text-zinc-400 hover:text-white hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <span>{meta.emoji}</span>
+                      <span>{meta.title}</span>
+                      <span className="font-mono text-[9px] opacity-75">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Cycling Shorts in Clothes & Gear */}
@@ -1556,13 +1893,13 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               Categorized from VRoid Studio material IDs (core skin &amp; face meshes safely hidden). Toggle individual pieces live:
             </p>
 
-            {groupedMeshes.length === 0 ? (
+            {filteredGroupedMeshes.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-center text-xs text-zinc-500">
-                No removable clothing or accessory meshes detected on this model.
+                No removable clothing or accessory meshes in this filter.
               </div>
             ) : (
               <div className="space-y-2.5">
-                {groupedMeshes.map(({ category, meta, items }) => {
+                {filteredGroupedMeshes.map(({ category, meta, items }) => {
                   const isCollapsed = Boolean(collapsedCategories[category]);
                   const visibleCount = items.filter((mesh) =>
                     mesh.name in activeSlot.meshVisibility

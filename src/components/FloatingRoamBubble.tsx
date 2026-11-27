@@ -11,9 +11,20 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
-import type { ChatMessage, DisplayInfo, Persona, RoamBehavior } from '../types/studio';
+import type {
+  ActiveLifeScene,
+  ChatMessage,
+  DisplayInfo,
+  Persona,
+  RoamBehavior,
+} from '../types/studio';
 import { MOOD_META } from '../data/presets';
 import { ROAM_BEHAVIOR_LABELS } from '../stage/roamController';
+import {
+  DESTINATION_KIND_META,
+  FOOD_VISUAL_META,
+  HOBBY_KIND_META,
+} from '../stage/lifePropsRig';
 
 interface FloatingRoamBubbleProps {
   persona: Persona;
@@ -39,6 +50,10 @@ interface FloatingRoamBubbleProps {
   onSpeakMessage: (msg: ChatMessage) => void;
   onOpenSettings: () => void;
   onPointerHoverInteractive: (overInteractive: boolean) => void;
+  lifeScene?: ActiveLifeScene;
+  isLifeBusy?: boolean;
+  onFollowWhim?: () => void;
+  onClearLifeScene?: () => void;
 }
 
 export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
@@ -65,6 +80,10 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
   onSpeakMessage,
   onOpenSettings,
   onPointerHoverInteractive,
+  lifeScene,
+  isLifeBusy = false,
+  onFollowWhim,
+  onClearLifeScene,
 }) => {
   const [draft, setDraft] = useState('');
   const [bubbleVisible, setBubbleVisible] = useState(true);
@@ -141,6 +160,17 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
+              {onFollowWhim && (
+                <button
+                  type="button"
+                  disabled={isLifeBusy}
+                  onClick={onFollowWhim}
+                  className="flex items-center gap-0.5 rounded-lg border border-amber-400/40 bg-amber-500/20 px-1.5 py-1 text-[10px] font-semibold text-amber-100 hover:bg-amber-500/35 disabled:opacity-45"
+                  title={`Let ${persona.name} decide what she wants to do right now`}
+                >
+                  <span>🎲</span>
+                </button>
+              )}
               {latestAssistantMsg?.spokenText && (
                 <button
                   type="button"
@@ -177,6 +207,33 @@ export const FloatingRoamBubble: React.FC<FloatingRoamBubbleProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Active Autonomous Life Activity Pill (visible in Desktop Roam!) */}
+          {(lifeScene?.dining ||
+            lifeScene?.hobby ||
+            (lifeScene?.destination && lifeScene.destination.destinationKind !== 'none')) && (
+            <div className="mb-2 flex items-center justify-between gap-1.5 rounded-xl border border-cyan-400/30 bg-cyan-950/35 px-2.5 py-1 text-[10px] text-cyan-100">
+              <span className="truncate font-semibold">
+                {lifeScene.dining
+                  ? `${FOOD_VISUAL_META[lifeScene.dining.foodVisual].emoji} ${lifeScene.dining.dishName}`
+                  : lifeScene.hobby
+                  ? `${HOBBY_KIND_META[lifeScene.hobby.hobbyKind].emoji} ${lifeScene.hobby.hobbyName}`
+                  : lifeScene.destination && lifeScene.destination.destinationKind !== 'none'
+                  ? `${DESTINATION_KIND_META[lifeScene.destination.destinationKind].emoji} ${lifeScene.destination.placeName}`
+                  : ''}
+              </span>
+              {onClearLifeScene && (
+                <button
+                  type="button"
+                  onClick={onClearLifeScene}
+                  className="shrink-0 rounded px-1 text-zinc-300 hover:bg-white/10 hover:text-white"
+                  title="Pack away activity props"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Latest Dialogue */}
           {isGenerating ? (

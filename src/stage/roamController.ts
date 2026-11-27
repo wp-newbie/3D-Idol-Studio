@@ -1,8 +1,17 @@
 import * as THREE from 'three';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { MoodType, RoamBehavior, RoamCommand } from '../types/studio';
+import type { HobbyKindId, MoodType, RoamBehavior, RoamCommand } from '../types/studio';
 import type { EmotionBodyLanguage } from './emotionEngine';
-import { applyNaturalArms, DEFAULT_NATURAL_ARMS } from './naturalArmPose';
+import {
+  applyColdRubArms,
+  applyCrossedArms,
+  applyHobbyActivityArms,
+  applyNaturalArms,
+  applyShoulderStretchArms,
+  DEFAULT_NATURAL_ARMS,
+  expSmooth,
+  getHobbyActivityFrame,
+} from './naturalArmPose';
 
 export interface RoamFrameStatus {
   normX: number;
@@ -20,7 +29,7 @@ export const ROAM_BEHAVIOR_LABELS: Record<RoamBehavior, string> = {
   peek: 'Peeking from Edge',
   crossed_arms_wait: 'Crossed-Arms Wait',
   stretch_look: 'Stretching & Looking Around',
-  sit_taskbar: 'Perched on Taskbar',
+  sit_taskbar: 'Sitting in AI Chair',
   approach_user: 'Approaching Cursor',
 };
 
@@ -187,6 +196,7 @@ export class AutonomousRoamController {
     isMusicPlaying: boolean;
     hasActiveReactionOrEmote: boolean;
     isSleeping?: boolean;
+    activeHobbyKind?: HobbyKindId | null;
     boredom?: number;
     sleepiness?: number;
     energy?: number;
@@ -209,6 +219,7 @@ export class AutonomousRoamController {
       isMusicPlaying,
       hasActiveReactionOrEmote,
       isSleeping = false,
+      activeHobbyKind = null,
       boredom = 25,
       sleepiness = 20,
       energy = 80,
@@ -237,13 +248,14 @@ export class AutonomousRoamController {
       }
     }
 
-    // 1. Independent Autonomous Waypoint Engine (10–25s intervals, purely self-directed)
+    // 1. Independent Autonomous Waypoint Engine (paused while performing an active hobby/bath action!)
     if (
       autoRoamEnabled &&
       !this.isDragging &&
       !hasActiveReactionOrEmote &&
       !isMusicPlaying &&
       !isSleeping &&
+      !activeHobbyKind &&
       !this.isApproachingUser
     ) {
       this.nextDecisionIn -= dt;
@@ -379,20 +391,16 @@ export class AutonomousRoamController {
       targetWorldX = this.currentX * maxSpanX;
       targetWorldZ = this.currentZ * 0.25;
       const stepBob = isMoving ? Math.abs(Math.sin(this.walkPhase)) * 0.032 : 0;
-      const sitDrop = !this.isDragging && this.behavior === 'sit_taskbar' ? -0.18 : 0;
       targetWorldY =
-        taskbarFloorY + Math.max(0, this.currentY) * verticalSpanY + stepBob + sitDrop;
+        taskbarFloorY + Math.max(0, this.currentY) * verticalSpanY + stepBob;
     } else {
-      targetWorldY =
-        this.behavior === 'sit_taskbar'
-          ? -0.22
-          : isMoving
-          ? Math.abs(Math.sin(this.walkPhase)) * 0.028
-          : this.currentY * 0.16;
+      targetWorldY = isMoving
+        ? Math.abs(Math.sin(this.walkPhase)) * 0.028
+        : this.currentY * 0.16;
     }
 
     if (!hasActiveReactionOrEmote) {
-      const posLerp = this.isDragging ? Math.min(1, dt * 22) : Math.min(1, dt * 6.0);
+      const posLerp = expSmooth(this.isDragging ? 20 : 6.0, dt);
       avatarContainer.position.x = THREE.MathUtils.lerp(
         avatarContainer.position.x,
         targetWorldX,
@@ -414,6 +422,8 @@ export class AutonomousRoamController {
     let desiredYaw = 0;
     if (this.isDragging) {
       desiredYaw = THREE.MathUtils.clamp(-this.dragVelocityX * 0.25, -0.35, 0.35);
+    } else if (activeHobbyKind || this.behavior === 'sit_taskbar') {
+      desiredYaw = 0;
     } else if (isMoving && Math.abs(dx) > 0.02) {
       desiredYaw = dx > 0 ? (desktopRoamMode ? 0.65 : 0.45) : desktopRoamMode ? -0.65 : -0.45;
     } else if (this.behavior === 'peek') {
@@ -421,7 +431,7 @@ export class AutonomousRoamController {
     } else if (this.behavior === 'crossed_arms_wait' || mood === 'Pouty' || mood === 'Annoyed') {
       desiredYaw = desktopRoamMode ? 0.14 : 0;
     }
-    this.facingYaw = THREE.MathUtils.lerp(this.facingYaw, desiredYaw, Math.min(1, dt * 5.5));
+    this.facingYaw = THREE.MathUtils.lerp(this.facingYaw, desiredYaw, expSmooth(5.8, dt));
     avatarContainer.rotation.y = this.facingYaw;
 
     // Subtle pendulum tilt while dragged by the user
@@ -431,7 +441,7 @@ export class AutonomousRoamController {
     avatarContainer.rotation.z = THREE.MathUtils.lerp(
       avatarContainer.rotation.z,
       targetDragTiltZ,
-      Math.min(1, dt * 9)
+      expSmooth(9.0, dt)
     );
     this.dragVelocityX *= 0.88;
 
@@ -554,18 +564,18 @@ export class AutonomousRoamController {
         targets.rightLowerArm.x = 0.10 + Math.max(0, swing) * 0.22;
       } else if (this.behavior === 'sit_taskbar') {
         const forwardSign = isVrm0 ? 1 : -1;
-        // Modest, polite sitting posture: thighs and knees kept together so underwear is NEVER exposed
-        const gentleSway = Math.sin(elapsed * 1.8) * 0.04;
-        targets.leftUpperLeg.x = forwardSign * 1.08;
-        targets.rightUpperLeg.x = forwardSign * 1.08;
-        targets.leftUpperLeg.z = armSign * 0.095; // Inward adduction: brings left knee to centerline
-        targets.rightUpperLeg.z = -armSign * 0.095; // Inward adduction: brings right knee to centerline
-        targets.leftUpperLeg.y = forwardSign * 0.04; // Slight internal rotation keeps thighs pressed together
-        targets.rightUpperLeg.y = -forwardSign * 0.04;
-        targets.leftLowerLeg.x = -forwardSign * (1.08 + gentleSway);
-        targets.rightLowerLeg.x = -forwardSign * (1.08 - gentleSway);
-        targets.leftLowerLeg.z = -armSign * 0.025; // Calves and ankles stay together
-        targets.rightLowerLeg.z = armSign * 0.025;
+        // Modest, grounded sitting posture on her 3D AI Chair (thighs flush at y=0.45m, knees at ~86°, feet at y=0)
+        const gentleSway = Math.sin(elapsed * 1.6) * 0.03;
+        targets.leftUpperLeg.x = forwardSign * (Math.PI * 0.47);
+        targets.rightUpperLeg.x = forwardSign * (Math.PI * 0.47);
+        targets.leftUpperLeg.z = armSign * 0.09; // Inward adduction: brings left knee to centerline
+        targets.rightUpperLeg.z = -armSign * 0.09; // Inward adduction: brings right knee to centerline
+        targets.leftUpperLeg.y = forwardSign * 0.035; // Slight internal rotation keeps thighs pressed together
+        targets.rightUpperLeg.y = -forwardSign * 0.035;
+        targets.leftLowerLeg.x = -forwardSign * (Math.PI * 0.47 + gentleSway);
+        targets.rightLowerLeg.x = -forwardSign * (Math.PI * 0.47 - gentleSway);
+        targets.leftLowerLeg.z = -armSign * 0.02; // Calves and ankles stay together
+        targets.rightLowerLeg.z = armSign * 0.02;
         // Resting hands neatly down forward on lap / thighs (never bent backwards)
         targets.leftUpperArm.x = -0.12;
         targets.rightUpperArm.x = -0.12;
@@ -582,58 +592,77 @@ export class AutonomousRoamController {
         targets.leftHand.z = armSign * 0.04;
         targets.rightHand.z = -armSign * 0.04;
       } else if (bodyLang.coldRubArms > 0.25 && !isSleeping) {
-        const c = bodyLang.coldRubArms;
-        const rub = Math.sin(elapsed * 5.2) * 0.08 * c;
-        targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armSign * 0.78, c);
-        targets.rightUpperArm.z = THREE.MathUtils.lerp(targets.rightUpperArm.z, -armSign * 0.78, c);
-        targets.leftUpperArm.x = THREE.MathUtils.lerp(targets.leftUpperArm.x, -0.46, c);
-        targets.rightUpperArm.x = THREE.MathUtils.lerp(targets.rightUpperArm.x, -0.46, c);
-        targets.leftLowerArm.y = THREE.MathUtils.lerp(targets.leftLowerArm.y, 1.18 + rub, c);
-        targets.rightLowerArm.y = THREE.MathUtils.lerp(targets.rightLowerArm.y, -1.18 + rub, c);
+        // Solved convention-free in character frame below via applyColdRubArms
       } else if (
         !isSleeping &&
         (this.behavior === 'crossed_arms_wait' || bodyLang.armsCrossTension > 0.35)
       ) {
-        const t = this.behavior === 'crossed_arms_wait' ? 0.92 : bodyLang.armsCrossTension;
-        targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armSign * 0.68, t);
-        targets.rightUpperArm.z = THREE.MathUtils.lerp(targets.rightUpperArm.z, -armSign * 0.68, t);
-        targets.leftUpperArm.x = THREE.MathUtils.lerp(targets.leftUpperArm.x, -0.52, t);
-        targets.rightUpperArm.x = THREE.MathUtils.lerp(targets.rightUpperArm.x, -0.52, t);
-        targets.leftLowerArm.y = THREE.MathUtils.lerp(targets.leftLowerArm.y, 1.25, t);
-        targets.rightLowerArm.y = THREE.MathUtils.lerp(targets.rightLowerArm.y, -1.25, t);
+        // Solved convention-free in character frame below via applyCrossedArms
         targets.hips.z += Math.sin(elapsed * 1.6) * 0.035;
       } else if (this.behavior === 'stretch_look') {
-        const stretch = 0.5 + 0.5 * Math.sin(elapsed * 1.2);
-        targets.chest.x = -0.1 * stretch;
-        targets.spine.y = Math.sin(elapsed * 0.85) * 0.18;
-        targets.leftUpperArm.z = armSign * (0.82 - stretch * 0.22);
-        targets.rightUpperArm.z = -armSign * (0.82 - stretch * 0.22);
-        targets.leftUpperArm.x = -0.18 * stretch;
-        targets.rightUpperArm.x = -0.18 * stretch;
+        const stretch = 0.5 - 0.5 * Math.cos(elapsed * 0.98);
+        const forwardSign = isVrm0 ? 1 : -1;
+        targets.chest.x = -forwardSign * 0.08 * stretch;
+        targets.spine.y = Math.sin(elapsed * 0.85) * 0.14;
       } else if (this.behavior === 'peek') {
         const leanDir = this.currentX < 0 ? -1 : 1;
         targets.spine.x = 0.09;
         targets.spine.z = leanDir * 0.16;
       }
 
-      // Relaxed idle arms are solved from character-frame directions (same result on VRM 0.x and 1.0,
-      // no stray roll). Every other arm behaviour (dance, walk swing, crossed arms, sitting, ...)
-      // keeps using the Euler targets above.
+      // Relaxed idle, active hobby/bath actions, crossed-arms, and cold-hug arms are all solved from character-frame directions
+      // (+X left, +Y up, +Z forward) so VRM 0.x and VRM 1.0 produce identical front-facing poses with no backwards elbows.
+      const useStandingHobby = !this.isDragging && !isSleeping && Boolean(activeHobbyKind);
+      if (useStandingHobby && activeHobbyKind) {
+        const hf = getHobbyActivityFrame(activeHobbyKind, elapsed);
+        const forwardSign = isVrm0 ? 1 : -1;
+        targets.spine.y = hf.spineTwistY * 0.65;
+        targets.spine.x += forwardSign * hf.spineLeanX;
+        targets.chest.y = hf.spineTwistY * 0.35;
+        targets.chest.x += forwardSign * hf.spineLeanX * 0.45;
+      }
+
+      const useShoulderStretch =
+        !useStandingHobby &&
+        !this.isDragging &&
+        !isMoving &&
+        !isSleeping &&
+        this.behavior === 'stretch_look';
+
+      const useColdRubArms =
+        !useStandingHobby &&
+        !useShoulderStretch &&
+        !this.isDragging &&
+        !isMoving &&
+        this.behavior !== 'sit_taskbar' &&
+        !isSleeping &&
+        bodyLang.coldRubArms > 0.25;
+      const useCrossedArms =
+        !useStandingHobby &&
+        !useShoulderStretch &&
+        !this.isDragging &&
+        !isMoving &&
+        this.behavior !== 'sit_taskbar' &&
+        !isSleeping &&
+        !useColdRubArms &&
+        (this.behavior === 'crossed_arms_wait' || bodyLang.armsCrossTension > 0.35);
+
       const armsBusy =
+        useStandingHobby ||
+        useShoulderStretch ||
         isMusicPlaying ||
         this.isDragging ||
         isMoving ||
         this.behavior === 'sit_taskbar' ||
-        this.behavior === 'stretch_look' ||
-        (!isSleeping &&
-          (bodyLang.coldRubArms > 0.25 ||
-            this.behavior === 'crossed_arms_wait' ||
-            bodyLang.armsCrossTension > 0.35));
+        useColdRubArms ||
+        useCrossedArms;
       const naturalArms = !armsBusy;
+      const vectorSolvedArms =
+        useStandingHobby || useShoulderStretch || naturalArms || useCrossedArms || useColdRubArms;
 
-      const boneLerp = Math.min(1, dt * (this.isDragging ? 11.0 : 6.5));
+      const boneLerp = expSmooth(this.isDragging ? 11.5 : useStandingHobby ? 7.8 : 6.5, dt);
       for (const boneName of TRACKED_BONES) {
-        if (naturalArms && NATURAL_ARM_BONES.has(boneName)) continue;
+        if (vectorSolvedArms && NATURAL_ARM_BONES.has(boneName)) continue;
         const s = this.smoothBones[boneName];
         const tgt = targets[boneName];
         s.x = THREE.MathUtils.lerp(s.x, tgt.x, boneLerp);
@@ -646,7 +675,7 @@ export class AutonomousRoamController {
         }
       }
 
-      if (naturalArms) {
+      if (vectorSolvedArms) {
         const bone = (name: VRMHumanBoneName) => vrm.humanoid.getNormalizedBoneNode(name);
         const lu = bone('leftUpperArm');
         const ll = bone('leftLowerArm');
@@ -655,31 +684,41 @@ export class AutonomousRoamController {
         const rl = bone('rightLowerArm');
         const rh = bone('rightHand');
         if (lu && ll && lh && ru && rl && rh) {
-          const droop = bodyLang.shoulderDroop;
-          const fidget = bodyLang.shoulderFidget;
-          applyNaturalArms(
-            [
-              {
-                upper: lu,
-                lower: ll,
-                hand: lh,
-                side: 1,
-                outwardOffset: -droop * 0.08 - armSway,
-                forwardOffset: droop * 0.15 - fidget * 0.25,
-              },
-              {
-                upper: ru,
-                lower: rl,
-                hand: rh,
-                side: -1,
-                outwardOffset: -droop * 0.08 + armSway,
-                forwardOffset: droop * 0.15 + fidget * 0.25,
-              },
-            ],
-            vrm.scene.parent,
-            DEFAULT_NATURAL_ARMS,
-            boneLerp
-          );
+          if (useStandingHobby && activeHobbyKind) {
+            applyHobbyActivityArms(vrm, activeHobbyKind, elapsed, boneLerp);
+          } else if (useShoulderStretch) {
+            applyShoulderStretchArms(vrm, elapsed, boneLerp);
+          } else if (useColdRubArms) {
+            applyColdRubArms(vrm, boneLerp, elapsed, bodyLang.coldRubArms);
+          } else if (useCrossedArms) {
+            applyCrossedArms(vrm, boneLerp, { breath });
+          } else {
+            const droop = bodyLang.shoulderDroop;
+            const fidget = bodyLang.shoulderFidget;
+            applyNaturalArms(
+              [
+                {
+                  upper: lu,
+                  lower: ll,
+                  hand: lh,
+                  side: 1,
+                  outwardOffset: -droop * 0.08 - armSway,
+                  forwardOffset: droop * 0.15 - fidget * 0.25,
+                },
+                {
+                  upper: ru,
+                  lower: rl,
+                  hand: rh,
+                  side: -1,
+                  outwardOffset: -droop * 0.08 + armSway,
+                  forwardOffset: droop * 0.15 + fidget * 0.25,
+                },
+              ],
+              vrm.scene.parent,
+              DEFAULT_NATURAL_ARMS,
+              boneLerp
+            );
+          }
           // Keep the Euler smoothing state in sync so switching back to a scripted pose never pops
           const sync: Array<[TrackedBone, THREE.Object3D]> = [
             ['leftUpperArm', lu],

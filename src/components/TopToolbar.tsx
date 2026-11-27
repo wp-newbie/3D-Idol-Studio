@@ -25,6 +25,7 @@ interface TopToolbarProps {
   personas: Persona[];
   activePersona: Persona;
   isWardrobeOpen: boolean;
+  isLifeOpen?: boolean;
   desktopRoamMode: boolean;
   idleCheckInMinutes: IdleCheckInMinutes;
   doNotDisturb: boolean;
@@ -33,6 +34,7 @@ interface TopToolbarProps {
   onSelectPersona: (id: string) => void;
   onOpenRoster: () => void;
   onToggleWardrobe: () => void;
+  onToggleLife?: () => void;
   onToggleDesktopRoam: () => void;
   onCycleIdleCheckIn: () => void;
   onChangeLanguage: (lang: VoiceLanguage) => void;
@@ -49,6 +51,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   personas,
   activePersona,
   isWardrobeOpen,
+  isLifeOpen = false,
   desktopRoamMode,
   idleCheckInMinutes,
   doNotDisturb,
@@ -57,6 +60,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onSelectPersona,
   onOpenRoster,
   onToggleWardrobe,
+  onToggleLife,
   onToggleDesktopRoam,
   onCycleIdleCheckIn,
   onChangeLanguage: _onChangeLanguage,
@@ -132,6 +136,25 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           <Shirt className="hidden sm:inline h-3.5 w-3.5 text-rose-300" />
           <span>Wardrobe</span>
         </button>
+
+        {/* AI Life, Dining, Hobbies & Travel Drawer Toggle (🌍) */}
+        {onToggleLife && (
+          <button
+            type="button"
+            onClick={onToggleLife}
+            className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+              isLifeOpen
+                ? 'border-cyan-400/55 bg-cyan-500/20 text-cyan-100 shadow-[0_0_20px_rgba(6,182,212,0.25)]'
+                : 'border-white/10 bg-white/[0.04] text-zinc-200 hover:border-cyan-400/40 hover:bg-cyan-500/10'
+            }`}
+            title="AI Food, Dining Table, Hobbies & Travel Destinations"
+          >
+            <span role="img" aria-label="life">
+              🌍
+            </span>
+            <span>Life &amp; Places</span>
+          </button>
+        )}
 
         {/* Desktop Mascot / Roam Mode Toggle (🪟) */}
         <button

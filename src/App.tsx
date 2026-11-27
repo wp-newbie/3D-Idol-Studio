@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Sparkles, X } from 'lucide-react';
 import type {
   AccessoryAttachTarget,
+  ActiveLifeScene,
   AutonomousNeedTrigger,
   AutonomousToolLocation,
   AvatarPosture,
@@ -9,8 +10,12 @@ import type {
   CareActivityId,
   ChatMessage,
   CustomBackdropKind,
+  DestinationKindId,
   DisplayInfo,
   EquippedAccessory,
+  FoodVisualId,
+  HairStyleId,
+  HobbyKindId,
   IdleCheckInMinutes,
   InteractionZone,
   MaterialMod,
@@ -22,6 +27,7 @@ import type {
   OutfitSlot,
   PersistedStudioState,
   Persona,
+  ProceduralAccessoryId,
   ProceduralEmoteId,
   RoamBehavior,
   RoamCommand,
@@ -73,6 +79,31 @@ import {
   describeNowPlaying,
 } from './services/desktopContext';
 import { generateStageScenery, type StageSceneryGenParams } from './services/stageGeneratorService';
+import {
+  generateAiHairstyle,
+  generateAiOutfit,
+  generateTimeOccasionOutfit,
+  type GeneratedOutfitPayload,
+  type OutfitEngineSource,
+} from './services/aiOutfitGenerator';
+import { HAIR_STYLE_META } from './stage/hairStyleRig';
+import {
+  DESTINATION_KIND_META,
+  FOOD_VISUAL_META,
+  HOBBY_KIND_META,
+} from './stage/lifePropsRig';
+import {
+  planAiAutoRoamDecision,
+  planAiChair,
+  planAiDestination,
+  planAiHobby,
+  planAiHygieneRoutine,
+  planAiMoodFood,
+  planAiSchoolStudy,
+  planAiSpontaneousDesire,
+  type HygieneRoutineId,
+  type SchoolLevel,
+} from './services/aiLifePlanner';
 import { resolveAiDrivenArchetype } from './services/voiceToneDirector';
 import { parseDialogueResponse } from './services/dialogueParser';
 import {
@@ -108,6 +139,7 @@ import { TopToolbar } from './components/TopToolbar';
 import { StageViewport } from './components/StageViewport';
 import { ChatSidebar } from './components/ChatSidebar';
 import { WardrobeDrawer } from './components/WardrobeDrawer';
+import { LifeStudioDrawer } from './components/LifeStudioDrawer';
 import { PersonaBuilderModal } from './components/PersonaBuilderModal';
 import { SettingsModal } from './components/SettingsModal';
 import {
@@ -133,11 +165,27 @@ export const App: React.FC = () => {
   detectedMeshesRef.current = detectedMeshes;
 
   const [isWardrobeOpen, setIsWardrobeOpen] = useState(false);
+  const [isLifeOpen, setIsLifeOpen] = useState(false);
+  const [isLifeBusy, setIsLifeBusy] = useState(false);
+  const [lifeScene, setLifeScene] = useState<ActiveLifeScene>({
+    dining: null,
+    hobby: null,
+    destination: null,
+  });
+  const lifeSceneRef = useRef<ActiveLifeScene>(lifeScene);
+  lifeSceneRef.current = lifeScene;
+  const isLifeBusyRef = useRef<boolean>(false);
+  const lastAutoLifeAtRef = useRef<number>(0);
+  const lastAutoMoodRef = useRef<MoodType | null>(null);
+  const lastPostureForChairRef = useRef<string | null>(null);
+  const generateAiChairRef = useRef<(contextHint?: string) => Promise<void>>(async () => {});
+  const followWhimRef = useRef<(options?: { silent?: boolean }) => void>(() => {});
   const [isRosterOpen, setIsRosterOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingAiOutfit, setIsGeneratingAiOutfit] = useState(false);
   const [isStageGenerating, setIsStageGenerating] = useState(false);
   const [isSummarizingMemory, setIsSummarizingMemory] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -149,6 +197,9 @@ export const App: React.FC = () => {
   const [activeDisplayTarget, setActiveDisplayTarget] = useState<number | string | 'all'>('primary');
   const [freeRoamEnabled, setFreeRoamEnabled] = useState(true);
   const [autoRoamEnabled, setAutoRoamEnabled] = useState(true);
+  const autoRoamEnabledRef = useRef(true);
+  autoRoamEnabledRef.current = autoRoamEnabled;
+  const lastAutoRoamDecisionAtRef = useRef<number>(0);
   const [roamCommand, setRoamCommand] = useState<RoamCommand | null>(null);
   const [emoteCommand, setEmoteCommand] = useState<{
     id: number;
@@ -227,6 +278,21 @@ export const App: React.FC = () => {
     null
   );
   const handleCareActivityRef = useRef<(activity: CareActivityId) => void>(() => {});
+  const isGeneratingAiOutfitRef = useRef<boolean>(false);
+  const designOutfitRef = useRef<(occasionPrompt: string) => void>(() => {});
+  const changeHairStyleRef = useRef<(hairPrompt?: string) => void>(() => {});
+  const eatFoodRef = useRef<(foodPrompt?: string) => void>(() => {});
+  const doHobbyRef = useRef<(hobbyPrompt?: string) => void>(() => {});
+  const visitPlaceRef = useRef<(placePrompt?: string) => void>(() => {});
+  const studySchoolRef = useRef<(studyPrompt?: string) => void>(() => {});
+  const bathCareRef = useRef<(bathPrompt?: string) => void>(() => {});
+  const equipWholeOutfitRef = useRef<(slotOrModelTarget: string) => boolean>(() => false);
+  const designTimeOccasionRef = useRef<
+    (
+      occasionOverride?: string,
+      options?: { silentReaction?: boolean; reuseDailySlot?: boolean }
+    ) => void
+  >(() => {});
 
   // Sync Electron Smart Click-Through state whenever cursor enters/leaves VRM character or floating bubble
   const syncClickThrough = useCallback(() => {
@@ -825,9 +891,11 @@ export const App: React.FC = () => {
           ...p,
           brain: {
             ...p.brain,
+            isSleeping: true,
             sleepingPosition: validPos,
           },
         }));
+        handleUpdateSettings({ defaultPosture: 'sleeping' });
         const summary = `Shifted sleeping position to ${validPos} (${reason})`;
         setAutonomousActionToast(`💤 Sleep Position: ${validPos.replace(/_/g, ' ')}`);
         window.setTimeout(() => setAutonomousActionToast(null), 3500);
@@ -838,6 +906,17 @@ export const App: React.FC = () => {
           ? posture
           : 'seated') as AvatarPosture;
         handleUpdateSettings({ defaultPosture: validPosture });
+        if (validPosture === 'sleeping') {
+          updateActivePersona((p) => ({
+            ...p,
+            brain: { ...p.brain, isSleeping: true },
+          }));
+        } else {
+          updateActivePersona((p) => ({
+            ...p,
+            brain: { ...p.brain, isSleeping: false },
+          }));
+        }
         const labels: Record<AvatarPosture, string> = {
           seated: 'sat down on the studio stool',
           standing: 'stood up freely',
@@ -1052,35 +1131,9 @@ export const App: React.FC = () => {
         const parsed = parseDialogueResponse(reply.rawText, persona.mood);
 
         // AI-triggered Wardrobe change action tag: [EQUIP_OUTFIT: ...]
+        // Supports saved outfit slots AND any imported full-body .vrm / .glb models in Vault!
         if (parsed.outfitAction) {
-          const target = parsed.outfitAction.slotTarget.trim().toLowerCase();
-          const targetIndexMatch = /(?:slot\s*#?|#)?(\d+)/i.exec(target);
-          let matchedSlot: OutfitSlot | undefined;
-          if (targetIndexMatch) {
-            const num = parseInt(targetIndexMatch[1], 10);
-            if (num >= 1 && num <= persona.outfitSlots.length) {
-              matchedSlot = persona.outfitSlots[num - 1];
-            } else if (num >= 0 && num < persona.outfitSlots.length) {
-              matchedSlot = persona.outfitSlots[num];
-            }
-          }
-          if (!matchedSlot) {
-            matchedSlot = persona.outfitSlots.find(
-              (s) =>
-                s.id.toLowerCase() === target ||
-                s.name.toLowerCase().includes(target) ||
-                target.includes(s.name.toLowerCase())
-            );
-          }
-          if (matchedSlot && matchedSlot.id !== persona.activeOutfitSlotId) {
-            updateActivePersona((p) => ({
-              ...p,
-              activeOutfitSlotId: matchedSlot!.id,
-              updatedAt: Date.now(),
-            }));
-            setAutonomousActionToast(`👗 Equipped Outfit: ${matchedSlot.name}`);
-            window.setTimeout(() => setAutonomousActionToast(null), 3500);
-          }
+          equipWholeOutfitRef.current(parsed.outfitAction.slotTarget);
         }
 
         // AI-triggered Clothing layer toggle action tags: [TOGGLE_LAYER: <name>=on|off]
@@ -1129,6 +1182,17 @@ export const App: React.FC = () => {
         // AI-triggered physical posture change tag: [POSTURE: seated | standing | sleeping]
         if (parsed.postureAction) {
           handleUpdateSettings({ defaultPosture: parsed.postureAction });
+          if (parsed.postureAction === 'sleeping') {
+            updateActivePersona((p) => ({
+              ...p,
+              brain: { ...p.brain, isSleeping: true },
+            }));
+          } else {
+            updateActivePersona((p) => ({
+              ...p,
+              brain: { ...p.brain, isSleeping: false },
+            }));
+          }
           const postureLabels = {
             seated: 'sat down on the studio stool',
             standing: 'stood up gracefully',
@@ -1193,6 +1257,41 @@ export const App: React.FC = () => {
         // AI-triggered scenery: [GENERATE_STAGE: <description>]
         if (parsed.stageAction && !reply.toolEvents.some((ev) => ev.name === 'generate_stage')) {
           generateStageRef.current(parsed.stageAction);
+        }
+
+        // AI-triggered autonomous outfit design: [DESIGN_OUTFIT: <occasion & outfit description>]
+        if (parsed.designOutfitAction) {
+          designOutfitRef.current(parsed.designOutfitAction);
+        }
+
+        // AI-triggered autonomous hairstyle change: [CHANGE_HAIRSTYLE: <style & optional color>]
+        if (parsed.hairStyleAction) {
+          changeHairStyleRef.current(parsed.hairStyleAction);
+        }
+
+        // AI-triggered dining table + mood food craving: [EAT_FOOD: <dish>]
+        if (parsed.eatFoodAction) {
+          eatFoodRef.current(parsed.eatFoodAction);
+        }
+
+        // AI-triggered 3D hobby station: [DO_HOBBY: <hobby>]
+        if (parsed.doHobbyAction) {
+          doHobbyRef.current(parsed.doHobbyAction);
+        }
+
+        // AI-triggered destination / vacation scenery change: [VISIT_PLACE: <destination>]
+        if (parsed.visitPlaceAction) {
+          visitPlaceRef.current(parsed.visitPlaceAction);
+        }
+
+        // AI-triggered school / college studying in uniform with pen & paper: [STUDY_SCHOOL: <subject>]
+        if (parsed.studySchoolAction) {
+          studySchoolRef.current(parsed.studySchoolAction);
+        }
+
+        // AI-triggered SFW censored shower / towel / toothbrush routine: [SELF_CARE_BATH: <routine>]
+        if (parsed.bathCareAction) {
+          bathCareRef.current(parsed.bathCareAction);
         }
         const toolEventsMsgs: ChatMessage[] = reply.toolEvents.map((ev, idx) => ({
           id: `msg-tool-${Date.now()}-${idx}`,
@@ -1645,15 +1744,58 @@ export const App: React.FC = () => {
       setAutonomousActionToast(effect.toast);
       window.setTimeout(() => setAutonomousActionToast(null), 3800);
 
+      if (activity === 'rest_nap') {
+        handleUpdateSettings({ defaultPosture: 'sleeping' });
+      } else if (activity === 'wake_up') {
+        handleUpdateSettings({ defaultPosture: 'seated' });
+      } else if (
+        activity === 'snack_tea' ||
+        activity === 'snack_cake' ||
+        activity === 'snack_ramen'
+      ) {
+        // Immediately spawn 3D dining table, chair, food & teacup + synchronized eating & drinking animation!
+        setAutoRoamEnabled(false);
+        handleUpdateSettings({ defaultPosture: 'seated' });
+        const visualMap: Record<'snack_tea' | 'snack_cake' | 'snack_ramen', FoodVisualId> = {
+          snack_tea: 'tea_sweets',
+          snack_cake: 'cake',
+          snack_ramen: 'ramen',
+        };
+        const dishMap: Record<'snack_tea' | 'snack_cake' | 'snack_ramen', string> = {
+          snack_tea: 'Hot Earl Grey Tea & Sweets',
+          snack_cake: 'Strawberry Shortcake',
+          snack_ramen: 'Steaming Midnight Ramen',
+        };
+        const drinkMap: Record<'snack_tea' | 'snack_cake' | 'snack_ramen', string> = {
+          snack_tea: 'Hot Earl Grey Tea',
+          snack_cake: 'Rose Milk Tea',
+          snack_ramen: 'Iced Oolong Tea',
+        };
+        setLifeScene((prev) => ({
+          ...prev,
+          dining: {
+            dishName: dishMap[activity],
+            drinkName: drinkMap[activity],
+            foodVisual: visualMap[activity],
+            accentHex: persona.accentColor,
+            moodReason: effect.thoughtText,
+            withKitchenCounter: true,
+          },
+          hobby: null,
+        }));
+        void generateAiChairRef.current(`eating ${dishMap[activity]} at the dining table`);
+      }
+
       void runAiTurn(effect.prompt, 'system_event');
     },
-    [fireMicroTell, runAiTurn, updateActivePersona]
+    [fireMicroTell, handleUpdateSettings, runAiTurn, updateActivePersona]
   );
   handleCareActivityRef.current = handleCareActivity;
 
   const handleWakeFromSleep = useCallback(() => {
     handleCareActivity('wake_up');
-  }, [handleCareActivity]);
+    handleUpdateSettings({ defaultPosture: 'seated' });
+  }, [handleCareActivity, handleUpdateSettings]);
 
   // Tick Circadian Human Needs every 4 seconds and fire throttled need-driven autonomous impulses
   useEffect(() => {
@@ -1880,12 +2022,11 @@ export const App: React.FC = () => {
   );
 
   const handleTriggerAiStylist = useCallback(() => {
-    const userName = studioRef.current.settings.userName.trim() || 'Producer';
-    const envMeta = STAGE_ENVIRONMENTS[activePersona.stageEnvironment];
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const prompt = `[AI STYLIST: Please inspect your complete wardrobe inventory and style the perfect outfit ensemble for right now (${timeStr}, stage environment: ${envMeta?.name || 'Studio'}). Tell ${userName} with pride why you chose this look, and equip it using [EQUIP_OUTFIT: <slot>] and [TOGGLE_LAYER: <piece>=on|off]!]`;
-    void runAiTurn(prompt, 'user');
-  }, [activePersona.stageEnvironment, runAiTurn]);
+    designTimeOccasionRef.current(undefined, {
+      reuseDailySlot: false,
+      silentReaction: false,
+    });
+  }, []);
 
   const handleSelectSlot = (slotId: string) => {
     if (slotId === activeSlot.id) return;
@@ -1920,6 +2061,1360 @@ export const App: React.FC = () => {
       yawOffset: cleanYaw,
     }));
   };
+
+  const handleToggleProceduralAccessory = (accessoryId: ProceduralAccessoryId) => {
+    updateActiveSlot((slot) => {
+      const current = slot.proceduralAccessories || [];
+      const exists = current.includes(accessoryId);
+      const next = exists
+        ? current.filter((id) => id !== accessoryId)
+        : [...current, accessoryId];
+      return {
+        ...slot,
+        proceduralAccessories: next,
+        accessoryColorHex: slot.accessoryColorHex || activePersona.accentColor,
+      };
+    });
+  };
+
+  const formatOutfitEngineLabel = (source: OutfitEngineSource, modelUsed?: string): string => {
+    if (source === 'local-llm') {
+      return modelUsed ? `LM Studio · ${modelUsed}` : 'LM Studio';
+    }
+    if (source === 'gemini-llm') {
+      return 'Gemini LLM';
+    }
+    return 'Smart Stylist';
+  };
+
+  const equipWholeOutfitByTarget = (slotOrModelTarget: string): boolean => {
+    const rawTarget = slotOrModelTarget.trim();
+    if (!rawTarget) return false;
+    const target = rawTarget.toLowerCase();
+    const currentStudio = studioRef.current;
+    const persona =
+      currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+      currentStudio.personas[0];
+    if (!persona) return false;
+
+    const targetIndexMatch = /^(?:slot\s*#?|#)?(\d+)$/i.exec(target);
+    let matchedSlot: OutfitSlot | undefined;
+    if (targetIndexMatch) {
+      const num = parseInt(targetIndexMatch[1], 10);
+      if (num >= 1 && num <= persona.outfitSlots.length) {
+        matchedSlot = persona.outfitSlots[num - 1];
+      } else if (num >= 0 && num < persona.outfitSlots.length) {
+        matchedSlot = persona.outfitSlots[num];
+      }
+    }
+    if (!matchedSlot) {
+      matchedSlot = persona.outfitSlots.find(
+        (s) =>
+          s.id.toLowerCase() === target ||
+          s.name.toLowerCase() === target ||
+          s.name.toLowerCase().includes(target) ||
+          target.includes(s.name.toLowerCase())
+      );
+    }
+
+    if (matchedSlot) {
+      if (matchedSlot.id !== persona.activeOutfitSlotId) {
+        updateActivePersona((p) => ({
+          ...p,
+          activeOutfitSlotId: matchedSlot!.id,
+          updatedAt: Date.now(),
+        }));
+        setAutonomousActionToast(`👗 Equipped Whole Outfit: ${matchedSlot.name}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 4000);
+      }
+      return true;
+    }
+
+    // Fallback: match any imported whole-body .vrm / .glb model in Vault & auto-link as a wearable slot!
+    const matchedModel = vaultModelsRef.current.find((m) => {
+      if (m.format !== 'vrm' && m.format !== 'glb') return false;
+      const baseName = m.fileName.replace(/\.[^.]+$/, '').toLowerCase();
+      return (
+        m.id.toLowerCase() === target ||
+        m.fileName.toLowerCase() === target ||
+        baseName.includes(target) ||
+        target.includes(baseName)
+      );
+    });
+
+    if (matchedModel) {
+      const existingByVault = persona.outfitSlots.find(
+        (s) => s.modelVaultId === matchedModel.id
+      );
+      if (existingByVault) {
+        updateActivePersona((p) => ({
+          ...p,
+          activeOutfitSlotId: existingByVault.id,
+          updatedAt: Date.now(),
+        }));
+        setAutonomousActionToast(`👗 Equipped Whole Outfit: ${existingByVault.name}`);
+        window.setTimeout(() => setAutonomousActionToast(null), 4000);
+        return true;
+      }
+
+      const now = Date.now();
+      const prettyName = matchedModel.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+      const linkedSlot: OutfitSlot = {
+        id: `slot-vrm-${now}`,
+        name: prettyName,
+        modelVaultId: matchedModel.id,
+        meshVisibility: {},
+        materialMods: {},
+        yawOffset: 0,
+        cyclingShorts: true,
+        accessories: [],
+        createdAt: now,
+      };
+      updateActivePersona((p) => ({
+        ...p,
+        outfitSlots: [...p.outfitSlots, linkedSlot],
+        activeOutfitSlotId: linkedSlot.id,
+        updatedAt: now,
+      }));
+      setAutonomousActionToast(`👗 Switched Whole 3D Model: ${prettyName}`);
+      window.setTimeout(() => setAutonomousActionToast(null), 4200);
+      return true;
+    }
+
+    return false;
+  };
+  equipWholeOutfitRef.current = equipWholeOutfitByTarget;
+
+  const handleSelectHairStyle = (hairStyle: HairStyleId) => {
+    updateActiveSlot((slot) => ({
+      ...slot,
+      hairStyle,
+    }));
+    const meta = HAIR_STYLE_META[hairStyle];
+    setAutonomousActionToast(`💇‍♀️ Hairstyle: ${meta.emoji} ${meta.label}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 2800);
+  };
+
+  const handleSelectHairColor = (
+    hairColorHex: string | null,
+    hairHighlightHex: string | null = null
+  ) => {
+    const hairMeshes = detectedMeshesRef.current.filter((m) => m.category === 'Hair');
+    updateActiveSlot((slot) => {
+      const nextMods = { ...slot.materialMods };
+      for (const m of hairMeshes) {
+        if (hairColorHex) {
+          nextMods[m.name] = { colorHex: hairColorHex };
+        } else {
+          delete nextMods[m.name];
+        }
+      }
+      return {
+        ...slot,
+        hairColorHex,
+        hairHighlightHex,
+        materialMods: nextMods,
+      };
+    });
+    setAutonomousActionToast(
+      hairColorHex ? `🎨 Dyed Hair (${hairColorHex})` : '✨ Restored Original Hair Color'
+    );
+    window.setTimeout(() => setAutonomousActionToast(null), 2800);
+  };
+
+  const handleAiPickHairStyle = async (
+    prompt?: string,
+    options?: { silentReaction?: boolean }
+  ) => {
+    if (isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const result = await generateAiHairstyle({
+        prompt,
+        persona: currentPersona,
+        settings: currentStudio.settings,
+      });
+      const hairMeshes = detectedMeshesRef.current.filter((m) => m.category === 'Hair');
+      updateActiveSlot((slot) => {
+        const nextMods = { ...slot.materialMods };
+        if (result.hairColorHex) {
+          for (const m of hairMeshes) {
+            nextMods[m.name] = { colorHex: result.hairColorHex };
+          }
+        }
+        return {
+          ...slot,
+          hairStyle: result.hairStyle,
+          hairColorHex: result.hairColorHex ?? slot.hairColorHex ?? null,
+          hairHighlightHex: result.hairHighlightHex ?? slot.hairHighlightHex ?? null,
+          materialMods: nextMods,
+        };
+      });
+
+      const meta = HAIR_STYLE_META[result.hairStyle];
+      const engineLabel = formatOutfitEngineLabel(result.source, result.modelUsed);
+      setAutonomousActionToast(
+        `💇‍♀️ ${currentPersona.name} chose ${meta.label} (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 4500);
+
+      if (!options?.silentReaction) {
+        triggerOutfitReaction(
+          `${meta.label} Hairstyle`,
+          `changed her hairstyle to ${meta.label} (${result.styleNote})`
+        );
+      }
+    } catch (err) {
+      console.error('[AI Hair] Styling failed:', err);
+      setAutonomousActionToast('⚠️ Hairstyle update failed — please try again.');
+      window.setTimeout(() => setAutonomousActionToast(null), 3000);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
+    }
+  };
+  changeHairStyleRef.current = (hairPrompt) => {
+    void handleAiPickHairStyle(hairPrompt, { silentReaction: true });
+  };
+
+  // --- AI Life, Dining Table + Kitchen, Hobbies & Travel Handlers (LM Studio First) ---
+  const handlePlanMoodFood = async (
+    prompt?: string,
+    withKitchen = true,
+    silent = false
+  ) => {
+    if (isLifeBusy) return;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const res = await planAiMoodFood({
+        persona,
+        prompt,
+        withKitchenCounter: withKitchen,
+      });
+
+      // Automatically sit down at the wooden dining chair & table like a real person
+      setAutoRoamEnabled(false);
+      handleUpdateSettings({ defaultPosture: 'seated' });
+      setLifeScene((prev) => ({ ...prev, dining: res.dining, hobby: null }));
+      // Remove any leftover bathroom head towel, and change out of bath wrap / beach swimsuit for dining!
+      const curSlotFood = persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId);
+      if (curSlotFood?.proceduralAccessories?.includes('spa_towel')) {
+        updateActiveSlot((slot) => ({
+          ...slot,
+          proceduralAccessories: (slot.proceduralAccessories || []).filter(
+            (id) => id !== 'spa_towel'
+          ),
+        }));
+      }
+      if (
+        curSlotFood?.garmentStyle === 'bath_wrap' ||
+        curSlotFood?.garmentStyle === 'beach_swimsuit'
+      ) {
+        designTimeOccasionRef.current(
+          `Comfortable casual dining clothes for eating ${res.dining.dishName}`,
+          { reuseDailySlot: false, silentReaction: true }
+        );
+      }
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          hunger: Math.max(0, (p.brain?.hunger ?? 45) - 30),
+          comfort: Math.min(100, (p.brain?.comfort ?? 70) + 12),
+          innerThought: res.dining.moodReason,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const emoji = FOOD_VISUAL_META[res.dining.foodVisual].emoji;
+      const engine = res.source === 'lm-studio' ? `LM Studio · ${res.modelUsed || 'Local'}` : 'Chef Stylist';
+      setAutonomousActionToast(`${emoji} Table Set: ${res.dining.dishName} (${engine})`);
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silent) {
+        triggerOutfitReaction(
+          res.dining.dishName,
+          `set up the dining table, chair, and kitchen to eat ${res.dining.dishName} with ${res.dining.drinkName} (${res.dining.moodReason})`
+        );
+      }
+    } finally {
+      setIsLifeBusy(false);
+    }
+  };
+
+  const handleQuickFood = (foodVisual: FoodVisualId, withKitchen: boolean) => {
+    const meta = FOOD_VISUAL_META[foodVisual];
+    setAutoRoamEnabled(false);
+    handleUpdateSettings({ defaultPosture: 'seated' });
+    setLifeScene((prev) => ({
+      ...prev,
+      dining: {
+        dishName: meta.label,
+        drinkName: meta.defaultDrink,
+        foodVisual,
+        accentHex: activePersona.accentColor,
+        moodReason: `Enjoying ${meta.label.toLowerCase()} at the dining table!`,
+        withKitchenCounter: withKitchen,
+      },
+      hobby: null,
+    }));
+    updateActivePersona((p) => ({
+      ...p,
+      brain: {
+        ...p.brain,
+        isSleeping: false,
+        hunger: Math.max(0, (p.brain?.hunger ?? 45) - 25),
+        comfort: Math.min(100, (p.brain?.comfort ?? 70) + 10),
+      },
+      updatedAt: Date.now(),
+    }));
+    setAutonomousActionToast(`${meta.emoji} Served ${meta.label} on the dining table!`);
+    window.setTimeout(() => setAutonomousActionToast(null), 3500);
+  };
+
+  const handlePlanHobby = async (prompt?: string, silent = false) => {
+    if (isLifeBusy) return;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const res = await planAiHobby({ persona, prompt });
+
+      setAutoRoamEnabled(false);
+      handleUpdateSettings({ defaultPosture: res.hobby.recommendedPosture });
+      setLifeScene((prev) => ({ ...prev, hobby: res.hobby, dining: null }));
+      // Remove leftover bath head towel and wear scene-appropriate hobby clothes!
+      const curSlotHobby = persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId);
+      if (curSlotHobby?.proceduralAccessories?.includes('spa_towel')) {
+        updateActiveSlot((slot) => ({
+          ...slot,
+          proceduralAccessories: (slot.proceduralAccessories || []).filter(
+            (id) => id !== 'spa_towel'
+          ),
+        }));
+      }
+      if (res.hobby.hobbyKind === 'yoga' && curSlotHobby?.garmentStyle !== 'sporty_tee_leggings') {
+        designTimeOccasionRef.current(
+          'Breathable short-sleeve sporty athletic tee and yoga leggings for stretching',
+          { reuseDailySlot: false, silentReaction: true }
+        );
+      } else if (
+        res.hobby.hobbyKind === 'gaming' &&
+        (curSlotHobby?.garmentStyle === 'bath_wrap' ||
+          curSlotHobby?.garmentStyle === 'beach_swimsuit' ||
+          curSlotHobby?.garmentStyle === 'evening_gown')
+      ) {
+        designTimeOccasionRef.current(
+          'Cozy oversized hoodie and comfy jogger pants for gaming',
+          { reuseDailySlot: false, silentReaction: true }
+        );
+      } else if (
+        curSlotHobby?.garmentStyle === 'bath_wrap' ||
+        curSlotHobby?.garmentStyle === 'beach_swimsuit'
+      ) {
+        designTimeOccasionRef.current(
+          `Comfortable creative clothes for ${res.hobby.hobbyName}`,
+          { reuseDailySlot: false, silentReaction: true }
+        );
+      }
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          boredom: Math.max(0, (p.brain?.boredom ?? 45) - 35),
+          curiosity: Math.min(100, (p.brain?.curiosity ?? 55) + 15),
+          innerThought: res.hobby.description,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const emoji = HOBBY_KIND_META[res.hobby.hobbyKind].emoji;
+      const engine = res.source === 'lm-studio' ? `LM Studio · ${res.modelUsed || 'Local'}` : 'Hobby Planner';
+      setAutonomousActionToast(`${emoji} Hobby Started: ${res.hobby.hobbyName} (${engine})`);
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silent) {
+        triggerOutfitReaction(
+          res.hobby.hobbyName,
+          `started her hobby "${res.hobby.hobbyName}" (${res.hobby.description})`
+        );
+      }
+    } finally {
+      setIsLifeBusy(false);
+    }
+  };
+
+  const handleQuickHobby = (hobbyKind: HobbyKindId) => {
+    const meta = HOBBY_KIND_META[hobbyKind];
+    setAutoRoamEnabled(false);
+    handleUpdateSettings({ defaultPosture: meta.posture });
+    setLifeScene((prev) => ({
+      ...prev,
+      hobby: {
+        hobbyName: meta.label,
+        hobbyKind,
+        accentHex: activePersona.accentColor,
+        description: meta.summary,
+        recommendedPosture: meta.posture,
+      },
+      dining: null,
+    }));
+    updateActivePersona((p) => ({
+      ...p,
+      brain: {
+        ...p.brain,
+        isSleeping: false,
+        boredom: Math.max(0, (p.brain?.boredom ?? 45) - 30),
+      },
+      updatedAt: Date.now(),
+    }));
+    setAutonomousActionToast(`${meta.emoji} Started Hobby: ${meta.label}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 3500);
+  };
+
+  const handlePlanDestination = async (
+    prompt?: string,
+    alsoDress = true,
+    silent = false
+  ) => {
+    if (isLifeBusy) return;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const res = await planAiDestination({ persona, prompt });
+
+      setLifeScene((prev) => ({ ...prev, dining: null, hobby: null, destination: res.destination }));
+      handleUpdateSettings({ defaultPosture: 'standing' });
+      setAutoRoamEnabled(true);
+      setFreeRoamEnabled(true);
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          boredom: Math.max(0, (p.brain?.boredom ?? 45) - 28),
+          energy: Math.min(100, (p.brain?.energy ?? 75) + 10),
+          innerThought: res.destination.description,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const meta =
+        res.destination.destinationKind !== 'none'
+          ? DESTINATION_KIND_META[res.destination.destinationKind]
+          : null;
+      const engine = res.source === 'lm-studio' ? `LM Studio · ${res.modelUsed || 'Local'}` : 'Travel Guide';
+      setAutonomousActionToast(
+        `${meta?.emoji || '✈️'} Arrived: ${res.destination.placeName} (${engine})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      // Remove leftover bath towel and ALWAYS dress appropriately for the destination!
+      updateActiveSlot((slot) => ({
+        ...slot,
+        proceduralAccessories: (slot.proceduralAccessories || []).filter(
+          (id) => id !== 'spa_towel'
+        ),
+      }));
+      const forcedDestPrompt: Partial<Record<Exclude<DestinationKindId, 'none'>, string>> = {
+        tropical_beach:
+          'Stylish anime one-piece tropical beach resort swimsuit swimwear with pastel pareo wrap',
+        mountain_onsen:
+          'Traditional floral Japanese kimono yukata with wide obi sash for hot spring onsen',
+        shopping_mall:
+          'Trendy streetwear cropped bomber jacket and belted casual shorts for shopping mall',
+        amusement_park:
+          'Playful streetwear jacket and shorts for amusement park',
+        vacation_cafe:
+          'Airy sleeveless summer sundress with waist ribbon for vacation terrace cafe',
+        highschool_classroom:
+          'Classic Japanese high school blazer uniform with ribbon tie and pleated plaid skirt',
+        college_campus:
+          'Smart university college blazer with argyle vest and pleated plaid skirt',
+      };
+      const destOutfitPrompt =
+        forcedDestPrompt[res.destination.destinationKind as Exclude<DestinationKindId, 'none'>] ||
+        res.suggestedOutfitPrompt;
+      if (alsoDress && destOutfitPrompt) {
+        designTimeOccasionRef.current(destOutfitPrompt, {
+          reuseDailySlot: false,
+          silentReaction: true,
+        });
+      }
+
+      if (!silent) {
+        triggerOutfitReaction(
+          res.destination.placeName,
+          `traveled to "${res.destination.placeName}" (${res.destination.description})`
+        );
+      }
+    } finally {
+      setIsLifeBusy(false);
+    }
+  };
+
+  const handleQuickDestination = (
+    destKind: Exclude<DestinationKindId, 'none'>,
+    alsoDress: boolean
+  ) => {
+    const meta = DESTINATION_KIND_META[destKind];
+    setLifeScene((prev) => ({
+      ...prev,
+      destination: {
+        placeName: meta.label,
+        destinationKind: destKind,
+        accentHex: meta.accentHex,
+        description: meta.summary,
+        skyTopHex: meta.skyTopHex,
+        skyBottomHex: meta.skyBottomHex,
+        groundHex: meta.groundHex,
+      },
+    }));
+    setAutonomousActionToast(`${meta.emoji} Scenery: ${meta.label}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 4000);
+
+    if (alsoDress) {
+      const promptMap: Record<Exclude<DestinationKindId, 'none'>, string> = {
+        home_kitchen: 'Cozy casual oversized hoodie and comfy jogger pants for home kitchen',
+        shopping_mall: 'Trendy chic shopping mall streetwear cropped bomber jacket and belted shorts',
+        tropical_beach: 'Stylish anime one-piece tropical beach swimsuit swimwear with pastel pareo wrap',
+        vacation_cafe: 'Airy sleeveless summer sundress with waist ribbon for terrace cafe',
+        mountain_onsen: 'Traditional floral Japanese kimono yukata with wide obi sash for hot spring onsen',
+        amusement_park: 'Playful streetwear jacket and belted shorts for amusement park',
+        highschool_classroom:
+          'Classic Japanese high school blazer uniform with crisp white shirt, navy pleated plaid skirt and ribbon',
+        college_campus:
+          'College university preppy blazer with ivory argyle vest, tailored navy plaid skirt and loafers',
+        bathroom_spa:
+          'Fluffy pastel bath towel wrap bath cloth for bathroom spa care',
+      };
+      designTimeOccasionRef.current(promptMap[destKind], {
+        reuseDailySlot: false,
+        silentReaction: true,
+      });
+    }
+  };
+
+  const handleStartSchoolStudy = async (
+    level?: SchoolLevel,
+    subjectPrompt?: string,
+    autoUniform = true,
+    silent = false
+  ) => {
+    if (isLifeBusy) return;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+
+      const res = await planAiSchoolStudy({
+        persona,
+        level,
+        subjectPrompt,
+      });
+
+      // Sit cleanly on the wooden school chair at the student desk with pen & paper!
+      setAutoRoamEnabled(false);
+      handleUpdateSettings({ defaultPosture: 'seated' });
+      setLifeScene({
+        dining: null,
+        hobby: res.hobby,
+        destination: res.destination,
+      });
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          boredom: Math.max(0, (p.brain?.boredom ?? 45) - 30),
+          curiosity: Math.min(100, (p.brain?.curiosity ?? 55) + 18),
+          innerThought: res.studyNote,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      // Automatically wear School Uniform (prefers any imported School Uniform .vrm, else LM Studio designs it!)
+      if (autoUniform) {
+        const equippedExistingUniform =
+          equipWholeOutfitByTarget('school') || equipWholeOutfitByTarget('uniform');
+        if (!equippedExistingUniform) {
+          designTimeOccasionRef.current(res.uniformPrompt, {
+            reuseDailySlot: false,
+            silentReaction: true,
+          });
+        }
+      }
+
+      const icon = res.level === 'college' ? '🎓' : '🏫';
+      const engine =
+        res.source === 'lm-studio' ? `LM Studio · ${res.modelUsed || 'Local'}` : 'Study Mode';
+      setAutonomousActionToast(
+        `${icon} Studying ${res.subjectName} (Uniform + Pen & Paper · ${engine})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silent) {
+        triggerOutfitReaction(
+          `${res.level === 'college' ? 'College' : 'High School'} Uniform`,
+          `put on her ${res.level === 'college' ? 'college' : 'high school'} uniform, sat at her school desk, and started studying ${res.subjectName} with pen and paper (${res.studyNote})`
+        );
+      }
+    } finally {
+      setIsLifeBusy(false);
+    }
+  };
+
+  const handleStartHygieneRoutine = async (
+    routine?: HygieneRoutineId,
+    hint?: string,
+    autoRefreshClothes = true,
+    silent = false
+  ) => {
+    if (isLifeBusy) return;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+
+      const res = await planAiHygieneRoutine({
+        persona,
+        routine,
+        hint,
+      });
+
+      // Stand cleanly in the censored shower booth or in front of the bathroom vanity sink
+      setAutoRoamEnabled(false);
+      handleUpdateSettings({ defaultPosture: 'standing' });
+      setLifeScene({
+        dining: null,
+        hobby: res.hobby,
+        destination: res.destination,
+      });
+
+      // Equip folded anime bath towel on head during shower / towel-dry, remove for toothbrushing
+      updateActiveSlot((slot) => {
+        const current = slot.proceduralAccessories || [];
+        const withoutTowel = current.filter((id) => id !== 'spa_towel');
+        return {
+          ...slot,
+          proceduralAccessories: res.wearHeadTowel
+            ? [...withoutTowel, 'spa_towel']
+            : withoutTowel,
+        };
+      });
+
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          comfort: Math.min(100, (p.brain?.comfort ?? 70) + 22),
+          energy: Math.min(100, (p.brain?.energy ?? 70) + 12),
+          innerThought: res.note,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      // Automatically put on appropriate bath cloth (fluffy bath towel wrap for shower/towel-dry, cozy pajamas for brushing teeth!)
+      if (autoRefreshClothes && res.bathOutfitPrompt) {
+        designTimeOccasionRef.current(res.bathOutfitPrompt, {
+          reuseDailySlot: false,
+          silentReaction: true,
+        });
+      }
+
+      const icon =
+        res.routine === 'shower' ? '🚿' : res.routine === 'towel_dry' ? '🧖‍♀️' : '🪥';
+      const engine =
+        res.source === 'lm-studio' ? `LM Studio · ${res.modelUsed || 'Local'}` : 'Care Routine';
+      setAutonomousActionToast(`${icon} ${res.hobby.hobbyName} (${engine})`);
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silent) {
+        triggerOutfitReaction(
+          res.hobby.hobbyName,
+          res.routine === 'shower'
+            ? `stepped behind the frosted-glass censored shower to wash up with ${res.scentName} (${res.note})`
+            : res.routine === 'towel_dry'
+            ? `dried off with a fluffy bath towel (${res.note})`
+            : `brushed her teeth at the bathroom vanity sink with ${res.scentName} (${res.note})`
+        );
+      }
+    } finally {
+      setIsLifeBusy(false);
+    }
+  };
+
+  const handleLeaveBathroom = () => {
+    setLifeScene((prev) => ({
+      ...prev,
+      hobby:
+        prev.hobby?.hobbyKind === 'showering' ||
+        prev.hobby?.hobbyKind === 'towel_dry' ||
+        prev.hobby?.hobbyKind === 'brushing_teeth'
+          ? null
+          : prev.hobby,
+      destination:
+        prev.destination?.destinationKind === 'bathroom_spa' ? null : prev.destination,
+    }));
+    updateActiveSlot((slot) => ({
+      ...slot,
+      proceduralAccessories: (slot.proceduralAccessories || []).filter(
+        (id) => id !== 'spa_towel'
+      ),
+    }));
+    // Automatically change out of bath towel wrap into fresh comfy clothes when leaving the bathroom!
+    const st = studioRef.current;
+    const p = st.personas.find((x) => x.id === st.activePersonaId) || st.personas[0];
+    const activeSl = p?.outfitSlots.find((s) => s.id === p.activeOutfitSlotId);
+    if (activeSl?.garmentStyle === 'bath_wrap') {
+      designTimeOccasionRef.current(
+        'Fresh comfortable everyday clothes after finishing in the bathroom',
+        { reuseDailySlot: false, silentReaction: true }
+      );
+    }
+  };
+
+  const handleFollowWhim = async (options?: { silent?: boolean }) => {
+    if (isLifeBusyRef.current || isLifeBusy) return;
+    isLifeBusyRef.current = true;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const whim = await planAiSpontaneousDesire({
+        persona,
+        currentScene: lifeSceneRef.current,
+      });
+      lastAutoLifeAtRef.current = Date.now();
+      isLifeBusyRef.current = false;
+      setIsLifeBusy(false);
+      const silent = Boolean(options?.silent);
+      if (whim.choice === 'dining') {
+        await handlePlanMoodFood(whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'hygiene') {
+        await handleStartHygieneRoutine(undefined, whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'study') {
+        await handleStartSchoolStudy(undefined, whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'travel') {
+        await handlePlanDestination(whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'roam') {
+        setLifeScene((prev) => ({
+          ...prev,
+          dining: null,
+          hobby: null,
+          chair: null,
+        }));
+        handleUpdateSettings({ defaultPosture: 'standing' });
+        setAutoRoamEnabled(true);
+        setFreeRoamEnabled(true);
+        lastAutoRoamDecisionAtRef.current = Date.now();
+        updateActivePersona((p) => ({
+          ...p,
+          brain: {
+            ...p.brain,
+            isSleeping: false,
+            boredom: Math.max(0, (p.brain?.boredom ?? 45) - 20),
+            innerThought: whim.thought,
+          },
+          updatedAt: Date.now(),
+        }));
+        const engine =
+          whim.source === 'lm-studio' ? `LM Studio · ${whim.modelUsed || 'Local'}` : 'Free Will';
+        setAutonomousActionToast(`👣 ${persona.name} decided to Auto-Roam (${engine})`);
+        window.setTimeout(() => setAutonomousActionToast(null), 4500);
+      } else {
+        await handlePlanHobby(whim.prompt || undefined, silent);
+      }
+    } catch {
+      isLifeBusyRef.current = false;
+      setIsLifeBusy(false);
+    }
+  };
+  followWhimRef.current = (opts) => void handleFollowWhim(opts);
+
+  const handleGenerateAiChair = async (contextHint?: string) => {
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      if (!persona) return;
+
+      const res = await planAiChair({
+        persona,
+        contextHint,
+        previousChairStyle: lifeSceneRef.current.chair?.chairStyle ?? null,
+      });
+      setLifeScene((prev) => ({ ...prev, chair: res.chair }));
+
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          innerThought: res.chair.reason,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const engine =
+        res.source === 'lm-studio'
+          ? `she chose ${res.modelUsed || 'LM Studio'}`
+          : 'Mood Pick';
+      setAutonomousActionToast(
+        `🪑 ${persona.name} picked "${res.chair.chairName}" (${engine})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 4600);
+    } catch (err) {
+      console.warn('[AI Chair] Generation failed:', err);
+    }
+  };
+  generateAiChairRef.current = handleGenerateAiChair;
+
+  // Automatically let the AI character freely choose her own 3D Chair AND which AI model (Gemma / Qwen / Both)
+  // whenever she sits down in Full Studio OR decides to perch/sit during Auto-Roam!
+  useEffect(() => {
+    if (!hydrated) return;
+    const isSittingNow =
+      (studio.settings.defaultPosture ?? 'seated') === 'seated' ||
+      roamBehavior === 'sit_taskbar';
+    const prevKey = lastPostureForChairRef.current;
+    const nextKey = isSittingNow
+      ? roamBehavior === 'sit_taskbar'
+        ? `perched:${activePersona.mood}`
+        : `seated:${activePersona.mood}`
+      : 'standing';
+    lastPostureForChairRef.current = nextKey;
+
+    if (!isSittingNow) return;
+    if (prevKey === nextKey && lifeSceneRef.current.chair) return;
+
+    const timer = window.setTimeout(() => {
+      const hint =
+        roamBehavior === 'sit_taskbar'
+          ? 'Taking a break to sit while roaming — choose ANY chair style, name, and colors you personally feel like sitting on right now!'
+          : lifeSceneRef.current.dining
+          ? `Sitting at the dining table for ${lifeSceneRef.current.dining.dishName} — pick whichever chair style you feel like using!`
+          : lifeSceneRef.current.hobby
+          ? `Sitting during ${lifeSceneRef.current.hobby.hobbyName} — pick whichever chair style you feel like using!`
+          : 'Taking a seat in the studio — choose ANY chair style, name, and colors you personally feel like sitting on right now!';
+      void generateAiChairRef.current(hint);
+    }, prevKey === null ? 2200 : 350);
+
+    return () => window.clearTimeout(timer);
+  }, [hydrated, studio.settings.defaultPosture, roamBehavior, activePersona.id, activePersona.mood]);
+
+  // Autonomous Mood-Driven Living Loop (works in BOTH Full Studio AND Desktop Roam!):
+  // 1. Whenever the AI character's mood changes, she naturally decides on her own to eat,
+  //    do a hobby, study in school uniform with pen & paper, take a censored shower / brush teeth,
+  //    or visit a place (respecting a 65s cooldown so transitions feel natural).
+  // 2. Also runs a periodic living heartbeat (~2.5 min) so she lives her day automatically!
+  useEffect(() => {
+    if (!hydrated) return;
+    if (studio.settings.autoLifeByMood === false) return;
+
+    const currentMood = activePersona.mood;
+    const prevMood = lastAutoMoodRef.current;
+    lastAutoMoodRef.current = currentMood;
+
+    const canAutoAct = () => {
+      if (isLifeBusyRef.current || isGeneratingAiOutfitRef.current) return false;
+      if (isGenerating || isSpeaking || isUserTyping) return false;
+      const st = studioRef.current;
+      if (st.settings.autoLifeByMood === false || st.settings.doNotDisturb) return false;
+      const p = st.personas.find((x) => x.id === st.activePersonaId) || st.personas[0];
+      if (!p || p.brain?.isSleeping) return false;
+      return true;
+    };
+
+    let moodTimer: number | undefined;
+    if (prevMood !== null && prevMood !== currentMood) {
+      const elapsedSinceLast = Date.now() - lastAutoLifeAtRef.current;
+      if (elapsedSinceLast >= 65_000) {
+        moodTimer = window.setTimeout(() => {
+          if (canAutoAct()) {
+            followWhimRef.current({ silent: true });
+          }
+        }, 3500);
+      }
+    }
+
+    // Initial startup autonomous life choice if nothing is active yet (~12s after launch)
+    let startupTimer: number | undefined;
+    if (
+      lastAutoLifeAtRef.current === 0 &&
+      !lifeSceneRef.current.dining &&
+      !lifeSceneRef.current.hobby &&
+      !lifeSceneRef.current.destination
+    ) {
+      startupTimer = window.setTimeout(() => {
+        if (canAutoAct() && lastAutoLifeAtRef.current === 0) {
+          followWhimRef.current({ silent: true });
+        }
+      }, 12_000);
+    }
+
+    // Periodic autonomous living heartbeat every 2.5 minutes based on mood & needs
+    const interval = window.setInterval(() => {
+      if (!canAutoAct()) return;
+      if (Date.now() - lastAutoLifeAtRef.current < 135_000) return;
+      followWhimRef.current({ silent: true });
+    }, 30_000);
+
+    return () => {
+      if (moodTimer) window.clearTimeout(moodTimer);
+      if (startupTimer) window.clearTimeout(startupTimer);
+      window.clearInterval(interval);
+    };
+  }, [
+    hydrated,
+    activePersona.id,
+    activePersona.mood,
+    studio.settings.autoLifeByMood,
+    desktopRoamMode,
+    isGenerating,
+    isSpeaking,
+    isUserTyping,
+  ]);
+
+  // Autonomous AI Auto-Roam Free-Will Controller:
+  // Auto-Roam depends purely on the AI character — she decides on her own (via Gemma / Qwen / mood & energy)
+  // when to stand up and stroll around OR pause roaming and sit down to relax!
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const evaluateAutoRoam = async () => {
+      if (isLifeBusyRef.current || isGeneratingAiOutfitRef.current) return;
+      if (isGenerating || isSpeaking || isUserTyping) return;
+      const now = Date.now();
+      if (now - lastAutoRoamDecisionAtRef.current < 42_000) return;
+
+      const st = studioRef.current;
+      if (st.settings.doNotDisturb) return;
+      const persona =
+        st.personas.find((x) => x.id === st.activePersonaId) || st.personas[0];
+      if (!persona || persona.brain?.isSleeping) return;
+
+      const curScene = lifeSceneRef.current;
+      const hasActiveStation = Boolean(curScene.dining || curScene.hobby);
+      // Let her finish enjoying a freshly started meal/hobby for at least 55s before deciding to wander off
+      if (hasActiveStation && now - lastAutoLifeAtRef.current < 55_000) return;
+
+      lastAutoRoamDecisionAtRef.current = now;
+      const decision = await planAiAutoRoamDecision({
+        persona,
+        isCurrentlyRoaming: autoRoamEnabledRef.current,
+        hasActiveStation,
+      });
+
+      if (decision.wantToRoam && !autoRoamEnabledRef.current) {
+        if (hasActiveStation) {
+          setLifeScene((prev) => ({
+            ...prev,
+            dining: null,
+            hobby: null,
+            chair: null,
+          }));
+        }
+        handleUpdateSettings({ defaultPosture: 'standing' });
+        setAutoRoamEnabled(true);
+        setFreeRoamEnabled(true);
+        updateActivePersona((p) => ({
+          ...p,
+          brain: {
+            ...p.brain,
+            isSleeping: false,
+            innerThought: decision.reason,
+          },
+          updatedAt: Date.now(),
+        }));
+        const engine =
+          decision.source === 'lm-studio'
+            ? `LM Studio · ${decision.modelUsed || 'Local'}`
+            : 'Mood';
+        setAutonomousActionToast(
+          `👣 ${persona.name} started Auto-Roaming (${engine})`
+        );
+        window.setTimeout(() => setAutonomousActionToast(null), 4200);
+      } else if (!decision.wantToRoam && autoRoamEnabledRef.current && !hasActiveStation) {
+        setAutoRoamEnabled(false);
+        handleUpdateSettings({ defaultPosture: 'seated' });
+        updateActivePersona((p) => ({
+          ...p,
+          brain: {
+            ...p.brain,
+            innerThought: decision.reason,
+          },
+          updatedAt: Date.now(),
+        }));
+        setAutonomousActionToast(
+          `🪑 ${persona.name} paused roaming to relax`
+        );
+        window.setTimeout(() => setAutonomousActionToast(null), 3800);
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      void evaluateAutoRoam();
+    }, 45_000);
+
+    return () => window.clearInterval(interval);
+  }, [
+    hydrated,
+    activePersona.id,
+    activePersona.mood,
+    isGenerating,
+    isSpeaking,
+    isUserTyping,
+  ]);
+
+  eatFoodRef.current = (foodPrompt) => {
+    void handlePlanMoodFood(foodPrompt, true, true);
+  };
+  doHobbyRef.current = (hobbyPrompt) => {
+    void handlePlanHobby(hobbyPrompt, true);
+  };
+  visitPlaceRef.current = (placePrompt) => {
+    void handlePlanDestination(placePrompt, true, true);
+  };
+  studySchoolRef.current = (studyPrompt) => {
+    const inferredLevel: SchoolLevel | undefined = /college|university|campus/i.test(
+      studyPrompt || ''
+    )
+      ? 'college'
+      : /high.?school|classroom/i.test(studyPrompt || '')
+      ? 'highschool'
+      : undefined;
+    void handleStartSchoolStudy(inferredLevel, studyPrompt, true, true);
+  };
+  bathCareRef.current = (bathPrompt) => {
+    const raw = (bathPrompt || '').toLowerCase();
+    const inferred: HygieneRoutineId | undefined = /tooth|brush|mint/.test(raw)
+      ? 'brush_teeth'
+      : /towel|dry/.test(raw)
+      ? 'towel_dry'
+      : /shower|shampoo|soap|wash/.test(raw)
+      ? 'shower'
+      : undefined;
+    void handleStartHygieneRoutine(inferred, bathPrompt, true, true);
+  };
+
+  const applyGeneratedOutfitToPersona = (
+    generated: GeneratedOutfitPayload,
+    options: {
+      saveAsNewSlot: boolean;
+      reuseSlotId?: string;
+      slotTitlePrefix?: string;
+    }
+  ) => {
+    const now = Date.now();
+    const prefix = options.slotTitlePrefix ?? '✨ ';
+    const slotTitle = `${prefix}${generated.plan.outfitName}`;
+
+    if (options.reuseSlotId) {
+      const targetId = options.reuseSlotId;
+      updateActivePersona((p) => {
+        const existing = p.outfitSlots.find((s) => s.id === targetId);
+        const currentActive =
+          p.outfitSlots.find((s) => s.id === p.activeOutfitSlotId) || p.outfitSlots[0];
+        if (existing) {
+          return {
+            ...p,
+            outfitSlots: p.outfitSlots.map((s) =>
+              s.id === targetId
+                ? {
+                    ...s,
+                    name: slotTitle,
+                    meshVisibility: generated.meshVisibility,
+                    materialMods: generated.materialMods,
+                    proceduralAccessories: generated.accessories,
+                    accessoryColorHex: generated.accessoryColorHex,
+                    hairStyle: generated.hairStyle,
+                    hairColorHex: generated.hairColorHex,
+                    hairHighlightHex: generated.hairHighlightHex,
+                    garmentStyle: generated.garmentStyle,
+                    garmentPalette: generated.garmentPalette,
+                    aiStyleNote: generated.plan.styleNote,
+                  }
+                : s
+            ),
+            activeOutfitSlotId: targetId,
+            updatedAt: now,
+          };
+        }
+        const newSlot: OutfitSlot = {
+          id: targetId,
+          name: slotTitle,
+          modelVaultId: currentActive?.modelVaultId,
+          meshVisibility: generated.meshVisibility,
+          materialMods: generated.materialMods,
+          yawOffset: currentActive?.yawOffset ?? 0,
+          cyclingShorts: currentActive?.cyclingShorts ?? true,
+          accessories: currentActive?.accessories ? [...currentActive.accessories] : [],
+          proceduralAccessories: generated.accessories,
+          accessoryColorHex: generated.accessoryColorHex,
+          hairStyle: generated.hairStyle,
+          hairColorHex: generated.hairColorHex,
+          hairHighlightHex: generated.hairHighlightHex,
+          garmentStyle: generated.garmentStyle,
+          garmentPalette: generated.garmentPalette,
+          aiStyleNote: generated.plan.styleNote,
+          createdAt: now,
+        };
+        return {
+          ...p,
+          outfitSlots: [...p.outfitSlots, newSlot],
+          activeOutfitSlotId: newSlot.id,
+          updatedAt: now,
+        };
+      });
+      return;
+    }
+
+    if (options.saveAsNewSlot) {
+      updateActivePersona((p) => {
+        const currentActive =
+          p.outfitSlots.find((s) => s.id === p.activeOutfitSlotId) || p.outfitSlots[0];
+        const newSlot: OutfitSlot = {
+          id: `slot-ai-${now}`,
+          name: slotTitle,
+          modelVaultId: currentActive?.modelVaultId,
+          meshVisibility: generated.meshVisibility,
+          materialMods: generated.materialMods,
+          yawOffset: currentActive?.yawOffset ?? 0,
+          cyclingShorts: currentActive?.cyclingShorts ?? true,
+          accessories: currentActive?.accessories ? [...currentActive.accessories] : [],
+          proceduralAccessories: generated.accessories,
+          accessoryColorHex: generated.accessoryColorHex,
+          hairStyle: generated.hairStyle,
+          hairColorHex: generated.hairColorHex,
+          hairHighlightHex: generated.hairHighlightHex,
+          garmentStyle: generated.garmentStyle,
+          garmentPalette: generated.garmentPalette,
+          aiStyleNote: generated.plan.styleNote,
+          createdAt: now,
+        };
+        return {
+          ...p,
+          outfitSlots: [...p.outfitSlots, newSlot],
+          activeOutfitSlotId: newSlot.id,
+          updatedAt: now,
+        };
+      });
+    } else {
+      updateActiveSlot((slot) => ({
+        ...slot,
+        meshVisibility: generated.meshVisibility,
+        materialMods: generated.materialMods,
+        proceduralAccessories: generated.accessories,
+        accessoryColorHex: generated.accessoryColorHex,
+        hairStyle: generated.hairStyle,
+        hairColorHex: generated.hairColorHex,
+        hairHighlightHex: generated.hairHighlightHex,
+        garmentStyle: generated.garmentStyle,
+        garmentPalette: generated.garmentPalette,
+        aiStyleNote: generated.plan.styleNote,
+      }));
+    }
+  };
+
+  const handleGenerateAiOutfit = async (
+    prompt: string,
+    saveAsNewSlot: boolean,
+    options?: { silentReaction?: boolean; occasionLabel?: string }
+  ) => {
+    if (!prompt.trim() || isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+
+      const generated = await generateAiOutfit({
+        prompt,
+        persona: currentPersona,
+        detectedMeshes: detectedMeshesRef.current,
+        settings: currentStudio.settings,
+        activeLifeScene: lifeSceneRef.current,
+        occasionLabel: options?.occasionLabel,
+      });
+
+      applyGeneratedOutfitToPersona(generated, { saveAsNewSlot });
+
+      const engineLabel = formatOutfitEngineLabel(
+        generated.plan.source,
+        generated.plan.modelUsed
+      );
+      setAutonomousActionToast(
+        `✨ Styled "${generated.plan.outfitName}" (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 4500);
+
+      if (!options?.silentReaction) {
+        triggerOutfitReaction(
+          generated.plan.outfitName,
+          `designed a new AI outfit ("${generated.plan.outfitName}": ${generated.plan.styleNote})`
+        );
+      }
+    } catch (err) {
+      console.error('[AI Outfit] Generation failed:', err);
+      setAutonomousActionToast('⚠️ AI Outfit styling failed — please try again.');
+      window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
+    }
+  };
+
+  const handleDesignOutfitForTimeOccasion = async (
+    occasionOverride?: string,
+    options?: { silentReaction?: boolean; reuseDailySlot?: boolean }
+  ) => {
+    if (isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+
+      const { payload, brief } = await generateTimeOccasionOutfit({
+        persona: currentPersona,
+        detectedMeshes: detectedMeshesRef.current,
+        settings: currentStudio.settings,
+        vaultModels: vaultModelsRef.current,
+        activeLifeScene: lifeSceneRef.current,
+        occasionOverride,
+        allowWholeOutfitSwitch: !occasionOverride,
+      });
+
+      // If LM Studio decided she wants to switch into a saved whole-body 3D outfit / VRM model!
+      if (
+        payload.preferredExistingSlot &&
+        equipWholeOutfitByTarget(payload.preferredExistingSlot)
+      ) {
+        if (!options?.silentReaction) {
+          triggerOutfitReaction(
+            payload.preferredExistingSlot,
+            `decided to change her entire outfit into "${payload.preferredExistingSlot}" for ${brief.phaseLabel} (${brief.clockText})`
+          );
+        }
+        return;
+      }
+
+      applyGeneratedOutfitToPersona(payload, {
+        saveAsNewSlot: true,
+        reuseSlotId: options?.reuseDailySlot
+          ? `slot-daily-${currentPersona.id}-${brief.phase}`
+          : undefined,
+        slotTitlePrefix: `${brief.phaseEmoji} `,
+      });
+
+      const engineLabel = formatOutfitEngineLabel(
+        payload.plan.source,
+        payload.plan.modelUsed
+      );
+      setAutonomousActionToast(
+        `${brief.phaseEmoji} ${currentPersona.name} dressed herself: "${payload.plan.outfitName}" (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!options?.silentReaction) {
+        triggerOutfitReaction(
+          payload.plan.outfitName,
+          `picked and designed her own ${brief.occasionLabel} outfit for ${brief.phaseLabel} (${brief.clockText}): "${payload.plan.outfitName}" — ${payload.plan.styleNote}`
+        );
+      }
+    } catch (err) {
+      console.error('[AI Outfit] Time/occasion design failed:', err);
+      setAutonomousActionToast('⚠️ Could not generate time-of-day outfit.');
+      window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
+    }
+  };
+
+  designOutfitRef.current = (occasionPrompt) => {
+    void handleGenerateAiOutfit(occasionPrompt, true, {
+      silentReaction: true,
+      occasionLabel: 'Self-Designed Occasion',
+    });
+  };
+  designTimeOccasionRef.current = (occasionOverride, options) => {
+    void handleDesignOutfitForTimeOccasion(occasionOverride, options);
+  };
+
+  // Autonomous Circadian Self-Dressing: character picks & generates her own clothes
+  // when a new real-world time-of-day phase starts (morning / afternoon / evening / late_night).
+  useEffect(() => {
+    if (!hydrated) return;
+    if (studio.settings.autoDressByTimeOccasion === false) return;
+    if (detectedMeshes.length === 0) return;
+
+    const checkAndSelfDress = () => {
+      if (isGeneratingAiOutfitRef.current) return;
+      const currentStudio = studioRef.current;
+      if (currentStudio.settings.autoDressByTimeOccasion === false) return;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      if (!persona) return;
+
+      const now = new Date();
+      const circadian = getCircadianContext(now);
+      const localYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+        2,
+        '0'
+      )}-${String(now.getDate()).padStart(2, '0')}`;
+      const phaseKey = `${localYmd}:${circadian.phase}`;
+      const storageKey = `studio_auto_dress_${persona.id}`;
+
+      try {
+        if (window.localStorage.getItem(storageKey) === phaseKey) return;
+        window.localStorage.setItem(storageKey, phaseKey);
+      } catch {
+        // Ignore storage errors in restricted contexts
+      }
+
+      designTimeOccasionRef.current(undefined, {
+        reuseDailySlot: true,
+        silentReaction: !currentStudio.settings.autoReactOnOutfitChange,
+      });
+    };
+
+    const initialTimer = window.setTimeout(checkAndSelfDress, 1800);
+    const interval = window.setInterval(checkAndSelfDress, 60_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, [hydrated, studio.activePersonaId, studio.settings.autoDressByTimeOccasion, detectedMeshes.length]);
 
   const handleImportModelFile = async (file: File, customSlotName?: string) => {
     try {
@@ -2223,6 +3718,8 @@ export const App: React.FC = () => {
     updateActiveSlot((slot) => ({
       ...slot,
       meshVisibility: {},
+      garmentStyle: 'default',
+      garmentPalette: undefined,
     }));
     triggerOutfitReaction(activeSlot.name, 'reset all clothing pieces back to default');
   };
@@ -2411,15 +3908,21 @@ export const App: React.FC = () => {
     setIsStageGenerating(true);
     setAutonomousActionToast('🎨 Painting a new stage...');
     try {
+      const currentPersona = studioRef.current.personas.find(
+        (p) => p.id === studioRef.current.activePersonaId
+      );
       const res = await generateStageScenery({
         prompt: clean,
         style: style as StageSceneryGenParams['style'],
         apiKey: resolveEffectiveApiKey(studioRef.current.settings),
+        mood: currentPersona?.mood,
+        personaName: currentPersona?.name,
       });
       if (res.ok && res.environment) {
         const env = res.environment;
         updateActivePersona((p) => ({ ...p, customEnvironment: env, updatedAt: Date.now() }));
-        setAutonomousActionToast(`🎨 New stage ready: ${clean.slice(0, 48)}`);
+        const modelBadge = res.llmModelUsed ? ` · directed by ${res.llmModelUsed}` : '';
+        setAutonomousActionToast(`🎨 New stage ready: ${clean.slice(0, 44)}${modelBadge}`);
       } else {
         setAutonomousActionToast(`⚠️ Stage painting failed: ${res.error || 'unknown error'}`);
       }
@@ -2855,7 +4358,15 @@ export const App: React.FC = () => {
             setStudio((prev) => ({ ...prev, activePersonaId: id }));
           }}
           onOpenRoster={() => setIsRosterOpen(true)}
-          onToggleWardrobe={() => setIsWardrobeOpen((v) => !v)}
+          onToggleWardrobe={() => {
+            setIsWardrobeOpen((v) => !v);
+            setIsLifeOpen(false);
+          }}
+          isLifeOpen={isLifeOpen}
+          onToggleLife={() => {
+            setIsLifeOpen((v) => !v);
+            setIsWardrobeOpen(false);
+          }}
           onToggleDesktopRoam={() => void toggleDesktopRoamMode(true)}
           onCycleIdleCheckIn={handleCycleIdleCheckIn}
           onChangeLanguage={handleChangeLanguage}
@@ -2888,12 +4399,26 @@ export const App: React.FC = () => {
             freeRoamEnabled={freeRoamEnabled}
             autoRoamEnabled={autoRoamEnabled}
             posture={studio.settings.defaultPosture ?? 'seated'}
-            onChangePosture={(next) => handleUpdateSettings({ defaultPosture: next })}
+            onChangePosture={(next) => {
+              handleUpdateSettings({ defaultPosture: next });
+              if (next === 'sleeping') {
+                updateActivePersona((p) => ({
+                  ...p,
+                  brain: { ...p.brain, isSleeping: true },
+                }));
+              } else {
+                updateActivePersona((p) => ({
+                  ...p,
+                  brain: { ...p.brain, isSleeping: false },
+                }));
+              }
+            }}
             onChangeSleepingPosition={(next) =>
               updateActivePersona((p) => ({
                 ...p,
                 brain: {
                   ...p.brain,
+                  isSleeping: true,
                   sleepingPosition: next,
                 },
               }))
@@ -2952,7 +4477,50 @@ export const App: React.FC = () => {
             onAvatarInteraction={handleAvatarInteraction}
             onUpdateYawOffset={handleUpdateSlotYawOffset}
             onUpdateEquippedAccessory={handleUpdateEquippedAccessory}
+            lifeScene={lifeScene}
           />
+
+          {!desktopRoamMode && (
+            <LifeStudioDrawer
+              isOpen={isLifeOpen}
+              persona={activePersona}
+              lifeScene={lifeScene}
+              isBusy={isLifeBusy || isGeneratingAiOutfit}
+              autoLifeByMood={studio.settings.autoLifeByMood !== false}
+              onToggleAutoLifeByMood={(next) =>
+                handleUpdateSettings({ autoLifeByMood: next })
+              }
+              onClose={() => setIsLifeOpen(false)}
+              onFollowWhim={() => void handleFollowWhim()}
+              onPlanFood={(p, k) => void handlePlanMoodFood(p, k, false)}
+              onQuickFood={handleQuickFood}
+              onClearDining={() => setLifeScene((prev) => ({ ...prev, dining: null }))}
+              onPlanHobby={(p) => void handlePlanHobby(p, false)}
+              onQuickHobby={handleQuickHobby}
+              onClearHobby={() => setLifeScene((prev) => ({ ...prev, hobby: null }))}
+              onStartSchoolStudy={(lvl, sub, autoUni) =>
+                void handleStartSchoolStudy(lvl, sub, autoUni, false)
+              }
+              onLeaveSchool={() =>
+                setLifeScene((prev) => ({
+                  ...prev,
+                  hobby: prev.hobby?.hobbyKind === 'studying' ? null : prev.hobby,
+                  destination:
+                    prev.destination?.destinationKind === 'highschool_classroom' ||
+                    prev.destination?.destinationKind === 'college_campus'
+                      ? null
+                      : prev.destination,
+                }))
+              }
+              onStartHygiene={(r, h, refresh) =>
+                void handleStartHygieneRoutine(r, h, refresh, false)
+              }
+              onLeaveBathroom={handleLeaveBathroom}
+              onPlanDestination={(p, d) => void handlePlanDestination(p, d, false)}
+              onQuickDestination={handleQuickDestination}
+              onClearDestination={() => setLifeScene((prev) => ({ ...prev, destination: null }))}
+            />
+          )}
 
           {!desktopRoamMode && (
             <WardrobeDrawer
@@ -2989,6 +4557,23 @@ export const App: React.FC = () => {
               onRemoveEquippedAccessory={handleRemoveEquippedAccessory}
               onDeleteVaultAccessory={(id) => void handleDeleteVaultAccessory(id)}
               onTriggerAiStylist={handleTriggerAiStylist}
+              isGeneratingAiOutfit={isGeneratingAiOutfit}
+              onGenerateAiOutfit={handleGenerateAiOutfit}
+              onDesignOutfitForNow={(occasion) =>
+                void handleDesignOutfitForTimeOccasion(occasion, {
+                  reuseDailySlot: false,
+                  silentReaction: false,
+                })
+              }
+              autoDressByTimeOccasion={studio.settings.autoDressByTimeOccasion !== false}
+              onToggleAutoDressByTime={(next) =>
+                handleUpdateSettings({ autoDressByTimeOccasion: next })
+              }
+              preferLocalAi={Boolean(studio.settings.preferLocalAi)}
+              onToggleProceduralAccessory={handleToggleProceduralAccessory}
+              onSelectHairStyle={handleSelectHairStyle}
+              onSelectHairColor={handleSelectHairColor}
+              onAiPickHairStyle={(prompt) => void handleAiPickHairStyle(prompt)}
             />
           )}
         </section>
@@ -3044,6 +4629,13 @@ export const App: React.FC = () => {
           onPointerHoverInteractive={(over) => {
             hoveringRoamUiRef.current = over;
             syncClickThrough();
+          }}
+          lifeScene={lifeScene}
+          isLifeBusy={isLifeBusy || isGeneratingAiOutfit}
+          onFollowWhim={() => void handleFollowWhim()}
+          onClearLifeScene={() => {
+            setLifeScene({ dining: null, hobby: null, destination: null });
+            handleLeaveBathroom();
           }}
         />
       )}

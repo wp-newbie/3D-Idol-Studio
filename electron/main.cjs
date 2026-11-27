@@ -658,26 +658,52 @@ async function handleRequestGeminiTts(_event, params) {
   }
 }
 
+function listLmStudioChatModels(modelsData) {
+  const list = Array.isArray(modelsData?.data) ? modelsData.data : [];
+  return list.map((m) => m?.id).filter((id) => typeof id === 'string' && !/embed/i.test(id));
+}
+
+function pickLmStudioModel(modelsData) {
+  const ids = listLmStudioChatModels(modelsData);
+  if (ids.includes('qwen2.5-7b-instruct-1m')) return 'qwen2.5-7b-instruct-1m';
+  if (ids.length > 0) return ids[0];
+  return 'qwen2.5-7b-instruct-1m';
+}
+
 async function handleCheckLocalAi() {
   try {
     const res = await fetch('http://127.0.0.1:1234/v1/models', { signal: AbortSignal.timeout(2500) });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    if (!res.ok) return { ok: false, error: `LM Studio HTTP ${res.status}` };
     const data = await res.json();
-    const model = data?.data?.[0]?.id || 'qwen2.5-7b-instruct-1m';
-    return { ok: true, model };
+    const models = listLmStudioChatModels(data);
+    const model = pickLmStudioModel(data);
+    return { ok: true, model, models, engine: 'lm-studio' };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: `LM Studio (:1234) not reachable: ${String(err)}` };
   }
 }
 
 async function handleQueryLocalAi(_event, params) {
+  const { messages, temperature = 0.85, maxTokens = 350, model: requestedModel } = params || {};
   try {
-    const { messages, temperature = 0.85, maxTokens = 350 } = params;
+    let modelId = requestedModel || 'qwen2.5-7b-instruct-1m';
+    if (!requestedModel) {
+      try {
+        const mRes = await fetch('http://127.0.0.1:1234/v1/models', { signal: AbortSignal.timeout(2000) });
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          modelId = pickLmStudioModel(mData);
+        }
+      } catch {
+        // keep default modelId
+      }
+    }
+
     const res = await fetch('http://127.0.0.1:1234/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'qwen2.5-7b-instruct-1m',
+        model: modelId,
         messages,
         temperature,
         max_tokens: maxTokens,
@@ -686,14 +712,14 @@ async function handleQueryLocalAi(_event, params) {
     });
     if (!res.ok) {
       const err = await res.text();
-      return { ok: false, error: `HTTP ${res.status}: ${err}` };
+      return { ok: false, error: `LM Studio HTTP ${res.status}: ${err}` };
     }
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim() || '';
-    const resolvedModel = data?.model || 'qwen2.5-7b-instruct-1m';
+    const resolvedModel = data?.model || modelId;
     return { ok: true, text, resolvedModel };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: `LM Studio (:1234) error: ${String(err)}` };
   }
 }
 

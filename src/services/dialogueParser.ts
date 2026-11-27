@@ -25,6 +25,13 @@ const THOUGHT_TAG_REGEX = /\[THOUGHT\s*:\s*([^\]]+)\]/gi;
 const FEELING_TAG_REGEX = /\[FEELING\s*:\s*([^\]]+)\]/gi;
 const ARCHETYPE_TAG_REGEX = /\[ARCHETYPE\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
 const EQUIP_OUTFIT_TAG_REGEX = /\[EQUIP_OUTFIT\s*:\s*([^\]]+)\]/gi;
+const DESIGN_OUTFIT_TAG_REGEX = /\[DESIGN_OUTFIT\s*:\s*([^\]]+)\]/gi;
+const CHANGE_HAIRSTYLE_TAG_REGEX = /\[CHANGE_HAIRSTYLE\s*:\s*([^\]]+)\]/gi;
+const EAT_FOOD_TAG_REGEX = /\[EAT_FOOD\s*:\s*([^\]]+)\]/gi;
+const DO_HOBBY_TAG_REGEX = /\[DO_HOBBY\s*:\s*([^\]]+)\]/gi;
+const VISIT_PLACE_TAG_REGEX = /\[VISIT_PLACE\s*:\s*([^\]]+)\]/gi;
+const STUDY_SCHOOL_TAG_REGEX = /\[STUDY_SCHOOL\s*:\s*([^\]]+)\]/gi;
+const SELF_CARE_BATH_TAG_REGEX = /\[SELF_CARE_BATH\s*:\s*([^\]]+)\]/gi;
 const TOGGLE_LAYER_TAG_REGEX = /\[TOGGLE_LAYER\s*:\s*([^\]=]+)=(on|off|true|false)\s*\]/gi;
 const POSTURE_TAG_REGEX = /\[POSTURE\s*:\s*(seated|standing|sleeping)\s*\]/gi;
 const MOVE_TAG_REGEX = /\[MOVE\s*:\s*(walk|peek|sit_taskbar|approach_user)\s*\]/gi;
@@ -101,6 +108,83 @@ export function extractOutfitAction(text: string): WardrobeOutfitAction | null {
     if (target) action = { slotTarget: target };
   }
   return action;
+}
+
+export function extractDesignOutfitAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(DESIGN_OUTFIT_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractHairStyleAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(CHANGE_HAIRSTYLE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractEatFoodAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(EAT_FOOD_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractDoHobbyAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(DO_HOBBY_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractVisitPlaceAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(VISIT_PLACE_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractStudySchoolAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(STUDY_SCHOOL_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractBathCareAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(SELF_CARE_BATH_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
 }
 
 export function extractLayerActions(text: string): WardrobeLayerAction[] {
@@ -284,6 +368,13 @@ export function stripHiddenTags(text: string): string {
     .replace(FEELING_TAG_REGEX, '')
     .replace(ARCHETYPE_TAG_REGEX, '')
     .replace(EQUIP_OUTFIT_TAG_REGEX, '')
+    .replace(DESIGN_OUTFIT_TAG_REGEX, '')
+    .replace(CHANGE_HAIRSTYLE_TAG_REGEX, '')
+    .replace(EAT_FOOD_TAG_REGEX, '')
+    .replace(DO_HOBBY_TAG_REGEX, '')
+    .replace(VISIT_PLACE_TAG_REGEX, '')
+    .replace(STUDY_SCHOOL_TAG_REGEX, '')
+    .replace(SELF_CARE_BATH_TAG_REGEX, '')
     .replace(TOGGLE_LAYER_TAG_REGEX, '')
     .replace(POSTURE_TAG_REGEX, '')
     .replace(MOVE_TAG_REGEX, '')
@@ -389,6 +480,13 @@ export function parseDialogueResponse(
   nuancedFeeling: string | null;
   archetype: VocalArchetype | null;
   outfitAction: WardrobeOutfitAction | null;
+  designOutfitAction: string | null;
+  hairStyleAction: string | null;
+  eatFoodAction: string | null;
+  doHobbyAction: string | null;
+  visitPlaceAction: string | null;
+  studySchoolAction: string | null;
+  bathCareAction: string | null;
   layerActions: WardrobeLayerAction[];
   postureAction: AvatarPosture | null;
   moveAction: RoamBehavior | null;
@@ -406,6 +504,13 @@ export function parseDialogueResponse(
   const nuancedFeeling = extractNuancedFeeling(rawText);
   const archetype = extractArchetypeFromText(rawText);
   const outfitAction = extractOutfitAction(rawText);
+  const designOutfitAction = extractDesignOutfitAction(rawText);
+  const hairStyleAction = extractHairStyleAction(rawText);
+  const eatFoodAction = extractEatFoodAction(rawText);
+  const doHobbyAction = extractDoHobbyAction(rawText);
+  const visitPlaceAction = extractVisitPlaceAction(rawText);
+  const studySchoolAction = extractStudySchoolAction(rawText);
+  const bathCareAction = extractBathCareAction(rawText);
   const layerActions = extractLayerActions(rawText);
   const postureAction = extractPostureAction(rawText);
   const moveAction = extractMoveAction(rawText);
@@ -474,6 +579,13 @@ export function parseDialogueResponse(
     nuancedFeeling,
     archetype,
     outfitAction,
+    designOutfitAction,
+    hairStyleAction,
+    eatFoodAction,
+    doHobbyAction,
+    visitPlaceAction,
+    studySchoolAction,
+    bathCareAction,
     layerActions,
     postureAction,
     moveAction,

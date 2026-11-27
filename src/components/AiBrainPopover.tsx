@@ -11,7 +11,7 @@ interface AiBrainPopoverProps {
   autoRoamEnabled: boolean;
   showThoughtHud: boolean;
   isGenerating: boolean;
-  onToggleAutoRoam: () => void;
+  onToggleAutoRoam?: () => void;
   onToggleThoughtHud: () => void;
   onTriggerBrainImpulse: (reason: AutonomousNeedTrigger) => void;
   onOpenMemoryJournal: () => void;
@@ -54,7 +54,6 @@ export const AiBrainPopover: React.FC<AiBrainPopoverProps> = ({
   autoRoamEnabled,
   showThoughtHud,
   isGenerating,
-  onToggleAutoRoam,
   onToggleThoughtHud,
   onTriggerBrainImpulse,
   onOpenMemoryJournal,
@@ -133,28 +132,29 @@ export const AiBrainPopover: React.FC<AiBrainPopoverProps> = ({
             <span className="text-[9.5px] font-semibold uppercase tracking-wider text-zinc-400">
               Auto-Roam
             </span>
-            <button
-              type="button"
-              onClick={onToggleAutoRoam}
-              className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold transition ${
+            <span
+              className={`cursor-default select-none rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
                 autoRoamEnabled
                   ? 'bg-emerald-500/20 text-emerald-300'
                   : 'bg-white/10 text-zinc-400'
               }`}
+              title={`${persona.name} decides on her own when to Auto-Roam based on her mood & energy`}
             >
-              {autoRoamEnabled ? 'ON' : 'OFF'}
-            </button>
+              {autoRoamEnabled ? 'AI · ON' : 'AI · REST'}
+            </span>
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-zinc-100">
             <Footprints className="h-3 w-3 shrink-0 text-emerald-300" />
             <span className="truncate">
               {brain.isSleeping
                 ? 'Dozing Peacefully'
-                : ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior}
+                : autoRoamEnabled
+                ? ROAM_BEHAVIOR_LABELS[roamBehavior] || roamBehavior
+                : 'Staying Put'}
             </span>
           </div>
           <div className="mt-0.5 truncate text-[9.5px] text-zinc-500">
-            Stage: {climate.label}
+            Decided by {persona.name} · {climate.label}
           </div>
         </div>
       </div>

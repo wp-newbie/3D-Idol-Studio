@@ -26,6 +26,141 @@ export type ClothingCategory =
   | 'Accessories'
   | 'Hair';
 
+export type ProceduralAccessoryId =
+  | 'cat_ears'
+  | 'halo'
+  | 'ribbon_bow'
+  | 'cyber_visor'
+  | 'choker'
+  | 'fairy_wings'
+  | 'idol_crown'
+  | 'spa_towel';
+
+export type HairStyleId =
+  | 'default'
+  | 'high_ponytail'
+  | 'twin_tails'
+  | 'twin_buns'
+  | 'side_braid'
+  | 'long_wavy'
+  | 'drill_twintails'
+  | 'bob_cut'
+  | 'ahoge_clips';
+
+export type GarmentStyleId =
+  | 'default'
+  | 'cozy_hoodie_pants'
+  | 'summer_sundress'
+  | 'streetwear_jacket_shorts'
+  | 'sporty_tee_leggings'
+  | 'kimono_yukata'
+  | 'evening_gown'
+  | 'cozy_pajamas'
+  | 'school_blazer'
+  | 'trench_coat_pants'
+  | 'bath_wrap'
+  | 'beach_swimsuit';
+
+export type FoodVisualId =
+  | 'ramen'
+  | 'cake'
+  | 'sushi'
+  | 'pancakes'
+  | 'curry'
+  | 'bento'
+  | 'pasta'
+  | 'tea_sweets'
+  | 'ice_cream'
+  | 'burger';
+
+export type HobbyKindId =
+  | 'painting'
+  | 'music_keyboard'
+  | 'reading'
+  | 'gaming'
+  | 'baking'
+  | 'photography'
+  | 'yoga'
+  | 'journaling'
+  | 'studying'
+  | 'showering'
+  | 'towel_dry'
+  | 'brushing_teeth';
+
+export type DestinationKindId =
+  | 'none'
+  | 'home_kitchen'
+  | 'shopping_mall'
+  | 'tropical_beach'
+  | 'vacation_cafe'
+  | 'mountain_onsen'
+  | 'amusement_park'
+  | 'highschool_classroom'
+  | 'college_campus'
+  | 'bathroom_spa';
+
+export interface ActiveDiningScene {
+  dishName: string;
+  drinkName: string;
+  foodVisual: FoodVisualId;
+  accentHex: string;
+  moodReason: string;
+  withKitchenCounter: boolean;
+}
+
+export interface ActiveHobbyScene {
+  hobbyName: string;
+  hobbyKind: HobbyKindId;
+  accentHex: string;
+  description: string;
+  recommendedPosture: 'seated' | 'standing';
+}
+
+export interface ActiveDestinationScene {
+  placeName: string;
+  destinationKind: DestinationKindId;
+  accentHex: string;
+  description: string;
+  skyTopHex: string;
+  skyBottomHex: string;
+  groundHex: string;
+}
+
+export type AiChairStyleId =
+  | 'wooden_dining'
+  | 'gaming_chair'
+  | 'velvet_armchair'
+  | 'cafe_bistro'
+  | 'school_chair'
+  | 'princess_throne';
+
+export interface ActiveAiChair {
+  chairStyle: AiChairStyleId;
+  chairName: string;
+  frameHex: string;
+  cushionHex: string;
+  accentHex: string;
+  reason: string;
+}
+
+export interface ActiveLifeScene {
+  dining: ActiveDiningScene | null;
+  hobby: ActiveHobbyScene | null;
+  destination: ActiveDestinationScene | null;
+  chair?: ActiveAiChair | null;
+}
+
+export type FabricPatternId =
+  | 'none'
+  | 'plaid'
+  | 'gothic_lace'
+  | 'cyber_grid'
+  | 'sakura_petals'
+  | 'starry_night'
+  | 'pastel_stripes'
+  | 'polka_dots'
+  | 'argyle';
+
 export type CameraPreset = 'portrait' | 'bust' | 'full' | 'reset';
 
 export type AvatarPosture = 'seated' | 'standing' | 'sleeping';
@@ -233,6 +368,30 @@ export interface OutfitSlot {
   cyclingShorts?: boolean;
   /** Equipped 3D accessories / .xwear dress-up items attached to this outfit */
   accessories?: EquippedAccessory[];
+  /** LLM-generated or user-toggled procedural 3D bone-tracked accessories */
+  proceduralAccessories?: ProceduralAccessoryId[];
+  /** Primary accent color for procedural 3D accessories */
+  accessoryColorHex?: string;
+  /** Selected or AI-chosen 3D procedural hairstyle overlay */
+  hairStyle?: HairStyleId;
+  /** Optional hair dye color hex (null/undefined = auto-match VRM's native hair color) */
+  hairColorHex?: string | null;
+  /** Optional ombre / highlight accent color for hair tips & hair ties */
+  hairHighlightHex?: string | null;
+  /** AI-chosen 3D garment silhouette (dresses, hoodies, shorts, pants, kimono, pajamas, blazers, etc.) */
+  garmentStyle?: GarmentStyleId;
+  /** Stored garment color palette for procedural 3D clothing rendering */
+  garmentPalette?: {
+    topHex: string;
+    topAccentHex: string;
+    bottomHex: string;
+    bottomAccentHex: string;
+    accessoryHex: string;
+    topTextureDataUrl?: string | null;
+    bottomTextureDataUrl?: string | null;
+  };
+  /** Short AI stylist summary for generated outfits */
+  aiStyleNote?: string;
   createdAt: number;
 }
 
@@ -366,6 +525,10 @@ export interface StudioSettings {
   userHonorific?: UserHonorific;
   defaultPosture?: AvatarPosture;
   autoReactOnOutfitChange: boolean;
+  /** Autonomously design & change into a fitting outfit via Local LLM when time of day / occasion shifts */
+  autoDressByTimeOccasion?: boolean;
+  /** Autonomously eat, do hobbies, study in school, shower/brush teeth, or travel based on her live mood & needs */
+  autoLifeByMood?: boolean;
   offlineVoiceOnly: boolean;
   noticeActiveWindow: boolean;
   idleCheckInMinutes: IdleCheckInMinutes;

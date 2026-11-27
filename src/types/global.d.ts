@@ -97,11 +97,12 @@ declare global {
       base64?: string;
       error?: string;
     }>;
-    checkLocalAi?: () => Promise<{ ok: boolean; model?: string; error?: string }>;
+    checkLocalAi?: () => Promise<{ ok: boolean; model?: string; models?: string[]; error?: string }>;
     queryLocalAi?: (params: {
       messages: { role: string; content: string }[];
       temperature?: number;
       maxTokens?: number;
+      model?: string;
     }) => Promise<{ ok: boolean; text?: string; resolvedModel?: string; error?: string }>;
     synthesizeVoicevox?: (params: {
       text: string;
@@ -170,11 +171,12 @@ declare global {
       base64?: string;
       error?: string;
     }>;
-    checkLocalAi?: () => Promise<{ ok: boolean; model?: string; error?: string }>;
+    checkLocalAi?: () => Promise<{ ok: boolean; model?: string; models?: string[]; error?: string }>;
     queryLocalAi?: (params: {
       messages: { role: string; content: string }[];
       temperature?: number;
       maxTokens?: number;
+      model?: string;
     }) => Promise<{ ok: boolean; text?: string; resolvedModel?: string; error?: string }>;
     synthesizeVoicevox?: (params: {
       text: string;

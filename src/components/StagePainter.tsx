@@ -86,8 +86,7 @@ export function StagePainter({ isGenerating, onGenerate }: StagePainterProps) {
         </button>
       </div>
       <p className="text-[10px] leading-snug text-zinc-500">
-        Uses Imagen with your Gemini key when available, otherwise a free image service (your
-        description is sent to it). Takes 10–30 seconds.
+        Your AI character directs the scenery prompt using her chosen LM Studio model (Gemma / Qwen), then paints the 360° backdrop.
       </p>
     </div>
   );

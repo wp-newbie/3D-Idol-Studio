@@ -1,7 +1,16 @@
 import * as THREE from 'three';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { AvatarPosture, SleepingPosition } from '../types/studio';
+import type { AvatarPosture, HobbyKindId, SleepingPosition } from '../types/studio';
 import type { EmotionBodyLanguage } from './emotionEngine';
+import {
+  applyColdRubArms,
+  applyCrossedArms,
+  applyDiningArms,
+  applyHobbyActivityArms,
+  expSmooth,
+  getDiningAnimationFrame,
+  getHobbyActivityFrame,
+} from './naturalArmPose';
 
 type PoseBoneName =
   | 'hips'
@@ -87,6 +96,8 @@ export class AvatarPoseController {
   private currentHipsY = 0.9;
   private currentHipsZ = 0;
   private currentFingerCurl = 0;
+  private diningRightGrip = 0;
+  private diningLeftGrip = 0;
   private hasBoundVrm = false;
   private smoothRot: Record<PoseBoneName, { x: number; y: number; z: number }>;
 
@@ -176,9 +187,22 @@ export class AvatarPoseController {
     if (!this.hasBoundVrm) return;
     const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
     if (!hips) return;
-    const alpha = Math.min(1, dt * 8.5);
+    const alpha = expSmooth(7.5, dt);
     this.currentHipsY = THREE.MathUtils.lerp(this.currentHipsY, this.restHipsY, alpha);
     this.currentHipsZ = THREE.MathUtils.lerp(this.currentHipsZ, this.restHipsZ, alpha);
+    hips.position.y = this.currentHipsY;
+    hips.position.z = this.currentHipsZ;
+  }
+
+  public applySeatedHips(vrm: VRM, dt: number): void {
+    if (!this.hasBoundVrm) return;
+    const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+    if (!hips) return;
+    const alpha = expSmooth(7.5, dt);
+    const targetHipsY = this.restHipsY - this.seatedHipDrop;
+    const targetHipsZ = this.restHipsZ + this.seatedHipsZOffset;
+    this.currentHipsY = THREE.MathUtils.lerp(this.currentHipsY, targetHipsY, alpha);
+    this.currentHipsZ = THREE.MathUtils.lerp(this.currentHipsZ, targetHipsZ, alpha);
     hips.position.y = this.currentHipsY;
     hips.position.z = this.currentHipsZ;
   }
@@ -196,6 +220,8 @@ export class AvatarPoseController {
     musicBeat: number;
     isMusicPlaying: boolean;
     isSleeping: boolean;
+    isDining?: boolean;
+    activeHobbyKind?: HobbyKindId | null;
     snap?: boolean;
   }): void {
     const {
@@ -207,6 +233,8 @@ export class AvatarPoseController {
       musicBeat,
       isMusicPlaying,
       isSleeping,
+      isDining = false,
+      activeHobbyKind = null,
       snap = false,
     } = params;
 
@@ -228,7 +256,19 @@ export class AvatarPoseController {
 
     const breath = Math.sin(elapsed * Math.max(1.4, bodyLang.breathingRate || 2.0));
     const gentleSway = Math.sin(elapsed * (isMusicPlaying ? 2.4 : 0.75));
-    const alpha = snap ? 1 : Math.min(1, dt * 7.5);
+    const alpha = snap ? 1 : expSmooth(7.0, dt);
+
+    const activeDiningFrame = !isSleeping && isDining ? getDiningAnimationFrame(elapsed) : null;
+    const activeHobbyFrame =
+      !isSleeping && !activeDiningFrame && activeHobbyKind
+        ? getHobbyActivityFrame(activeHobbyKind, elapsed)
+        : null;
+    const activityLeanX = activeDiningFrame
+      ? activeDiningFrame.spineLeanX
+      : activeHobbyFrame
+      ? activeHobbyFrame.spineLeanX
+      : 0;
+    const activityTwistY = activeHobbyFrame ? activeHobbyFrame.spineTwistY : 0;
 
     // 1. Lower hips bone cleanly onto studio stool height
     const hipsNode = humanoid.getNormalizedBoneNode('hips');
@@ -253,18 +293,18 @@ export class AvatarPoseController {
         z: bodyLang.hipWeightShift * 0.45,
       },
       spine: {
-        // Subtle relaxed upright posture + emotion lean
+        // Subtle relaxed upright posture + emotion lean + activity follow-through
         x:
-          forwardSign * 0.06 +
+          forwardSign * (0.06 + activityLeanX) +
           bodyLang.spineLeanX * 0.75 +
           (isMusicPlaying ? musicBeat * 0.045 : 0),
-        y: gentleSway * (isMusicPlaying ? 0.06 : 0.018),
+        y: gentleSway * (isMusicPlaying ? 0.06 : 0.018) + activityTwistY * 0.6,
         z: isMusicPlaying ? Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
       },
       chest: {
         // Gentle counter-curve + breathing sine wave
-        x: -forwardSign * 0.04 + breath * 0.015 + bodyLang.spineLeanX * 0.35,
-        y: 0,
+        x: -forwardSign * (0.04 - activityLeanX * 0.45) + breath * 0.015 + bodyLang.spineLeanX * 0.35,
+        y: activityTwistY * 0.4,
         z: 0,
       },
       upperChest: {
@@ -336,43 +376,32 @@ export class AvatarPoseController {
       },
     };
 
-    // Subtle seated posture modulation (keeps hands grounded near lap instead of floating mid-air)
-    if (!isSleeping && bodyLang.coldRubArms > 0.35) {
-      const c = bodyLang.coldRubArms * 0.55;
-      const rub = Math.sin(elapsed * 5.2) * 0.04 * c;
-      targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armDownSign * 1.24, c);
-      targets.rightUpperArm.z = THREE.MathUtils.lerp(
-        targets.rightUpperArm.z,
-        -armDownSign * 1.24,
-        c
-      );
-      targets.leftLowerArm.y = THREE.MathUtils.lerp(
-        targets.leftLowerArm.y,
-        armDownSign * (0.72 + rub),
-        c
-      );
-      targets.rightLowerArm.y = THREE.MathUtils.lerp(
-        targets.rightLowerArm.y,
-        -armDownSign * (0.72 + rub),
-        c
-      );
-    } else if (!isSleeping && bodyLang.armsCrossTension > 0.48) {
-      const t = (bodyLang.armsCrossTension - 0.45) * 0.65;
-      targets.leftUpperArm.z = THREE.MathUtils.lerp(targets.leftUpperArm.z, armDownSign * 1.18, t);
-      targets.rightUpperArm.z = THREE.MathUtils.lerp(
-        targets.rightUpperArm.z,
-        -armDownSign * 1.18,
-        t
-      );
-      targets.leftLowerArm.y = THREE.MathUtils.lerp(targets.leftLowerArm.y, armDownSign * 0.82, t);
-      targets.rightLowerArm.y = THREE.MathUtils.lerp(
-        targets.rightLowerArm.y,
-        -armDownSign * 0.82,
-        t
-      );
-    }
+    const useSeatedDining = !isSleeping && isDining;
+    const useSeatedHobby = !isSleeping && !useSeatedDining && Boolean(activeHobbyKind);
+    const useSeatedColdRub =
+      !isSleeping && !useSeatedDining && !useSeatedHobby && bodyLang.coldRubArms > 0.35;
+    const useSeatedCrossedArms =
+      !isSleeping &&
+      !useSeatedDining &&
+      !useSeatedHobby &&
+      !useSeatedColdRub &&
+      bodyLang.armsCrossTension > 0.48;
+    const vectorArmBones = new Set<PoseBoneName>([
+      'leftUpperArm',
+      'rightUpperArm',
+      'leftLowerArm',
+      'rightLowerArm',
+      'leftHand',
+      'rightHand',
+    ]);
 
     for (const boneName of POSE_BONES) {
+      if (
+        (useSeatedDining || useSeatedHobby || useSeatedColdRub || useSeatedCrossedArms) &&
+        vectorArmBones.has(boneName)
+      ) {
+        continue;
+      }
       const s = this.smoothRot[boneName];
       const tgt = targets[boneName];
       s.x = THREE.MathUtils.lerp(s.x, tgt.x, alpha);
@@ -385,16 +414,97 @@ export class AvatarPoseController {
       }
     }
 
-    // 3. Relaxed natural finger curl (0.25..0.42 rad) so hands rest softly on lap
+    if (useSeatedDining || useSeatedHobby || useSeatedColdRub || useSeatedCrossedArms) {
+      const armSmooth = snap ? 1 : expSmooth(8.0, dt);
+      if (useSeatedDining) {
+        applyDiningArms(vrm, elapsed, armSmooth);
+      } else if (useSeatedHobby && activeHobbyKind) {
+        applyHobbyActivityArms(vrm, activeHobbyKind, elapsed, armSmooth);
+      } else if (useSeatedColdRub) {
+        applyColdRubArms(vrm, alpha, elapsed, bodyLang.coldRubArms);
+      } else {
+        applyCrossedArms(vrm, alpha, { breath });
+      }
+      for (const boneName of vectorArmBones) {
+        const node = humanoid.getNormalizedBoneNode(boneName as VRMHumanBoneName);
+        if (!node) continue;
+        const s = this.smoothRot[boneName];
+        s.x = node.rotation.x;
+        s.y = node.rotation.y;
+        s.z = node.rotation.z;
+      }
+    }
+
+    // 3. Natural finger articulation:
+    //    - During dining: exact chopstick pinch grip (right hand) & teacup wrap grip (left hand)!
+    //    - Otherwise: relaxed natural finger curl (0.25..0.42 rad) resting softly on lap
     this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 1, alpha);
+    const gripLerp = snap ? 1 : expSmooth(10.0, dt);
+    this.diningRightGrip = THREE.MathUtils.lerp(
+      this.diningRightGrip,
+      activeDiningFrame?.chopsticksInHand ? 1 : 0,
+      gripLerp
+    );
+    this.diningLeftGrip = THREE.MathUtils.lerp(
+      this.diningLeftGrip,
+      activeDiningFrame?.mugInHand ? 1 : 0,
+      gripLerp
+    );
+
+    const getDiningFingerTarget = (
+      name: VRMHumanBoneName,
+      side: 'left' | 'right',
+      baseWeight: number
+    ): number => {
+      if (!activeDiningFrame) return baseWeight * this.currentFingerCurl;
+      if (side === 'left') {
+        // Left hand wraps snugly around teacup body/handle (pinky slightly lifted & dainty!)
+        let cupCurl = baseWeight;
+        if (name.includes('Index')) {
+          cupCurl = name.includes('Intermediate') ? 1.05 : name.includes('Proximal') ? 0.85 : 0.62;
+        } else if (name.includes('Middle')) {
+          cupCurl = name.includes('Intermediate') ? 1.12 : name.includes('Proximal') ? 0.94 : 0.68;
+        } else if (name.includes('Ring')) {
+          cupCurl = name.includes('Intermediate') ? 1.08 : name.includes('Proximal') ? 0.90 : 0.65;
+        } else if (name.includes('Little')) {
+          cupCurl = name.includes('Intermediate') ? 0.62 : name.includes('Proximal') ? 0.52 : 0.36;
+        } else if (name.includes('Thumb')) {
+          cupCurl = name.includes('Proximal') ? 0.66 : 0.44;
+        }
+        return THREE.MathUtils.lerp(baseWeight * 0.68, cupCurl, this.diningLeftGrip);
+      }
+      // Right hand forms textbook Japanese chopstick grip:
+      // Index & middle gently extended along the upper chopstick; ring & little tucked underneath to brace the lower chopstick!
+      const pinchBoost = activeDiningFrame.biteOnChopsticks ? 0.1 : 0;
+      let chopCurl = baseWeight;
+      if (name.includes('Index')) {
+        chopCurl =
+          (name.includes('Intermediate') ? 0.56 : name.includes('Proximal') ? 0.42 : 0.28) +
+          pinchBoost;
+      } else if (name.includes('Middle')) {
+        chopCurl =
+          (name.includes('Intermediate') ? 0.64 : name.includes('Proximal') ? 0.48 : 0.32) +
+          pinchBoost;
+      } else if (name.includes('Ring')) {
+        chopCurl = name.includes('Intermediate') ? 0.96 : name.includes('Proximal') ? 0.84 : 0.58;
+      } else if (name.includes('Little')) {
+        chopCurl = name.includes('Intermediate') ? 1.02 : name.includes('Proximal') ? 0.90 : 0.64;
+      } else if (name.includes('Thumb')) {
+        chopCurl = (name.includes('Proximal') ? 0.56 : 0.36) + pinchBoost * 0.7;
+      }
+      return THREE.MathUtils.lerp(baseWeight * 0.68, chopCurl, this.diningRightGrip);
+    };
+
     for (const f of FINGER_CURL_BONES) {
       const node = humanoid.getNormalizedBoneNode(f.name);
       if (!node) continue;
       const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+      const curl = getDiningFingerTarget(f.name, f.side, f.weight);
       if (f.name.includes('Thumb')) {
-        node.rotation.y = sideSign * f.weight * this.currentFingerCurl;
+        node.rotation.y = sideSign * curl;
+        node.rotation.z = sideSign * curl * 0.32;
       } else {
-        node.rotation.z = sideSign * f.weight * this.currentFingerCurl;
+        node.rotation.z = sideSign * curl;
       }
     }
   }
@@ -407,7 +517,7 @@ export class AvatarPoseController {
     if (!humanoid) return;
     const isVrm0 = vrm.meta?.metaVersion === '0';
     const armDownSign = isVrm0 ? 1 : -1;
-    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 0.42, Math.min(1, dt * 6));
+    this.currentFingerCurl = THREE.MathUtils.lerp(this.currentFingerCurl, 0.42, expSmooth(6.0, dt));
     for (const f of FINGER_CURL_BONES) {
       const node = humanoid.getNormalizedBoneNode(f.name);
       if (!node) continue;
@@ -451,7 +561,7 @@ export class AvatarPoseController {
 
     // Slow peaceful breathing: ~0.8 Hz
     const breath = Math.sin(elapsed * Math.max(0.7, bodyLang.breathingRate || 0.95));
-    const alpha = snap ? 1 : Math.min(1, dt * 6.5);
+    const alpha = snap ? 1 : expSmooth(6.0, dt);
 
     // Keep hips level with minimal motion
     const hipsNode = humanoid.getNormalizedBoneNode('hips');

@@ -1,11 +1,14 @@
 import { GoogleGenAI } from '@google/genai';
 import { saveEnvironmentToVault } from '../storage/modelVault';
+import { queryCharacterLmStudioChat } from './localLlmOrchestrator';
 import type { CustomStageEnvironment } from '../types/studio';
 
 export interface StageSceneryGenParams {
   prompt: string;
   apiKey?: string;
   style?: 'anime' | 'cyberpunk' | 'gothic' | 'photorealistic' | 'fantasy' | 'cozy';
+  mood?: string;
+  personaName?: string;
 }
 
 export interface StageSceneryGenResult {
@@ -14,6 +17,7 @@ export interface StageSceneryGenResult {
   dataUrl?: string;
   engineUsed?: 'imagen' | 'pollinations';
   promptUsed?: string;
+  llmModelUsed?: string;
   error?: string;
 }
 
@@ -78,7 +82,36 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
 export async function generateStageScenery(
   params: StageSceneryGenParams
 ): Promise<StageSceneryGenResult> {
-  const enhanced = enhanceSceneryPrompt(params.prompt, params.style);
+  // 0. Let the AI character enrich the scenery prompt via her chosen LM Studio model (Gemma or Qwen)!
+  let basePrompt = params.prompt.trim();
+  let llmModelUsed: string | undefined;
+  try {
+    const llmScene = await queryCharacterLmStudioChat({
+      taskKind: 'scene',
+      mood: params.mood || 'Warm',
+      temperature: 0.82,
+      maxTokens: 130,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an anime background art director. Rewrite the user scenery idea into ONE vivid, atmospheric 1-sentence 360-degree panorama description of an empty stage/scenery environment (no people, no characters, no quotes, no markdown).',
+        },
+        {
+          role: 'user',
+          content: `Style: ${params.style || 'anime'}\nCharacter Mood: ${params.mood || 'Warm'}\nScenery Idea: ${basePrompt || 'Dreamy anime virtual idol stage'}`,
+        },
+      ],
+    });
+    if (llmScene?.text && llmScene.text.length >= 12) {
+      basePrompt = llmScene.text.replace(/^["']|["']$/g, '').slice(0, 260);
+      llmModelUsed = llmScene.resolvedModel;
+    }
+  } catch {
+    // Graceful fallback to original prompt when LM Studio is offline
+  }
+
+  const enhanced = enhanceSceneryPrompt(basePrompt, params.style);
 
   // 1. Try Google GenAI Imagen 3 if an API key is provided
   const apiKey = (params.apiKey || '').trim();
@@ -119,7 +152,8 @@ export async function generateStageScenery(
             },
             dataUrl,
             engineUsed: 'imagen',
-            promptUsed: params.prompt,
+            promptUsed: basePrompt,
+            llmModelUsed,
           };
         }
       }
@@ -179,7 +213,8 @@ export async function generateStageScenery(
       },
       dataUrl,
       engineUsed: 'pollinations',
-      promptUsed: params.prompt,
+      promptUsed: basePrompt,
+      llmModelUsed,
     };
   } catch (fallbackErr) {
     console.error('[StageGenerator] Both Imagen and Pollinations failed:', fallbackErr);

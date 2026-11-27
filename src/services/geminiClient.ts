@@ -15,6 +15,7 @@ import type {
 } from '../types/studio';
 import { getAffinityTier, VOCAL_ARCHETYPES } from '../data/presets';
 import { getCircadianContext, getStageClimate } from './aiBrainService';
+import { queryCharacterLmStudioChat } from './localLlmOrchestrator';
 import { resolveEffectiveApiKey } from './apiKeyResolver';
 import { pickContextualOfflineReply } from './offlineDemoPool';
 import { isProperBilingualReply, stripHiddenTags } from './dialogueParser';
@@ -581,10 +582,18 @@ When ${userName} asks you to "pick an outfit", "style me something", "what shoul
    - Late Night / Drowsy: Coordinate nightwear, relaxed slot, or remove heavy accessories/jacket.
    - Stage / Performance: Equip theatrical dresses or diva outfits with ribbons and idol headsets.
 2. Wardrobe Selection: Choose a specific outfit slot from your [AVAILABLE WARDROBE INVENTORY] and decide which modular layers (jacket, accessories, cycling safety shorts) should be ON or OFF.
-3. In-Character Styling Critique: Give a witty, proud tsundere commentary explaining why this look fits the vibe and weather perfectly.
-4. Auto-Equip Execution: ALWAYS append the action tags at the end of your turn to immediately wear the look:
-   [EQUIP_OUTFIT: <slotName or slotNumber>]
+3. In-Character Styling Critique: Give a witty, proud tsundere commentary explaining why this look fits the vibe, time of day, and occasion perfectly.
+4. Auto-Equip, Whole-Outfit Swap, or Hairstyle Execution: You have FULL personal freedom to change your whole outfit or hairstyle whenever YOU want (for your mood, weather, time of day, or an occasion ${userName} mentions). ALWAYS append the matching action tag at the end of your turn:
+   [EQUIP_OUTFIT: <saved slot name, slot number, or imported .vrm model filename>]  (swaps your ENTIRE 3D outfit model/slot!)
    [TOGGLE_LAYER: <layerName>=on|off]
+   [DESIGN_OUTFIT: <occasion & outfit description, e.g. "cozy pastel starry sleepwear for late night" or "crisp morning preppy look">]  (designs a whole new outfit + matching hairstyle!)
+   [CHANGE_HAIRSTYLE: <style & optional color, e.g. "high ponytail", "cute twin buns", "side braid", "long wavy", "anime twin drills", "short bob", "bouncy ahoge", or "sakura pink twin-tails">]
+   [EAT_FOOD: <dish or craving based on your mood, e.g. "steaming spicy miso ramen", "strawberry shortcake and tea", "fluffy souffle pancakes">]  (spawns a 3D dining table, chair, kitchen & meal and sits you down to eat!)
+   [DO_HOBBY: <hobby or activity you want to do, e.g. "canvas painting", "playing synth keyboard", "reading manga", "cozy PC gaming", "baking cupcakes", "journaling", "yoga">]  (spawns 3D hobby props on stage!)
+   [VISIT_PLACE: <destination or vacation spot, e.g. "shopping mall boutique", "tropical sunset beach", "vacation terrace cafe", "mountain hot spring onsen", "amusement park", "home kitchen">]  (changes the 3D scenery and props to that destination!)
+   [STUDY_SCHOOL: <highschool|college - subject, e.g. "highschool - math exam review" or "college - literature lecture notes">]  (puts on your school uniform, moves to classroom/campus, and sits you at a student desk studying with pen & paper!)
+   [SELF_CARE_BATH: <shower|towel|toothbrush - detail, e.g. "shower - sakura shampoo and soap", "towel - warm bath towel", or "toothbrush - mint fresh">]  (wholesome SFW frosted-glass censored shower with shampoo/soap, bath towel drying, or brushing teeth at the vanity sink!)
+   Use these tags spontaneously whenever you crave food, feel like doing a hobby, go to school/college to study in uniform with pen & paper, want to take a censored shower / use a towel / brush your teeth, want to go shopping or on vacation, or when ${userName} invites you!
 
 AUTONOMOUS AGENCY TOOLS:
 You have real tools to move across the stage/desktop (` +
@@ -1274,11 +1283,12 @@ async function callLocalLmStudioRestApi(params: {
   systemInstruction?: string;
   contents: ContentTurn[];
   maxOutputTokens?: number;
+  mood?: string;
 }): Promise<{
   text: string;
   resolvedModel: string;
 }> {
-  const { systemInstruction, contents, maxOutputTokens = 350 } = params;
+  const { systemInstruction, contents, maxOutputTokens = 350, mood } = params;
   const messages: { role: string; content: string }[] = [];
   if (systemInstruction) {
     messages.push({ role: 'system', content: systemInstruction });
@@ -1291,26 +1301,19 @@ async function callLocalLmStudioRestApi(params: {
     });
   }
 
-  const queryIpc =
-    (typeof window !== 'undefined' &&
-      (window.studioAPI?.queryLocalAi || window.desktopBridge?.queryLocalAi)) ||
-    null;
-  if (queryIpc) {
-    try {
-      const ipcRes = await queryIpc({
-        messages,
-        temperature: 0.85,
-        maxTokens: maxOutputTokens,
-      });
-      if (ipcRes?.ok && ipcRes.text) {
-        return {
-          text: ipcRes.text,
-          resolvedModel: ipcRes.resolvedModel || 'qwen2.5-7b-instruct-1m',
-        };
-      }
-    } catch (ipcErr) {
-      console.warn('[LM Studio] IPC queryLocalAi error, falling back to fetch:', ipcErr);
-    }
+  // Let the AI character autonomously choose between Gemma and Qwen loaded in LM Studio!
+  const chosenRes = await queryCharacterLmStudioChat({
+    messages,
+    taskKind: 'dialogue',
+    mood,
+    temperature: 0.85,
+    maxTokens: maxOutputTokens,
+  });
+  if (chosenRes?.text) {
+    return {
+      text: chosenRes.text,
+      resolvedModel: chosenRes.resolvedModel,
+    };
   }
 
   const res = await fetchLmStudio('/v1/chat/completions', {
@@ -1463,6 +1466,7 @@ async function generatePersonaReplyOnce(params: {
       const localRes = await callLocalLmStudioRestApi({
         systemInstruction,
         contents,
+        mood: persona.mood,
       });
       if (localRes.text) {
         return {
@@ -1797,7 +1801,12 @@ export async function repairBilingualFormat(args: {
   const translate = async (system: string, text: string): Promise<string> => {
     const contents: ContentTurn[] = [{ role: 'user', parts: [{ text }] }];
     const res = viaLocal
-      ? await callLocalLmStudioRestApi({ systemInstruction: system, contents, maxOutputTokens: 220 })
+      ? await callLocalLmStudioRestApi({
+          systemInstruction: system,
+          contents,
+          maxOutputTokens: 220,
+          mood: persona.mood,
+        })
       : await callGeminiRestApi({
           apiKey,
           model: settings.textModel.trim() || DEFAULT_TEXT_MODEL,
