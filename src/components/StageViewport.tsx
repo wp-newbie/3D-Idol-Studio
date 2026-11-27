@@ -1294,6 +1294,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               hasActiveReactionOrEmote: Boolean(activeReaction || activeEmoteRef.current),
               isSleeping: humanCtx.isSleeping,
               activeHobbyKind: lifeSceneRef.current?.hobby?.hobbyKind ?? null,
+              activeStretchRoutine: lifeSceneRef.current?.hobby?.stretchRoutine ?? null,
               boredom: brainNow?.boredom ?? 25,
               sleepiness: brainNow?.sleepiness ?? 20,
               energy: brainNow?.energy ?? 80,
@@ -1518,7 +1519,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               : null;
           const hobbyActivityFrame =
             !diningFrame && lifeSceneRef.current?.hobby && !humanCtx.isSleeping
-              ? getHobbyActivityFrame(lifeSceneRef.current.hobby.hobbyKind, elapsed)
+              ? getHobbyActivityFrame(
+                  lifeSceneRef.current.hobby.hobbyKind,
+                  elapsed,
+                  lifeSceneRef.current.hobby.stretchRoutine
+                )
               : null;
           if (diningFrame && !activeReaction) {
             targetPitch += diningFrame.headPitch;

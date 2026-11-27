@@ -84,6 +84,7 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
     lifeScene.hobby?.hobbyKind === 'gym_treadmill' ||
     lifeScene.hobby?.hobbyKind === 'sports_basketball' ||
     lifeScene.hobby?.hobbyKind === 'sports_tennis' ||
+    lifeScene.hobby?.hobbyKind === 'stretching' ||
     lifeScene.destination?.destinationKind === 'gym_studio' ||
     lifeScene.destination?.destinationKind === 'sports_court';
   const isRegularHobby = Boolean(lifeScene.hobby) && !isStudying && !isBathing && !isGymSport;

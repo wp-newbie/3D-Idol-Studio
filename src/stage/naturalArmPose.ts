@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { HobbyKindId } from '../types/studio';
+import type { HobbyKindId, StretchRoutineId } from '../types/studio';
 
 /**
  * Convention-free "arms relaxed at the sides" pose.
@@ -911,6 +911,390 @@ export function applyDiningArms(
   return f;
 }
 
+export interface AnatomicalStretchFrame {
+  hipsY: number;
+  hipsZ: number;
+  spineLeanX: number;
+  spineBendZ: number;
+  spineTwistY: number;
+  chestArchX: number;
+  chestBendZ: number;
+  leftUpperLegX: number;
+  leftUpperLegZ: number;
+  rightUpperLegX: number;
+  rightUpperLegZ: number;
+  leftLowerLegX: number;
+  rightLowerLegX: number;
+  headPitch: number;
+  headYaw: number;
+  headRoll: number;
+  relaxedEyes: number;
+  happySmile: number;
+}
+
+function quinticSmooth(x: number): number {
+  const c = THREE.MathUtils.clamp(x, 0, 1);
+  return c * c * c * (c * (c * 6 - 15) + 10);
+}
+
+/**
+ * Silky inhale -> relaxed peak hold (with subtle breath) -> slow exhale curve in [0, 1].
+ */
+function stretchHoldWave(phase01: number): number {
+  const p = ((phase01 % 1) + 1) % 1;
+  if (p < 0.34) return quinticSmooth(p / 0.34);
+  if (p < 0.66) {
+    const holdP = (p - 0.34) / 0.32;
+    return 1 - 0.045 * Math.sin(holdP * Math.PI);
+  }
+  return 1 - quinticSmooth((p - 0.66) / 0.34);
+}
+
+/**
+ * Computes full-body smooth anatomical stretching targets for hips, spine, chest,
+ * legs/knees, and neck/head across all 5 AI-chosen stretching routines.
+ * Positive upperLegX swings thigh forward; negative lowerLegX flexes knee backward.
+ */
+export function getAnatomicalStretchFrame(
+  routine: StretchRoutineId,
+  elapsed: number
+): AnatomicalStretchFrame {
+  const base: AnatomicalStretchFrame = {
+    hipsY: 0,
+    hipsZ: 0,
+    spineLeanX: 0,
+    spineBendZ: 0,
+    spineTwistY: 0,
+    chestArchX: 0,
+    chestBendZ: 0,
+    leftUpperLegX: 0,
+    leftUpperLegZ: -0.045,
+    rightUpperLegX: 0,
+    rightUpperLegZ: -0.045,
+    leftLowerLegX: -0.04,
+    rightLowerLegX: -0.04,
+    headPitch: 0,
+    headYaw: 0,
+    headRoll: 0,
+    relaxedEyes: 0.2,
+    happySmile: 0.25,
+  };
+
+  switch (routine) {
+    case 'overhead_sky_reach': {
+      // 8.4s cycle: deep inhale reaching tall -> gentle alternating ribcage elongation -> silky exhale
+      const w = stretchHoldWave(elapsed / 8.4);
+      const ribSway = Math.sin(elapsed * 1.15) * w;
+      return {
+        ...base,
+        hipsY: 0.022 * w,
+        hipsZ: -ribSway * 0.04,
+        spineLeanX: -0.08 * w,
+        spineBendZ: ribSway * 0.07,
+        spineTwistY: ribSway * 0.05,
+        chestArchX: -0.14 * w,
+        chestBendZ: ribSway * 0.08,
+        leftUpperLegZ: -0.055,
+        rightUpperLegZ: -0.055,
+        leftLowerLegX: -0.02 * (1 - w),
+        rightLowerLegX: -0.02 * (1 - w),
+        headPitch: -0.18 * w,
+        headYaw: ribSway * 0.06,
+        headRoll: ribSway * 0.09,
+        relaxedEyes: 0.65 * w,
+        happySmile: 0.34,
+      };
+    }
+
+    case 'lateral_side_bend': {
+      // 11.2s full left-and-right alternating crescent side stretch
+      const halfDur = 5.6;
+      const sideSign = Math.floor(elapsed / halfDur) % 2 === 0 ? 1 : -1;
+      const w = stretchHoldWave((elapsed % halfDur) / halfDur);
+      const bend = sideSign * w;
+      return {
+        ...base,
+        hipsY: -0.015 * w,
+        hipsZ: -bend * 0.085, // Natural pelvic counter-shift for balance
+        spineLeanX: 0.02 * w,
+        spineBendZ: bend * 0.24,
+        spineTwistY: -bend * 0.06,
+        chestArchX: -0.05 * w,
+        chestBendZ: bend * 0.22,
+        leftUpperLegZ: -0.11,
+        rightUpperLegZ: -0.11,
+        leftLowerLegX: -0.06 * w,
+        rightLowerLegX: -0.06 * w,
+        headPitch: -0.04 * w,
+        headYaw: -bend * 0.08,
+        headRoll: bend * 0.22,
+        relaxedEyes: 0.48 * w,
+        happySmile: 0.3,
+      };
+    }
+
+    case 'neck_shoulder_rolls': {
+      // Fluid, relaxing cervical circles paired with slow scapula & upper-chest opening
+      const angle = elapsed * 0.95;
+      const openWave = 0.5 - 0.5 * Math.cos(elapsed * 1.1);
+      return {
+        ...base,
+        hipsY: Math.sin(elapsed * 1.1) * 0.012,
+        hipsZ: Math.sin(elapsed * 0.65) * 0.025,
+        spineLeanX: -0.03 * openWave,
+        spineBendZ: Math.sin(angle) * 0.05,
+        spineTwistY: Math.cos(angle) * 0.07,
+        chestArchX: -0.11 * openWave,
+        chestBendZ: Math.sin(angle) * 0.06,
+        leftUpperLegZ: -0.055,
+        rightUpperLegZ: -0.055,
+        leftLowerLegX: -0.05,
+        rightLowerLegX: -0.05,
+        headPitch: 0.08 + Math.cos(angle) * 0.19,
+        headYaw: Math.sin(angle) * 0.24,
+        headRoll: Math.sin(angle + 0.6) * 0.22,
+        relaxedEyes: 0.58 * openWave + 0.15,
+        happySmile: 0.32,
+      };
+    }
+
+    case 'forward_hamstring_fold': {
+      // 9.4s graceful hip-hinge fold with soft anatomical micro-bent knees, then rolling tall
+      const w = stretchHoldWave(elapsed / 9.4);
+      const sway = Math.sin(elapsed * 1.35) * 0.045 * w;
+      return {
+        ...base,
+        hipsY: -0.055 * w,
+        hipsZ: sway * 0.5,
+        spineLeanX: 0.56 * w,
+        spineBendZ: sway,
+        spineTwistY: sway * 0.7,
+        chestArchX: 0.32 * w - 0.06 * (1 - w),
+        chestBendZ: sway * 0.6,
+        leftUpperLegX: -0.08 * w,
+        rightUpperLegX: -0.08 * w,
+        leftUpperLegZ: -0.075,
+        rightUpperLegZ: -0.075,
+        leftLowerLegX: -0.18 * w - 0.03,
+        rightLowerLegX: -0.18 * w - 0.03,
+        headPitch: 0.34 * w - 0.06 * (1 - w),
+        headYaw: sway * 0.8,
+        headRoll: sway * 0.6,
+        relaxedEyes: 0.45 * w,
+        happySmile: 0.22,
+      };
+    }
+
+    case 'quad_runner_lunge': {
+      // 11.6s smooth alternating crescent lunge (front knee flexes forward, rear hip flexor opens)
+      const halfDur = 5.8;
+      const leftForward = Math.floor(elapsed / halfDur) % 2 === 0;
+      const w = stretchHoldWave((elapsed % halfDur) / halfDur);
+      const frontUpper = 0.52 * w;
+      const frontKnee = -0.62 * w;
+      const backUpper = -0.34 * w;
+      const backKnee = -0.28 * w;
+      return {
+        ...base,
+        hipsY: -0.12 * w,
+        hipsZ: (leftForward ? 0.03 : -0.03) * w,
+        spineLeanX: 0.06 * w,
+        spineBendZ: 0,
+        spineTwistY: (leftForward ? -0.08 : 0.08) * w,
+        chestArchX: -0.11 * w,
+        chestBendZ: 0,
+        leftUpperLegX: leftForward ? frontUpper : backUpper,
+        rightUpperLegX: leftForward ? backUpper : frontUpper,
+        leftUpperLegZ: -0.085,
+        rightUpperLegZ: -0.085,
+        leftLowerLegX: leftForward ? frontKnee : backKnee,
+        rightLowerLegX: leftForward ? backKnee : frontKnee,
+        headPitch: -0.10 * w,
+        headYaw: (leftForward ? 0.06 : -0.06) * w,
+        headRoll: 0,
+        relaxedEyes: 0.36 * w,
+        happySmile: 0.34,
+      };
+    }
+  }
+}
+
+/**
+ * Convention-free smooth flexible anatomical arm & wrist choreography for all 5 AI stretching routines.
+ * Solved in character frame (+X left, +Y up, +Z forward) so VRM 0.x & VRM 1.0 match seamlessly.
+ */
+export function applyAnatomicalStretchArms(
+  vrm: VRM,
+  routine: StretchRoutineId,
+  elapsed: number,
+  t: number
+): boolean {
+  const b = getArmBones(vrm);
+  if (!b) return false;
+  const wristSign = vrm.meta?.metaVersion === '0' ? 1 : -1;
+
+  let lUp: [number, number, number] = [0.22, -0.92, 0.16];
+  let lLow: [number, number, number] = [0.12, -0.94, 0.24];
+  let rUp: [number, number, number] = [-0.22, -0.92, 0.16];
+  let rLow: [number, number, number] = [-0.12, -0.94, 0.24];
+  let lHandEuler: [number, number, number] = [0, 0, 0];
+  let rHandEuler: [number, number, number] = [0, 0, 0];
+
+  if (routine === 'overhead_sky_reach') {
+    const w = stretchHoldWave(elapsed / 8.4);
+    const sway = Math.sin(elapsed * 1.15) * 0.16 * w;
+    // Sweep smoothly from relaxed sides -> wide sunlit arc -> tall interlaced sky reach
+    const outFlare = Math.sin(w * Math.PI) * 0.48;
+    lUp = [
+      THREE.MathUtils.lerp(0.22, 0.24, w) + outFlare + sway,
+      THREE.MathUtils.lerp(-0.92, 0.96, w),
+      THREE.MathUtils.lerp(0.14, 0.16, w),
+    ];
+    lLow = [
+      THREE.MathUtils.lerp(0.12, -0.26, w) + outFlare * 0.35 + sway,
+      THREE.MathUtils.lerp(-0.94, 0.94, w),
+      THREE.MathUtils.lerp(0.22, 0.18, w),
+    ];
+    rUp = [
+      THREE.MathUtils.lerp(-0.22, -0.24, w) - outFlare + sway,
+      THREE.MathUtils.lerp(-0.92, 0.96, w),
+      THREE.MathUtils.lerp(0.14, 0.16, w),
+    ];
+    rLow = [
+      THREE.MathUtils.lerp(-0.12, 0.26, w) - outFlare * 0.35 + sway,
+      THREE.MathUtils.lerp(-0.94, 0.94, w),
+      THREE.MathUtils.lerp(0.22, 0.18, w),
+    ];
+    lHandEuler = [wristSign * 0.22 * w, 0, wristSign * -0.18 * w];
+    rHandEuler = [wristSign * 0.22 * w, 0, wristSign * 0.18 * w];
+  } else if (routine === 'lateral_side_bend') {
+    const halfDur = 5.6;
+    const bendLeft = Math.floor(elapsed / halfDur) % 2 === 0;
+    const w = stretchHoldWave((elapsed % halfDur) / halfDur);
+    // Top arm sweeps in a graceful crescent arc overhead; bottom hand rests naturally on hip!
+    if (bendLeft) {
+      // Bending left (+X): right arm sweeps overhead toward +X, left hand rests on left hip
+      rUp = [
+        THREE.MathUtils.lerp(-0.22, -0.28, w),
+        THREE.MathUtils.lerp(-0.92, 0.92, w),
+        THREE.MathUtils.lerp(0.14, 0.22, w),
+      ];
+      rLow = [
+        THREE.MathUtils.lerp(-0.12, 0.72, w),
+        THREE.MathUtils.lerp(-0.94, 0.68, w),
+        THREE.MathUtils.lerp(0.22, 0.18, w),
+      ];
+      lUp = [
+        THREE.MathUtils.lerp(0.22, 0.56, w),
+        THREE.MathUtils.lerp(-0.92, -0.78, w),
+        THREE.MathUtils.lerp(0.14, 0.16, w),
+      ];
+      lLow = [
+        THREE.MathUtils.lerp(0.12, -0.58, w),
+        THREE.MathUtils.lerp(-0.94, -0.54, w),
+        THREE.MathUtils.lerp(0.22, 0.56, w),
+      ];
+      rHandEuler = [wristSign * 0.12 * w, 0, wristSign * 0.24 * w];
+    } else {
+      // Bending right (-X): left arm sweeps overhead toward -X, right hand rests on right hip
+      lUp = [
+        THREE.MathUtils.lerp(0.22, 0.28, w),
+        THREE.MathUtils.lerp(-0.92, 0.92, w),
+        THREE.MathUtils.lerp(0.14, 0.22, w),
+      ];
+      lLow = [
+        THREE.MathUtils.lerp(0.12, -0.72, w),
+        THREE.MathUtils.lerp(-0.94, 0.68, w),
+        THREE.MathUtils.lerp(0.22, 0.18, w),
+      ];
+      rUp = [
+        THREE.MathUtils.lerp(-0.22, -0.56, w),
+        THREE.MathUtils.lerp(-0.92, -0.78, w),
+        THREE.MathUtils.lerp(0.14, 0.16, w),
+      ];
+      rLow = [
+        THREE.MathUtils.lerp(-0.12, 0.58, w),
+        THREE.MathUtils.lerp(-0.94, -0.54, w),
+        THREE.MathUtils.lerp(0.22, 0.56, w),
+      ];
+      lHandEuler = [wristSign * 0.12 * w, 0, wristSign * -0.24 * w];
+    }
+  } else if (routine === 'neck_shoulder_rolls') {
+    // Fluid circular shoulder & scapula rolls: elbows float smoothly up, wide, open back, and down
+    const roll = elapsed * 1.1;
+    const lift = 0.5 - 0.5 * Math.cos(roll);
+    const sweep = Math.sin(roll);
+    lUp = [0.34 + lift * 0.36, -0.78 + lift * 0.56, 0.16 + sweep * 0.34];
+    lLow = [-0.26 - lift * 0.14, -0.55 + lift * 0.72, 0.62 + sweep * 0.22];
+    rUp = [-0.34 - lift * 0.36, -0.78 + lift * 0.56, 0.16 + sweep * 0.34];
+    rLow = [0.26 + lift * 0.14, -0.55 + lift * 0.72, 0.62 + sweep * 0.22];
+    lHandEuler = [wristSign * 0.14 * lift, 0, wristSign * -0.1 * sweep];
+    rHandEuler = [wristSign * 0.14 * lift, 0, wristSign * 0.1 * sweep];
+  } else if (routine === 'forward_hamstring_fold') {
+    // Graceful inhale arm sweep -> cascading forward fold toward toes/shins -> gentle ragdoll sway
+    const w = stretchHoldWave(elapsed / 9.4);
+    const sway = Math.sin(elapsed * 1.35) * 0.08 * w;
+    lUp = [
+      THREE.MathUtils.lerp(0.24, 0.14, w) + sway,
+      THREE.MathUtils.lerp(-0.88, -0.42, w),
+      THREE.MathUtils.lerp(0.18, 0.88, w),
+    ];
+    lLow = [
+      THREE.MathUtils.lerp(0.12, -0.06, w) + sway,
+      THREE.MathUtils.lerp(-0.92, -0.78, w),
+      THREE.MathUtils.lerp(0.24, 0.62, w),
+    ];
+    rUp = [
+      THREE.MathUtils.lerp(-0.24, -0.14, w) + sway,
+      THREE.MathUtils.lerp(-0.88, -0.42, w),
+      THREE.MathUtils.lerp(0.18, 0.88, w),
+    ];
+    rLow = [
+      THREE.MathUtils.lerp(-0.12, 0.06, w) + sway,
+      THREE.MathUtils.lerp(-0.92, -0.78, w),
+      THREE.MathUtils.lerp(0.24, 0.62, w),
+    ];
+    lHandEuler = [wristSign * -0.18 * w, 0, 0];
+    rHandEuler = [wristSign * -0.18 * w, 0, 0];
+  } else if (routine === 'quad_runner_lunge') {
+    // Crescent warrior lunge reach: sweep arms smoothly forward and skyward as hips sink into lunge
+    const halfDur = 5.8;
+    const w = stretchHoldWave((elapsed % halfDur) / halfDur);
+    lUp = [
+      THREE.MathUtils.lerp(0.24, 0.34, w),
+      THREE.MathUtils.lerp(-0.88, 0.84, w),
+      THREE.MathUtils.lerp(0.18, 0.42, w),
+    ];
+    lLow = [
+      THREE.MathUtils.lerp(0.12, 0.08, w),
+      THREE.MathUtils.lerp(-0.92, 0.94, w),
+      THREE.MathUtils.lerp(0.24, 0.32, w),
+    ];
+    rUp = [
+      THREE.MathUtils.lerp(-0.24, -0.34, w),
+      THREE.MathUtils.lerp(-0.88, 0.84, w),
+      THREE.MathUtils.lerp(0.18, 0.42, w),
+    ];
+    rLow = [
+      THREE.MathUtils.lerp(-0.12, -0.08, w),
+      THREE.MathUtils.lerp(-0.92, 0.94, w),
+      THREE.MathUtils.lerp(0.24, 0.32, w),
+    ];
+    lHandEuler = [wristSign * 0.16 * w, 0, wristSign * -0.1 * w];
+    rHandEuler = [wristSign * 0.16 * w, 0, wristSign * 0.1 * w];
+  }
+
+  applyDirectedArms(
+    [
+      { upper: b.lu, lower: b.ll, hand: b.lh, upperDir: lUp, lowerDir: lLow, handEuler: lHandEuler },
+      { upper: b.ru, lower: b.rl, hand: b.rh, upperDir: rUp, lowerDir: rLow, handEuler: rHandEuler },
+    ],
+    vrm.scene.parent,
+    t
+  );
+  return true;
+}
+
 export interface ActivityAnimFrame {
   headPitch: number;
   headYaw: number;
@@ -923,13 +1307,27 @@ export interface ActivityAnimFrame {
 }
 
 /**
- * Head, torso, and expression motion for every autonomous hobby, school, and bath activity.
+ * Head, torso, and expression motion for every autonomous hobby, school, bath, and stretching activity.
  */
 export function getHobbyActivityFrame(
   hobbyKind: HobbyKindId,
-  elapsed: number
+  elapsed: number,
+  stretchRoutine: StretchRoutineId = 'overhead_sky_reach'
 ): ActivityAnimFrame {
   switch (hobbyKind) {
+    case 'stretching': {
+      const sf = getAnatomicalStretchFrame(stretchRoutine, elapsed);
+      return {
+        headPitch: sf.headPitch,
+        headYaw: sf.headYaw,
+        headRoll: sf.headRoll,
+        spineTwistY: sf.spineTwistY,
+        spineLeanX: sf.spineLeanX,
+        mouthIh: 0,
+        happySmile: sf.happySmile,
+        relaxedEyes: sf.relaxedEyes,
+      };
+    }
     case 'studying': {
       // Attentively looking down at lined notebook, glancing up thoughtfully every 6.5s
       const thinkUp = smoothPulse(elapsed % 6.5, 4.4, 4.9, 5.5, 6.0);
@@ -1125,8 +1523,12 @@ export function applyHobbyActivityArms(
   vrm: VRM,
   hobbyKind: HobbyKindId,
   elapsed: number,
-  t: number
+  t: number,
+  stretchRoutine: StretchRoutineId = 'overhead_sky_reach'
 ): boolean {
+  if (hobbyKind === 'stretching') {
+    return applyAnatomicalStretchArms(vrm, stretchRoutine, elapsed, t);
+  }
   const b = getArmBones(vrm);
   if (!b) return false;
 

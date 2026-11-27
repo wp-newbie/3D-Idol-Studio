@@ -176,6 +176,12 @@ export const HOBBY_KIND_META: Record<
     posture: 'standing',
     summary: 'Sports court net, animated rallying tennis ball & real 3D tennis racket swings',
   },
+  stretching: {
+    label: 'Flexible Body Stretching',
+    emoji: '🤸‍♀️',
+    posture: 'standing',
+    summary: 'Minimalist soft stretch mat with fluid, AI-chosen full-body anatomical flexibility stretches',
+  },
 };
 
 export const DESTINATION_KIND_META: Record<
@@ -1828,6 +1834,19 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
     ball.userData.floatAmp = 0.24;
     root.add(ball);
     animatedNodes.push(ball);
+  } else if (hobby.hobbyKind === 'stretching') {
+    // Clean, unobstructed soft stretch mat beneath her feet so her full flexible anatomy shines!
+    const stretchMat = new THREE.Mesh(
+      new THREE.BoxGeometry(1.45, 0.014, 0.92),
+      new THREE.MeshStandardMaterial({ color: accent, roughness: 0.85 })
+    );
+    stretchMat.position.set(0, 0.007, 0.04);
+    const innerPad = new THREE.Mesh(
+      new THREE.BoxGeometry(1.36, 0.016, 0.84),
+      new THREE.MeshStandardMaterial({ color: '#fdf2f8', roughness: 0.88 })
+    );
+    innerPad.position.set(0, 0.008, 0.04);
+    root.add(stretchMat, innerPad);
   } else {
     // Reading Manga or Scrapbook Journaling cozy desk
     const desk = new THREE.Group();

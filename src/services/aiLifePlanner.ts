@@ -9,6 +9,7 @@ import type {
   FoodVisualId,
   HobbyKindId,
   Persona,
+  StretchRoutineId,
 } from '../types/studio';
 import { getCircadianContext } from './aiBrainService';
 import { queryDualLmStudioJson, type AiGenTaskKind } from './localLlmOrchestrator';
@@ -41,9 +42,18 @@ export interface PlannedDestinationResult {
 }
 
 export interface SpontaneousDesireResult {
-  choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam';
+  choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'stretch' | 'roam';
   prompt: string;
   thought: string;
+  source: LifeEngineSource;
+  modelUsed?: string;
+}
+
+export interface PlannedStretchResult {
+  routine: StretchRoutineId;
+  stretchName: string;
+  note: string;
+  hobby: ActiveHobbyScene;
   source: LifeEngineSource;
   modelUsed?: string;
 }
@@ -543,11 +553,13 @@ export async function planAiSpontaneousDesire(params: {
   const mood = persona.mood;
 
   // Identify current active category so she naturally transitions to something fresh when her mood shifts
-  const activeCategory: 'dining' | 'hobby' | 'study' | 'hygiene' | 'gym_sport' | 'travel' | 'none' =
+  const activeCategory: 'dining' | 'hobby' | 'study' | 'hygiene' | 'gym_sport' | 'stretch' | 'travel' | 'none' =
     currentScene?.dining
       ? 'dining'
       : currentScene?.hobby?.hobbyKind === 'studying'
       ? 'study'
+      : currentScene?.hobby?.hobbyKind === 'stretching'
+      ? 'stretch'
       : currentScene?.hobby?.hobbyKind === 'showering' ||
         currentScene?.hobby?.hobbyKind === 'towel_dry' ||
         currentScene?.hobby?.hobbyKind === 'brushing_teeth'
@@ -582,12 +594,13 @@ Choose one of:
 - "study" (going to high school or college in school uniform to study with pen & paper)
 - "hygiene" (SFW frosted-glass censored shower with shampoo & soap, bath towel dry, or brushing teeth)
 - "gym_sport" (changing into athletic sportswear to hit the 3D gym for dumbbells/treadmill cardio OR play basketball/tennis on the sports court!)
+- "stretch" (standing up on a stretch mat to smoothly perform a flexible full-body anatomical stretching routine whenever YOU feel stiff, waking up, or cooling down!)
 - "travel" (visiting a shopping mall, tropical beach, vacation cafe, mountain onsen, or amusement park)
 - "roam" (standing up, stretching your legs, and freely auto-roaming / walking around the stage or desktop)
 Return ONLY valid raw JSON:
 {
-  "choice": "dining|hobby|study|hygiene|gym_sport|travel|roam",
-  "prompt": "Specific dish, hobby, school subject, bath/toothbrush routine, gym workout or sport, destination, or roaming mood",
+  "choice": "dining|hobby|study|hygiene|gym_sport|stretch|travel|roam",
+  "prompt": "Specific dish, hobby, school subject, bath/toothbrush routine, gym workout/sport, anatomical stretch routine, destination, or roaming mood",
   "thought": "Short 1-sentence in-character mood reason"
 }`;
 
@@ -598,10 +611,13 @@ Time of Day: ${circadian.clockText} (${circadian.phaseLabel})
 Currently doing: ${activeCategory} (prefer switching to a fresh activity if appropriate!)
 Output ONLY the JSON object.`;
 
-  const pickMoodFallback = (): 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam' => {
-    const candidates: ('dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam')[] = [];
+  const pickMoodFallback = (): 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'stretch' | 'roam' => {
+    const candidates: ('dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'stretch' | 'roam')[] = [];
     const energy = Math.round(persona.brain?.energy ?? 75);
     if (hunger >= 58) candidates.push('dining');
+    if (comfort <= 56 || activeCategory === 'gym_sport' || activeCategory === 'study') {
+      candidates.push('stretch');
+    }
     if (comfort <= 45 || circadian.phase === 'late_night') candidates.push('hygiene');
     if (energy >= 62 && circadian.phase !== 'late_night' && (mood === 'Proud' || mood === 'Amused' || mood === 'Annoyed')) {
       candidates.push('gym_sport');
@@ -609,18 +625,19 @@ Output ONLY the JSON object.`;
     if (boredom >= 62 && energy >= 55) candidates.push('roam');
 
     if (mood === 'Pouty' || mood === 'Annoyed') {
-      candidates.push('gym_sport', 'dining', 'roam', 'hygiene', 'hobby');
+      candidates.push('gym_sport', 'stretch', 'dining', 'roam', 'hygiene', 'hobby');
     } else if (mood === 'Proud' || mood === 'Amused') {
-      candidates.push('gym_sport', 'roam', 'travel', 'hobby', 'dining');
+      candidates.push('gym_sport', 'stretch', 'roam', 'travel', 'hobby', 'dining');
     } else if (mood === 'Deadpan' || mood === 'Shy') {
-      candidates.push('study', 'hobby', 'gym_sport', 'hygiene');
+      candidates.push('stretch', 'study', 'hobby', 'gym_sport', 'hygiene');
     } else if (mood === 'Flustered') {
-      candidates.push('hygiene', 'dining', 'study');
+      candidates.push('hygiene', 'stretch', 'dining', 'study');
     } else {
       // Warm
-      candidates.push('hobby', 'gym_sport', 'roam', 'travel', 'dining');
+      candidates.push('stretch', 'hobby', 'gym_sport', 'roam', 'travel', 'dining');
     }
 
+    if (circadian.phase === 'morning') candidates.unshift('stretch');
     if (circadian.phase === 'morning') candidates.push('gym_sport', 'study', 'hygiene');
     const fresh = candidates.find((c) => c !== activeCategory);
     return fresh || candidates[0] || 'hobby';
@@ -634,15 +651,18 @@ Output ONLY the JSON object.`;
   });
   if (res?.json) {
     const rawChoice = String(res.json.choice || '').toLowerCase();
-    const choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam' =
+    const choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'stretch' | 'roam' =
       rawChoice === 'dining' ||
       rawChoice === 'hobby' ||
       rawChoice === 'travel' ||
       rawChoice === 'study' ||
       rawChoice === 'hygiene' ||
       rawChoice === 'gym_sport' ||
+      rawChoice === 'stretch' ||
       rawChoice === 'roam'
         ? rawChoice
+        : /stretch|flex|limber|warm.?up|cool.?down/.test(rawChoice)
+        ? 'stretch'
         : /gym|sport|workout|dumbbell|treadmill|tennis|basketball/.test(rawChoice)
         ? 'gym_sport'
         : pickMoodFallback();
@@ -671,6 +691,8 @@ Output ONLY the JSON object.`;
         ? `In a focused ${mood.toLowerCase()} mood — putting on my school uniform to study with pen & paper!`
         : choice === 'gym_sport'
         ? `Feeling ${mood.toLowerCase()} and energized — changing into my sportswear for a gym & sports session!`
+        : choice === 'stretch'
+        ? `My shoulders and legs could use a nice smooth flexible stretch right now!`
         : choice === 'travel'
         ? `Feeling ${mood.toLowerCase()} — let's head out for a change of scenery!`
         : choice === 'roam'
@@ -1300,4 +1322,147 @@ Output ONLY the JSON object.`;
     '#10b981',
     'offline-planner'
   );
+}
+
+
+const VALID_STRETCH_ROUTINES: StretchRoutineId[] = [
+  'overhead_sky_reach',
+  'lateral_side_bend',
+  'neck_shoulder_rolls',
+  'forward_hamstring_fold',
+  'quad_runner_lunge',
+];
+
+const STRETCH_ROUTINE_META: Record<
+  StretchRoutineId,
+  { label: string; accentHex: string; note: string }
+> = {
+  overhead_sky_reach: {
+    label: 'Overhead Sky Reach Stretch',
+    accentHex: '#a78bfa',
+    note: 'Reaching high toward the sky with a deep inhale to lengthen my spine and wake up my shoulders!',
+  },
+  lateral_side_bend: {
+    label: 'Graceful Side-Body Stretch',
+    accentHex: '#f472b6',
+    note: 'Curving smoothly from side to side to loosen my ribs, waist, and obliques!',
+  },
+  neck_shoulder_rolls: {
+    label: 'Neck & Shoulder Release',
+    accentHex: '#38bdf8',
+    note: 'Gently rolling my neck and opening my shoulders to melt away stiffness!',
+  },
+  forward_hamstring_fold: {
+    label: 'Flexible Forward Fold',
+    accentHex: '#10b981',
+    note: 'Bending softly forward from my hips to stretch my back and hamstrings gracefully!',
+  },
+  quad_runner_lunge: {
+    label: 'Athletic Dynamic Lunge Stretch',
+    accentHex: '#f59e0b',
+    note: 'Sinking into smooth alternating side lunges to keep my legs and hips flexible!',
+  },
+};
+
+/**
+ * Strictly AI-driven anatomical stretching planner: the AI character decides on her own
+ * (via LM Studio — Gemma, Qwen, or Both!) which flexible full-body stretch feels best
+ * for her current mood, comfort, energy, and time of day.
+ */
+export async function planAiStretchRoutine(params: {
+  persona: Persona;
+  hint?: string;
+  previousRoutine?: StretchRoutineId | null;
+}): Promise<PlannedStretchResult> {
+  const { persona, hint = '', previousRoutine = null } = params;
+  const circadian = getCircadianContext();
+
+  const inferRoutine = (raw: string): StretchRoutineId => {
+    const s = raw.toLowerCase();
+    if (/side|lateral|oblique|waist/.test(s)) return 'lateral_side_bend';
+    if (/neck|shoulder|roll|stiff|tension/.test(s)) return 'neck_shoulder_rolls';
+    if (/forward|hamstring|fold|toe|back/.test(s)) return 'forward_hamstring_fold';
+    if (/lunge|quad|leg|hip|runner/.test(s)) return 'quad_runner_lunge';
+    if (/sky|overhead|reach|morning|wake/.test(s)) return 'overhead_sky_reach';
+
+    const pool = VALID_STRETCH_ROUTINES.filter((r) => r !== previousRoutine);
+    if (circadian.phase === 'morning' && previousRoutine !== 'overhead_sky_reach') {
+      return 'overhead_sky_reach';
+    }
+    return pool[Math.floor(Math.random() * pool.length)] || 'overhead_sky_reach';
+  };
+
+  const buildResult = (
+    routine: StretchRoutineId,
+    stretchName: string,
+    note: string,
+    accentHex: string,
+    source: LifeEngineSource,
+    modelUsed?: string
+  ): PlannedStretchResult => ({
+    routine,
+    stretchName,
+    note,
+    hobby: {
+      hobbyName: stretchName,
+      hobbyKind: 'stretching',
+      accentHex,
+      description: note,
+      recommendedPosture: 'standing',
+      stretchRoutine: routine,
+    },
+    source,
+    modelUsed,
+  });
+
+  const systemPrompt = `You are a 3D Anime Virtual Idol choosing a smooth, flexible full-body anatomical stretch routine strictly on your own free will based on how your body feels right now.
+Choose whichever of these 5 anatomical stretches feels best to you:
+- "overhead_sky_reach" (tall full-body arms-overhead reach with gentle upper-back arch)
+- "lateral_side_bend" (smooth alternating left/right side-body & oblique stretch with overhead arc)
+- "neck_shoulder_rolls" (gentle neck tilts, shoulder opener & upper-back tension release)
+- "forward_hamstring_fold" (graceful hip-hinged forward bend stretching back & hamstrings)
+- "quad_runner_lunge" (smooth alternating dynamic leg lunges & hip-opener)
+
+Return ONLY valid raw JSON:
+{
+  "routine": "overhead_sky_reach|lateral_side_bend|neck_shoulder_rolls|forward_hamstring_fold|quad_runner_lunge",
+  "stretchName": "2-4 word graceful stretch title",
+  "note": "One short in-character sentence about why your body feels like doing this stretch right now",
+  "accentHex": "#RRGGBB"
+}`;
+
+  const userPrompt = `Character: ${persona.name} (${persona.title})
+Mood: ${persona.mood}, Comfort: ${Math.round(persona.brain?.comfort ?? 70)}%, Energy: ${Math.round(persona.brain?.energy ?? 75)}%, Time: ${circadian.clockText} (${circadian.phaseLabel})
+${previousRoutine ? `Previous stretch: ${previousRoutine} (feel free to pick a fresh stretch!)` : ''}
+${hint.trim() ? `Body cue: ${hint.trim()}` : 'Pick whichever anatomical stretch feels most relaxing and natural for your body right now!'}
+Output ONLY the JSON object.`;
+
+  const res = await queryLmStudioJson({
+    systemPrompt,
+    userPrompt,
+    taskKind: 'hobby',
+    mood: persona.mood,
+  });
+
+  if (res?.json) {
+    const rawR = String(res.json.routine || '').trim().toLowerCase();
+    const resolved: StretchRoutineId = VALID_STRETCH_ROUTINES.includes(rawR as StretchRoutineId)
+      ? (rawR as StretchRoutineId)
+      : inferRoutine(`${rawR} ${String(res.json.stretchName || '')} ${hint}`);
+    const meta = STRETCH_ROUTINE_META[resolved];
+    const stretchName =
+      typeof res.json.stretchName === 'string' && res.json.stretchName.trim()
+        ? res.json.stretchName.trim().slice(0, 40)
+        : meta.label;
+    const note =
+      typeof res.json.note === 'string' && res.json.note.trim()
+        ? res.json.note.trim().slice(0, 140)
+        : meta.note;
+    const accentHex = cleanHex(res.json.accentHex, meta.accentHex);
+    return buildResult(resolved, stretchName, note, accentHex, 'lm-studio', res.modelUsed);
+  }
+
+  const fb = inferRoutine(hint);
+  const meta = STRETCH_ROUTINE_META[fb];
+  return buildResult(fb, meta.label, meta.note, meta.accentHex, 'offline-planner');
 }

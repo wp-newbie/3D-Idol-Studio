@@ -35,6 +35,7 @@ const VISIT_PLACE_TAG_REGEX = /\[VISIT_PLACE\s*:\s*([^\]]+)\]/gi;
 const STUDY_SCHOOL_TAG_REGEX = /\[STUDY_SCHOOL\s*:\s*([^\]]+)\]/gi;
 const SELF_CARE_BATH_TAG_REGEX = /\[SELF_CARE_BATH\s*:\s*([^\]]+)\]/gi;
 const GYM_SPORT_TAG_REGEX = /\[DO_GYM_SPORT\s*:\s*([^\]]+)\]/gi;
+const STRETCH_TAG_REGEX = /\[DO_STRETCH\s*:\s*([^\]]+)\]/gi;
 const TOGGLE_LAYER_TAG_REGEX = /\[TOGGLE_LAYER\s*:\s*([^\]=]+)=(on|off|true|false)\s*\]/gi;
 const POSTURE_TAG_REGEX = /\[POSTURE\s*:\s*(seated|standing|sleeping)\s*\]/gi;
 const MOVE_TAG_REGEX = /\[MOVE\s*:\s*(walk|peek|sit_taskbar|approach_user)\s*\]/gi;
@@ -183,6 +184,17 @@ export function extractGymSportAction(text: string): string | null {
   let prompt: string | null = null;
   let match: RegExpExecArray | null;
   const regex = new RegExp(GYM_SPORT_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) prompt = raw;
+  }
+  return prompt;
+}
+
+export function extractStretchAction(text: string): string | null {
+  let prompt: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(STRETCH_TAG_REGEX.source, 'gi');
   while ((match = regex.exec(text)) !== null) {
     const raw = match[1].trim();
     if (raw) prompt = raw;
@@ -414,6 +426,7 @@ export function stripHiddenTags(text: string): string {
     .replace(STUDY_SCHOOL_TAG_REGEX, '')
     .replace(SELF_CARE_BATH_TAG_REGEX, '')
     .replace(GYM_SPORT_TAG_REGEX, '')
+    .replace(STRETCH_TAG_REGEX, '')
     .replace(TOGGLE_LAYER_TAG_REGEX, '')
     .replace(POSTURE_TAG_REGEX, '')
     .replace(MOVE_TAG_REGEX, '')
@@ -529,6 +542,7 @@ export function parseDialogueResponse(
   studySchoolAction: string | null;
   bathCareAction: string | null;
   gymSportAction: string | null;
+  stretchAction: string | null;
   layerActions: WardrobeLayerAction[];
   postureAction: AvatarPosture | null;
   moveAction: RoamBehavior | null;
@@ -556,6 +570,7 @@ export function parseDialogueResponse(
   const studySchoolAction = extractStudySchoolAction(rawText);
   const bathCareAction = extractBathCareAction(rawText);
   const gymSportAction = extractGymSportAction(rawText);
+  const stretchAction = extractStretchAction(rawText);
   const layerActions = extractLayerActions(rawText);
   const postureAction = extractPostureAction(rawText);
   const moveAction = extractMoveAction(rawText);
@@ -634,6 +649,7 @@ export function parseDialogueResponse(
     studySchoolAction,
     bathCareAction,
     gymSportAction,
+    stretchAction,
     layerActions,
     postureAction,
     moveAction,

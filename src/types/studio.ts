@@ -89,7 +89,15 @@ export type HobbyKindId =
   | 'gym_weights'
   | 'gym_treadmill'
   | 'sports_basketball'
-  | 'sports_tennis';
+  | 'sports_tennis'
+  | 'stretching';
+
+export type StretchRoutineId =
+  | 'overhead_sky_reach'
+  | 'lateral_side_bend'
+  | 'neck_shoulder_rolls'
+  | 'forward_hamstring_fold'
+  | 'quad_runner_lunge';
 
 export type DestinationKindId =
   | 'none'
@@ -120,6 +128,8 @@ export interface ActiveHobbyScene {
   accentHex: string;
   description: string;
   recommendedPosture: 'seated' | 'standing';
+  /** Selected purely by the AI character when performing flexible anatomical stretching */
+  stretchRoutine?: StretchRoutineId;
 }
 
 export interface ActiveDestinationScene {

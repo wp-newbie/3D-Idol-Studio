@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { HobbyKindId, MoodType, RoamBehavior, RoamCommand } from '../types/studio';
+import type { HobbyKindId, MoodType, RoamBehavior, RoamCommand, StretchRoutineId } from '../types/studio';
 import type { EmotionBodyLanguage } from './emotionEngine';
 import {
   applyColdRubArms,
@@ -10,6 +10,7 @@ import {
   applyShoulderStretchArms,
   DEFAULT_NATURAL_ARMS,
   expSmooth,
+  getAnatomicalStretchFrame,
   getHobbyActivityFrame,
 } from './naturalArmPose';
 
@@ -200,6 +201,7 @@ export class AutonomousRoamController {
     hasActiveReactionOrEmote: boolean;
     isSleeping?: boolean;
     activeHobbyKind?: HobbyKindId | null;
+    activeStretchRoutine?: StretchRoutineId | null;
     boredom?: number;
     sleepiness?: number;
     energy?: number;
@@ -223,6 +225,7 @@ export class AutonomousRoamController {
       hasActiveReactionOrEmote,
       isSleeping = false,
       activeHobbyKind = null,
+      activeStretchRoutine = null,
       boredom = 25,
       sleepiness = 20,
       energy = 80,
@@ -383,6 +386,14 @@ export class AutonomousRoamController {
     let targetWorldY = this.currentY * 0.16;
     let targetWorldZ = this.currentZ * 0.55;
 
+    const stretchRootOffsetY =
+      !this.isDragging && !isSleeping && activeHobbyKind === 'stretching'
+        ? getAnatomicalStretchFrame(
+            activeStretchRoutine || 'overhead_sky_reach',
+            elapsed
+          ).hipsY
+        : 0;
+
     if (desktopRoamMode && camera) {
       const distZ = Math.max(2.0, Math.abs(camera.position.z));
       const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * distZ;
@@ -395,11 +406,15 @@ export class AutonomousRoamController {
       targetWorldZ = this.currentZ * 0.25;
       const stepBob = isMoving ? Math.abs(Math.sin(this.walkPhase)) * 0.032 : 0;
       targetWorldY =
-        taskbarFloorY + Math.max(0, this.currentY) * verticalSpanY + stepBob;
+        taskbarFloorY +
+        Math.max(0, this.currentY) * verticalSpanY +
+        stepBob +
+        stretchRootOffsetY;
     } else {
-      targetWorldY = isMoving
-        ? Math.abs(Math.sin(this.walkPhase)) * 0.028
-        : this.currentY * 0.16;
+      targetWorldY =
+        (isMoving
+          ? Math.abs(Math.sin(this.walkPhase)) * 0.028
+          : this.currentY * 0.16) + stretchRootOffsetY;
     }
 
     if (!hasActiveReactionOrEmote) {
@@ -623,14 +638,32 @@ export class AutonomousRoamController {
       // (+X left, +Y up, +Z forward) so VRM 0.x and VRM 1.0 produce identical front-facing poses with no backwards elbows.
       const useStandingHobby = !this.isDragging && !isSleeping && Boolean(activeHobbyKind);
       if (useStandingHobby && activeHobbyKind) {
-        const hf = getHobbyActivityFrame(activeHobbyKind, elapsed);
+        const stretchRoutine = activeStretchRoutine || 'overhead_sky_reach';
+        const hf = getHobbyActivityFrame(activeHobbyKind, elapsed, stretchRoutine);
         const forwardSign = isVrm0 ? 1 : -1;
         targets.spine.y = hf.spineTwistY * 0.65;
         targets.spine.x += forwardSign * hf.spineLeanX;
         targets.chest.y = hf.spineTwistY * 0.35;
         targets.chest.x += forwardSign * hf.spineLeanX * 0.45;
 
-        if (activeHobbyKind === 'gym_treadmill') {
+        if (activeHobbyKind === 'stretching') {
+          // Full-body smooth flexible anatomical stretching across hips, spine, chest, legs & knees!
+          const sf = getAnatomicalStretchFrame(stretchRoutine, elapsed);
+          targets.hips.y = sf.spineTwistY * 0.22;
+          targets.hips.z = sf.hipsZ;
+          targets.spine.x = forwardSign * sf.spineLeanX;
+          targets.spine.z = sf.spineBendZ;
+          targets.spine.y = sf.spineTwistY * 0.6;
+          targets.chest.x = forwardSign * sf.chestArchX;
+          targets.chest.z = sf.chestBendZ;
+          targets.chest.y = sf.spineTwistY * 0.4;
+          targets.leftUpperLeg.x = forwardSign * sf.leftUpperLegX;
+          targets.leftUpperLeg.z = armSign * sf.leftUpperLegZ;
+          targets.rightUpperLeg.x = forwardSign * sf.rightUpperLegX;
+          targets.rightUpperLeg.z = -armSign * sf.rightUpperLegZ;
+          targets.leftLowerLeg.x = forwardSign * sf.leftLowerLegX;
+          targets.rightLowerLeg.x = forwardSign * sf.rightLowerLegX;
+        } else if (activeHobbyKind === 'gym_treadmill') {
           // Rhythmic cardio jogging leg stride on the 3D treadmill!
           const jogPhase = elapsed * 6.8;
           const stride = Math.sin(jogPhase) * 0.34;
@@ -717,7 +750,13 @@ export class AutonomousRoamController {
         const rh = bone('rightHand');
         if (lu && ll && lh && ru && rl && rh) {
           if (useStandingHobby && activeHobbyKind) {
-            applyHobbyActivityArms(vrm, activeHobbyKind, elapsed, boneLerp);
+            applyHobbyActivityArms(
+              vrm,
+              activeHobbyKind,
+              elapsed,
+              boneLerp,
+              activeStretchRoutine || 'overhead_sky_reach'
+            );
           } else if (useShoulderStretch) {
             applyShoulderStretchArms(vrm, elapsed, boneLerp);
           } else if (useColdRubArms) {

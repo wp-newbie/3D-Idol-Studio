@@ -108,6 +108,7 @@ import {
   planAiMoodFood,
   planAiSchoolStudy,
   planAiSpontaneousDesire,
+  planAiStretchRoutine,
   type GymSportKindId,
   type HygieneRoutineId,
   type SchoolLevel,
@@ -295,6 +296,7 @@ export const App: React.FC = () => {
   const studySchoolRef = useRef<(studyPrompt?: string) => void>(() => {});
   const bathCareRef = useRef<(bathPrompt?: string) => void>(() => {});
   const gymSportRef = useRef<(sportPrompt?: string) => void>(() => {});
+  const stretchRef = useRef<(stretchHint?: string) => void>(() => {});
   const equipWholeOutfitRef = useRef<(slotOrModelTarget: string) => boolean>(() => false);
   const switchToVrmRef = useRef<
     (
@@ -1338,6 +1340,11 @@ export const App: React.FC = () => {
         // AI-triggered Gym & Sports session: [DO_GYM_SPORT: <workout or sport>]
         if (parsed.gymSportAction) {
           gymSportRef.current(parsed.gymSportAction);
+        }
+
+        // AI-triggered Flexible Anatomical Stretching: [DO_STRETCH: <routine or feeling>]
+        if (parsed.stretchAction) {
+          stretchRef.current(parsed.stretchAction);
         }
         const toolEventsMsgs: ChatMessage[] = reply.toolEvents.map((ev, idx) => ({
           id: `msg-tool-${Date.now()}-${idx}`,
@@ -3142,6 +3149,68 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleStartAiStretch = async (hint?: string, silentReaction = false) => {
+    if (isLifeBusyRef.current) return;
+    isLifeBusyRef.current = true;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const prevRoutine =
+        lifeSceneRef.current.hobby?.hobbyKind === 'stretching'
+          ? lifeSceneRef.current.hobby.stretchRoutine ?? null
+          : null;
+
+      const res = await planAiStretchRoutine({
+        persona,
+        hint,
+        previousRoutine: prevRoutine,
+      });
+
+      setLifeScene((prev) => ({
+        ...prev,
+        dining: null,
+        chair: null,
+        hobby: res.hobby,
+      }));
+      handleUpdateSettings({ defaultPosture: 'standing' });
+      setAutoRoamEnabled(false);
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          comfort: Math.min(100, (p.brain?.comfort ?? 68) + 22),
+          energy: Math.min(100, (p.brain?.energy ?? 70) + 10),
+          boredom: Math.max(0, (p.brain?.boredom ?? 45) - 24),
+          innerThought: res.note,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const engineLabel =
+        res.source === 'lm-studio'
+          ? `LM Studio · ${res.modelUsed || 'Local'}`
+          : 'AI Body Wellness';
+      setAutonomousActionToast(
+        `🤸‍♀️ ${persona.name} chose ${res.stretchName} (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silentReaction) {
+        triggerOutfitReaction(
+          res.stretchName,
+          `decided on her own to do a flexible ${res.stretchName}: "${res.note}"`
+        );
+      }
+    } finally {
+      isLifeBusyRef.current = false;
+      setIsLifeBusy(false);
+    }
+  };
+
   const handleFollowWhim = async (options?: { silent?: boolean }) => {
     if (isLifeBusyRef.current || isLifeBusy) return;
     isLifeBusyRef.current = true;
@@ -3167,6 +3236,8 @@ export const App: React.FC = () => {
         await handleStartSchoolStudy(undefined, whim.prompt || undefined, true, silent);
       } else if (whim.choice === 'gym_sport') {
         await handleStartGymSport(whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'stretch') {
+        await handleStartAiStretch(whim.prompt || undefined, silent);
       } else if (whim.choice === 'travel') {
         await handlePlanDestination(whim.prompt || undefined, true, silent);
       } else if (whim.choice === 'roam') {
@@ -3471,6 +3542,9 @@ export const App: React.FC = () => {
   };
   gymSportRef.current = (sportPrompt) => {
     void handleStartGymSport(sportPrompt, true, true);
+  };
+  stretchRef.current = (stretchHint) => {
+    void handleStartAiStretch(stretchHint, true);
   };
 
   const applyGeneratedOutfitToPersona = (
@@ -3822,6 +3896,7 @@ export const App: React.FC = () => {
         curScene.hobby?.hobbyKind === 'gym_treadmill' ||
         curScene.hobby?.hobbyKind === 'sports_basketball' ||
         curScene.hobby?.hobbyKind === 'sports_tennis' ||
+        curScene.hobby?.hobbyKind === 'stretching' ||
         curScene.destination?.destinationKind === 'tropical_beach' ||
         curScene.destination?.destinationKind === 'mountain_onsen' ||
         curScene.destination?.destinationKind === 'gym_studio' ||
