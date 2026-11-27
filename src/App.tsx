@@ -84,6 +84,8 @@ import {
   generateAiHairstyle,
   generateAiOutfit,
   generateTimeOccasionOutfit,
+  listAvailableVrmModels,
+  planAiVrmModelSwitch,
   type GeneratedOutfitPayload,
   type OutfitEngineSource,
 } from './services/aiOutfitGenerator';
@@ -289,6 +291,16 @@ export const App: React.FC = () => {
   const studySchoolRef = useRef<(studyPrompt?: string) => void>(() => {});
   const bathCareRef = useRef<(bathPrompt?: string) => void>(() => {});
   const equipWholeOutfitRef = useRef<(slotOrModelTarget: string) => boolean>(() => false);
+  const switchToVrmRef = useRef<
+    (
+      target: string,
+      options?: {
+        garmentStyleOverride?: GarmentStyleId;
+        garmentPaletteOverride?: OutfitSlot['garmentPalette'];
+        reason?: string;
+      }
+    ) => { switched: boolean; label: string }
+  >(() => ({ switched: false, label: '' }));
   const designTimeOccasionRef = useRef<
     (
       occasionOverride?: string,
@@ -870,6 +882,13 @@ export const App: React.FC = () => {
         window.setTimeout(() => setAutonomousActionToast(null), 3500);
         return summary;
       },
+      switchVrmModel: ({ modelTarget, reason }) => {
+        const res = switchToVrmRef.current(modelTarget, { reason });
+        if (!res.switched) {
+          return `Could not find VRM model "${modelTarget}" in Vault`;
+        }
+        return `Switched active 3D VRM model to "${res.label}" (${reason})`;
+      },
       triggerEmote: ({ emoteId, reason }) => {
         const id = emoteCommandSeqRef.current++;
         setEmoteCommand({ id, emoteId });
@@ -1131,6 +1150,11 @@ export const App: React.FC = () => {
         }
 
         const parsed = parseDialogueResponse(reply.rawText, persona.mood);
+
+        // AI-triggered VRM Model Type switch action tag: [SWITCH_VRM: ...]
+        if (parsed.switchVrmAction) {
+          switchToVrmRef.current(parsed.switchVrmAction);
+        }
 
         // AI-triggered Wardrobe change action tag: [EQUIP_OUTFIT: ...]
         // Supports saved outfit slots AND any imported full-body .vrm / .glb models in Vault!
@@ -2089,6 +2113,162 @@ export const App: React.FC = () => {
     return 'Smart Stylist';
   };
 
+  const switchToVrmModelByTarget = (
+    rawTargetInput: string,
+    options?: {
+      garmentStyleOverride?: GarmentStyleId;
+      garmentPaletteOverride?: OutfitSlot['garmentPalette'];
+      reason?: string;
+    }
+  ): { switched: boolean; label: string } => {
+    const rawTarget = rawTargetInput.trim();
+    if (!rawTarget) return { switched: false, label: '' };
+    const target = rawTarget.toLowerCase();
+    const currentStudio = studioRef.current;
+    const persona =
+      currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+      currentStudio.personas[0];
+    if (!persona) return { switched: false, label: '' };
+
+    const activeSlotObj =
+      persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId) ||
+      persona.outfitSlots[0];
+    const activeVaultId = activeSlotObj?.modelVaultId ?? null;
+    const candidates = listAvailableVrmModels(vaultModelsRef.current, activeVaultId);
+    const alternatives = candidates.filter((c) => !c.isActive);
+
+    let chosen = candidates.find(
+      (c) =>
+        (c.id !== null && c.id.toLowerCase() === target) ||
+        c.fileName.toLowerCase() === target ||
+        c.label.toLowerCase() === target
+    );
+
+    if (!chosen && /^(default|default[-_\s]?anime|default[-_\s]?vrm|base|sample)$/i.test(target)) {
+      chosen = candidates.find((c) => c.id === null);
+    }
+
+    if (!chosen && /^(next|other|another|random|different|switch|swap)$/i.test(target)) {
+      chosen = alternatives[0] || candidates[0];
+    }
+
+    if (!chosen) {
+      chosen = candidates.find((c) => {
+        const base = c.fileName.replace(/\.[^.]+$/, '').toLowerCase();
+        return (
+          base.includes(target) ||
+          target.includes(base) ||
+          c.label.toLowerCase().includes(target) ||
+          target.includes(c.label.toLowerCase())
+        );
+      });
+    }
+
+    if (!chosen) return { switched: false, label: '' };
+
+    const targetModelId = chosen.id;
+    const targetGarmentStyle: GarmentStyleId = options?.garmentStyleOverride ?? 'default';
+
+    // Find a clean existing slot linked to this VRM model (preferring non-daily base slots)
+    const existingSlot =
+      persona.outfitSlots.find(
+        (s) => (s.modelVaultId ?? null) === targetModelId && !s.id.startsWith('slot-daily-')
+      ) || persona.outfitSlots.find((s) => (s.modelVaultId ?? null) === targetModelId);
+
+    const now = Date.now();
+    if (existingSlot) {
+      updateActivePersona((p) => ({
+        ...p,
+        outfitSlots: p.outfitSlots.map((s) =>
+          s.id === existingSlot.id
+            ? {
+                ...s,
+                garmentStyle: targetGarmentStyle,
+                garmentPalette: options?.garmentPaletteOverride ?? s.garmentPalette,
+                meshVisibility: targetGarmentStyle === 'default' ? {} : s.meshVisibility,
+              }
+            : s
+        ),
+        activeOutfitSlotId: existingSlot.id,
+        updatedAt: now,
+      }));
+    } else {
+      const linkedSlot: OutfitSlot = {
+        id: `slot-vrm-${now}`,
+        name: chosen.label,
+        modelVaultId: targetModelId,
+        meshVisibility: {},
+        materialMods: {},
+        yawOffset: 0,
+        cyclingShorts: true,
+        accessories: [],
+        garmentStyle: targetGarmentStyle,
+        garmentPalette: options?.garmentPaletteOverride,
+        createdAt: now,
+      };
+      updateActivePersona((p) => ({
+        ...p,
+        outfitSlots: [...p.outfitSlots, linkedSlot],
+        activeOutfitSlotId: linkedSlot.id,
+        updatedAt: now,
+      }));
+    }
+
+    setAutonomousActionToast(
+      `🧬 Switched VRM Model: ${chosen.label}${options?.reason ? ` — ${options.reason.slice(0, 48)}` : ''}`
+    );
+    window.setTimeout(() => setAutonomousActionToast(null), 4500);
+    return { switched: true, label: chosen.label };
+  };
+  switchToVrmRef.current = switchToVrmModelByTarget;
+
+  const handleSelectVrmModel = (modelVaultId: string | null) => {
+    const target = modelVaultId ?? 'default';
+    const res = switchToVrmModelByTarget(target, { garmentStyleOverride: 'default' });
+    if (res.switched) {
+      triggerOutfitReaction(res.label, `switched her 3D VRM avatar model to "${res.label}"`);
+    }
+  };
+
+  const handleAiPickVrmModel = async (promptHint?: string) => {
+    if (isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const plan = await planAiVrmModelSwitch({
+        persona: currentPersona,
+        vaultModels: vaultModelsRef.current,
+        activeLifeScene: lifeSceneRef.current,
+        promptHint,
+      });
+      const res = switchToVrmModelByTarget(plan.targetModelId ?? 'default', {
+        garmentStyleOverride: 'default',
+      });
+      const engineLabel = formatOutfitEngineLabel(plan.source, plan.modelUsed);
+      setAutonomousActionToast(
+        `🧬 ${currentPersona.name} chose VRM "${res.label || plan.targetLabel}" (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 4800);
+      if (res.switched) {
+        triggerOutfitReaction(
+          res.label || plan.targetLabel,
+          `decided to switch her 3D VRM model to "${res.label || plan.targetLabel}": ${plan.reason}`
+        );
+      }
+    } catch (err) {
+      console.error('[AI VRM] Model switch failed:', err);
+      setAutonomousActionToast('⚠️ Could not switch VRM model.');
+      window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
+    }
+  };
+
   const equipWholeOutfitByTarget = (slotOrModelTarget: string): boolean => {
     const rawTarget = slotOrModelTarget.trim();
     if (!rawTarget) return false;
@@ -2132,58 +2312,9 @@ export const App: React.FC = () => {
       return true;
     }
 
-    // Fallback: match any imported whole-body .vrm / .glb model in Vault & auto-link as a wearable slot!
-    const matchedModel = vaultModelsRef.current.find((m) => {
-      if (m.format !== 'vrm' && m.format !== 'glb') return false;
-      const baseName = m.fileName.replace(/\.[^.]+$/, '').toLowerCase();
-      return (
-        m.id.toLowerCase() === target ||
-        m.fileName.toLowerCase() === target ||
-        baseName.includes(target) ||
-        target.includes(baseName)
-      );
-    });
-
-    if (matchedModel) {
-      const existingByVault = persona.outfitSlots.find(
-        (s) => s.modelVaultId === matchedModel.id
-      );
-      if (existingByVault) {
-        updateActivePersona((p) => ({
-          ...p,
-          activeOutfitSlotId: existingByVault.id,
-          updatedAt: Date.now(),
-        }));
-        setAutonomousActionToast(`👗 Equipped Whole Outfit: ${existingByVault.name}`);
-        window.setTimeout(() => setAutonomousActionToast(null), 4000);
-        return true;
-      }
-
-      const now = Date.now();
-      const prettyName = matchedModel.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
-      const linkedSlot: OutfitSlot = {
-        id: `slot-vrm-${now}`,
-        name: prettyName,
-        modelVaultId: matchedModel.id,
-        meshVisibility: {},
-        materialMods: {},
-        yawOffset: 0,
-        cyclingShorts: true,
-        accessories: [],
-        createdAt: now,
-      };
-      updateActivePersona((p) => ({
-        ...p,
-        outfitSlots: [...p.outfitSlots, linkedSlot],
-        activeOutfitSlotId: linkedSlot.id,
-        updatedAt: now,
-      }));
-      setAutonomousActionToast(`👗 Switched Whole 3D Model: ${prettyName}`);
-      window.setTimeout(() => setAutonomousActionToast(null), 4200);
-      return true;
-    }
-
-    return false;
+    // Fallback: delegate to full VRM model switcher (handles Vault .vrm/.glb models AND "Default Anime VRM"!)
+    const vrmSwitch = switchToVrmModelByTarget(rawTarget, { garmentStyleOverride: 'default' });
+    return vrmSwitch.switched;
   };
   equipWholeOutfitRef.current = equipWholeOutfitByTarget;
 
@@ -3282,9 +3413,28 @@ export const App: React.FC = () => {
         persona: currentPersona,
         detectedMeshes: detectedMeshesRef.current,
         settings: currentStudio.settings,
+        vaultModels: vaultModelsRef.current,
         activeLifeScene: lifeSceneRef.current,
         occasionLabel: options?.occasionLabel,
       });
+
+      // If AI chose to switch to another VRM model type (e.g. a matching swimsuit/school/casual .vrm)!
+      if (generated.preferredExistingSlot) {
+        const vrmRes = switchToVrmModelByTarget(generated.preferredExistingSlot, {
+          garmentStyleOverride: generated.garmentStyle,
+          garmentPaletteOverride: generated.garmentPalette,
+          reason: generated.plan.styleNote,
+        });
+        if (vrmRes.switched) {
+          if (!options?.silentReaction) {
+            triggerOutfitReaction(
+              vrmRes.label,
+              `switched her 3D VRM model to "${vrmRes.label}": ${generated.plan.styleNote}`
+            );
+          }
+          return;
+        }
+      }
 
       applyGeneratedOutfitToPersona(generated, { saveAsNewSlot });
 
@@ -3333,21 +3483,25 @@ export const App: React.FC = () => {
         vaultModels: vaultModelsRef.current,
         activeLifeScene: lifeSceneRef.current,
         occasionOverride,
-        allowWholeOutfitSwitch: !occasionOverride,
+        allowWholeOutfitSwitch: currentStudio.settings.autoSwitchVrmModels !== false,
       });
 
-      // If LM Studio decided she wants to switch into a saved whole-body 3D outfit / VRM model!
-      if (
-        payload.preferredExistingSlot &&
-        equipWholeOutfitByTarget(payload.preferredExistingSlot)
-      ) {
-        if (!options?.silentReaction) {
-          triggerOutfitReaction(
-            payload.preferredExistingSlot,
-            `decided to change her entire outfit into "${payload.preferredExistingSlot}" for ${brief.phaseLabel} (${brief.clockText})`
-          );
+      // If LM Studio decided she wants to switch into another 3D VRM avatar model type!
+      if (payload.preferredExistingSlot) {
+        const vrmRes = switchToVrmModelByTarget(payload.preferredExistingSlot, {
+          garmentStyleOverride: payload.garmentStyle,
+          garmentPaletteOverride: payload.garmentPalette,
+          reason: payload.plan.styleNote,
+        });
+        if (vrmRes.switched) {
+          if (!options?.silentReaction) {
+            triggerOutfitReaction(
+              vrmRes.label,
+              `decided to switch her 3D VRM model to "${vrmRes.label}" for ${brief.phaseLabel} (${brief.clockText})`
+            );
+          }
+          return;
         }
-        return;
       }
 
       applyGeneratedOutfitToPersona(payload, {
@@ -4592,6 +4746,12 @@ export const App: React.FC = () => {
               onToggleAutoDressByTime={(next) =>
                 handleUpdateSettings({ autoDressByTimeOccasion: next })
               }
+              autoSwitchVrmModels={studio.settings.autoSwitchVrmModels !== false}
+              onToggleAutoSwitchVrmModels={(next) =>
+                handleUpdateSettings({ autoSwitchVrmModels: next })
+              }
+              onSelectVrmModel={handleSelectVrmModel}
+              onAiPickVrmModel={(prompt) => void handleAiPickVrmModel(prompt)}
               preferLocalAi={Boolean(studio.settings.preferLocalAi)}
               onToggleProceduralAccessory={handleToggleProceduralAccessory}
               onSelectGarmentStyle={handleSelectGarmentStyle}

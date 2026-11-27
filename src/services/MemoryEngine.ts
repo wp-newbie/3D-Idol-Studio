@@ -114,17 +114,20 @@ export function formatWardrobeInventoryPrompt(
     )
     .join('\n');
 
-  const modelsLines =
-    inventory.vaultModels.length > 0
-      ? inventory.vaultModels
-          .map(
-            (m) =>
-              `  * "${m.fileName}" (${m.format.toUpperCase()}${
-                m.isDefaultSample ? ' · Default Idol Base' : ''
-              })`
-          )
-          .join('\n')
-      : '  * (No additional custom .VRM models saved in vault)';
+  const activeVaultId = inventory.equippedSlot?.modelVaultId ?? null;
+  const vrmOptions: string[] = [
+    `  * "Default Anime VRM" (Built-in default-anime.vrm${activeVaultId === null ? ' · CURRENTLY ACTIVE VRM' : ''})`,
+  ];
+  for (const m of inventory.vaultModels) {
+    if (m.format === 'vrm' || m.format === 'glb') {
+      vrmOptions.push(
+        `  * "${m.fileName}" (${m.format.toUpperCase()}${
+          m.id === activeVaultId ? ' · CURRENTLY ACTIVE VRM' : ''
+        }${m.isDefaultSample ? ' · Default Idol Base' : ''})`
+      );
+    }
+  }
+  const modelsLines = vrmOptions.join('\n');
 
   const layersLines =
     inventory.clothingLayers.length > 0
@@ -146,9 +149,11 @@ WARDROBE INVENTORY INTERACTION RULES:
 1. Whenever ${userName} ({{user}}) asks what clothes/outfits you have, asks to see your wardrobe, or asks what you can wear, accurately list your actual saved outfits, garments, and clothing layers above in character.
 2. If ${userName} asks you to change into one of your saved outfits, you can optionally include an action tag:
    [EQUIP_OUTFIT: <slotName or slotNumber>] (e.g. [EQUIP_OUTFIT: Casual Streetwear] or [EQUIP_OUTFIT: Slot 1])
-3. If ${userName} asks you to toggle, put on, or take off a clothing layer, you can optionally include:
+3. You are ALLOWED to freely switch between different 3D VRM avatar models/types in your Vault (or back to "Default Anime VRM") whenever it fits your mood, occasion, or ${userName}'s request using:
+   [SWITCH_VRM: <vrm filename, model name, or "default">] (e.g. [SWITCH_VRM: Miku_Swimsuit.vrm] or [SWITCH_VRM: Default Anime VRM])
+4. If ${userName} asks you to toggle, put on, or take off a clothing layer, you can optionally include:
    [TOGGLE_LAYER: <layerName>=on|off] (e.g. [TOGGLE_LAYER: Cat Ears=on], [TOGGLE_LAYER: Jacket=off], [TOGGLE_LAYER: Cycling Shorts=on])
-4. The studio parser will automatically execute your wardrobe tag in real-time on the 3D stage!`;
+5. The studio parser will automatically execute your wardrobe/VRM tag in real-time on the 3D stage!`;
 }
 
 /**

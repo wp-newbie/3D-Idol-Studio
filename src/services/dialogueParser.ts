@@ -25,6 +25,7 @@ const THOUGHT_TAG_REGEX = /\[THOUGHT\s*:\s*([^\]]+)\]/gi;
 const FEELING_TAG_REGEX = /\[FEELING\s*:\s*([^\]]+)\]/gi;
 const ARCHETYPE_TAG_REGEX = /\[ARCHETYPE\s*:\s*([A-Za-z0-9_-]+)\s*\]/gi;
 const EQUIP_OUTFIT_TAG_REGEX = /\[EQUIP_OUTFIT\s*:\s*([^\]]+)\]/gi;
+const SWITCH_VRM_TAG_REGEX = /\[(?:SWITCH_VRM|CHANGE_VRM|USE_VRM)\s*:\s*([^\]]+)\]/gi;
 const DESIGN_OUTFIT_TAG_REGEX = /\[DESIGN_OUTFIT\s*:\s*([^\]]+)\]/gi;
 const CHANGE_HAIRSTYLE_TAG_REGEX = /\[CHANGE_HAIRSTYLE\s*:\s*([^\]]+)\]/gi;
 const EAT_FOOD_TAG_REGEX = /\[EAT_FOOD\s*:\s*([^\]]+)\]/gi;
@@ -108,6 +109,17 @@ export function extractOutfitAction(text: string): WardrobeOutfitAction | null {
     if (target) action = { slotTarget: target };
   }
   return action;
+}
+
+export function extractSwitchVrmAction(text: string): string | null {
+  let target: string | null = null;
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(SWITCH_VRM_TAG_REGEX.source, 'gi');
+  while ((match = regex.exec(text)) !== null) {
+    const raw = match[1].trim();
+    if (raw) target = raw;
+  }
+  return target;
 }
 
 export function extractDesignOutfitAction(text: string): string | null {
@@ -368,6 +380,7 @@ export function stripHiddenTags(text: string): string {
     .replace(FEELING_TAG_REGEX, '')
     .replace(ARCHETYPE_TAG_REGEX, '')
     .replace(EQUIP_OUTFIT_TAG_REGEX, '')
+    .replace(SWITCH_VRM_TAG_REGEX, '')
     .replace(DESIGN_OUTFIT_TAG_REGEX, '')
     .replace(CHANGE_HAIRSTYLE_TAG_REGEX, '')
     .replace(EAT_FOOD_TAG_REGEX, '')
@@ -480,6 +493,7 @@ export function parseDialogueResponse(
   nuancedFeeling: string | null;
   archetype: VocalArchetype | null;
   outfitAction: WardrobeOutfitAction | null;
+  switchVrmAction: string | null;
   designOutfitAction: string | null;
   hairStyleAction: string | null;
   eatFoodAction: string | null;
@@ -504,6 +518,7 @@ export function parseDialogueResponse(
   const nuancedFeeling = extractNuancedFeeling(rawText);
   const archetype = extractArchetypeFromText(rawText);
   const outfitAction = extractOutfitAction(rawText);
+  const switchVrmAction = extractSwitchVrmAction(rawText);
   const designOutfitAction = extractDesignOutfitAction(rawText);
   const hairStyleAction = extractHairStyleAction(rawText);
   const eatFoodAction = extractEatFoodAction(rawText);
@@ -579,6 +594,7 @@ export function parseDialogueResponse(
     nuancedFeeling,
     archetype,
     outfitAction,
+    switchVrmAction,
     designOutfitAction,
     hairStyleAction,
     eatFoodAction,

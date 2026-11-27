@@ -76,6 +76,67 @@ export interface AiHairStylePlan {
   modelUsed?: string;
 }
 
+export const DEFAULT_SAMPLE_VRM_LABEL = 'Default Anime VRM';
+
+export interface VrmSwitchCandidate {
+  id: string | null; // null === built-in default-anime.vrm
+  label: string;
+  fileName: string;
+  format: 'vrm' | 'glb';
+  isActive: boolean;
+}
+
+export interface AiVrmSwitchPlan {
+  targetModelId: string | null;
+  targetLabel: string;
+  reason: string;
+  source: OutfitEngineSource;
+  modelUsed?: string;
+}
+
+export function listAvailableVrmModels(
+  vaultModels: VaultModelMeta[],
+  activeModelVaultId: string | null | undefined
+): VrmSwitchCandidate[] {
+  const activeId = activeModelVaultId ?? null;
+  const list: VrmSwitchCandidate[] = [
+    {
+      id: null,
+      label: DEFAULT_SAMPLE_VRM_LABEL,
+      fileName: 'default-anime.vrm',
+      format: 'vrm',
+      isActive: activeId === null,
+    },
+  ];
+  for (const m of vaultModels) {
+    if (m.format === 'vrm' || m.format === 'glb') {
+      list.push({
+        id: m.id,
+        label: m.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
+        fileName: m.fileName,
+        format: m.format,
+        isActive: activeId === m.id,
+      });
+    }
+  }
+  return list;
+}
+
+export function doesVrmNameMatchScene(
+  vrmName: string | null | undefined,
+  sceneGarment: GarmentStyleId | null
+): boolean {
+  if (!vrmName || !sceneGarment) return false;
+  const n = vrmName.toLowerCase();
+  if (sceneGarment === 'bath_wrap') return /bath|towel|shower|spa|robe|onsen/.test(n);
+  if (sceneGarment === 'beach_swimsuit') return /swim|beach|bikini|summer|resort|pool|mizugi/.test(n);
+  if (sceneGarment === 'kimono_yukata') return /kimono|yukata|festival|onsen|shrine|miko/.test(n);
+  if (sceneGarment === 'school_blazer') return /school|uniform|blazer|sailor|seifuku|student|academy/.test(n);
+  if (sceneGarment === 'cozy_pajamas') return /pajama|sleep|night|lounge|roomwear|bed/.test(n);
+  if (sceneGarment === 'sporty_tee_leggings') return /sport|gym|yoga|workout|athletic|jersey|track/.test(n);
+  return false;
+}
+
 export interface TimeOccasionBrief {
   phase: CircadianPhase;
   phaseEmoji: string;
@@ -968,12 +1029,41 @@ async function requestLlmOutfitPlan(params: {
 
   const explicitNativeRequest = /\b(default|original|native)\s*(vrm|outfit|clothes|mesh)\b/i.test(prompt);
 
+  // Collect distinct wearable 3D VRM/GLB avatar models (NOT recycled recolored slots of the same VRM!)
+  const activeVaultId = activeSlot?.modelVaultId ?? null;
+  const availableVrms = listAvailableVrmModels(vaultModels, activeVaultId);
+  const alternativeVrmModels: VrmSwitchCandidate[] =
+    allowWholeOutfitSwitch && settings.autoSwitchVrmModels !== false && availableVrms.length > 1
+      ? availableVrms.filter((v) => !v.isActive)
+      : [];
+
   const enforceSceneGarment = (plan: AiOutfitPlan): AiOutfitPlan => {
+    const pickedVrmName = plan.preferredExistingSlot?.trim() || null;
+    const pickedValidAltVrm =
+      pickedVrmName &&
+      alternativeVrmModels.some(
+        (v) =>
+          v.fileName.toLowerCase() === pickedVrmName.toLowerCase() ||
+          v.label.toLowerCase() === pickedVrmName.toLowerCase() ||
+          v.fileName.toLowerCase().includes(pickedVrmName.toLowerCase())
+      )
+        ? pickedVrmName
+        : null;
+
     if (forcedSceneGarment) {
+      // If she picked a dedicated VRM whose filename matches the scene (e.g. Miku_Swimsuit.vrm at the beach!),
+      // show off that VRM's real native outfit! Otherwise keep any chosen VRM swap + apply the scene 3D garment.
+      if (pickedValidAltVrm && doesVrmNameMatchScene(pickedValidAltVrm, forcedSceneGarment)) {
+        return {
+          ...plan,
+          garmentStyle: 'default',
+          preferredExistingSlot: pickedValidAltVrm,
+        };
+      }
       return {
         ...plan,
         garmentStyle: forcedSceneGarment,
-        preferredExistingSlot: null, // never override required bath/swimsuit/school/kimono silhouette with a generic VRM slot
+        preferredExistingSlot: pickedValidAltVrm,
       };
     }
     // Never wear bath wrap or beach swimsuit outside bath/beach scenes!
@@ -986,9 +1076,18 @@ async function requestLlmOutfitPlan(params: {
           fallback.garmentStyle !== 'default'
             ? fallback.garmentStyle
             : 'summer_sundress',
+        preferredExistingSlot: pickedValidAltVrm,
       };
     }
-    // Never lazily stay locked in the VRM's baked-in skirt & long sleeves unless explicitly asked!
+    // If she explicitly chose to switch to a different VRM model type, let that VRM's own look shine!
+    if (pickedValidAltVrm) {
+      return {
+        ...plan,
+        garmentStyle: 'default',
+        preferredExistingSlot: pickedValidAltVrm,
+      };
+    }
+    // Never lazily stay locked in the current VRM's baked-in skirt & long sleeves unless explicitly asked!
     if (plan.garmentStyle === 'default' && !explicitNativeRequest) {
       return {
         ...plan,
@@ -1001,36 +1100,20 @@ async function requestLlmOutfitPlan(params: {
         preferredExistingSlot: null,
       };
     }
-    return plan;
+    return {
+      ...plan,
+      preferredExistingSlot: null,
+    };
   };
   const meshSummary = detectedMeshes
     .map((m) => `${m.category}: ${m.label} (${m.currentColorHex})`)
     .join(', ');
 
-  // Collect any alternative whole-body 3D outfits (custom VRM/GLB models or distinct outfit slots)
-  const alternativeWholeOutfits: string[] = [];
-  if (allowWholeOutfitSwitch) {
-    const activeVaultId =
-      persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId)?.modelVaultId || null;
-    for (const m of vaultModels) {
-      if ((m.format === 'vrm' || m.format === 'glb') && m.id !== activeVaultId) {
-        alternativeWholeOutfits.push(m.fileName);
-      }
-    }
-    for (const s of persona.outfitSlots) {
-      if (s.id !== persona.activeOutfitSlotId && !s.id.startsWith('slot-daily-')) {
-        if (!alternativeWholeOutfits.includes(s.name)) {
-          alternativeWholeOutfits.push(s.name);
-        }
-      }
-    }
-  }
-
   const wholeOutfitRule =
-    alternativeWholeOutfits.length > 0
-      ? `- Optional whole-outfit switch: If one of these saved 3D outfits/VRM models fits the occasion much better than redesigning colors, set "preferredExistingSlot" to its exact name; otherwise set "preferredExistingSlot": null. Saved options: ${alternativeWholeOutfits
-          .slice(0, 10)
-          .map((n) => `"${n}"`)
+    alternativeVrmModels.length > 0
+      ? `- Optional VRM Model Type Switch: You are ALLOWED to switch your entire 3D VRM avatar model to a different type! If one of these other available 3D VRM/GLB models fits the mood, time, or scene well (or you feel like changing VRM types), set "preferredExistingSlot" to its exact filename or label; otherwise set "preferredExistingSlot": null to design a 3D garment silhouette on your current VRM. Available alternative VRM models: ${alternativeVrmModels
+          .slice(0, 12)
+          .map((v) => `"${v.fileName}" (${v.label})`)
           .join(', ')}.`
       : '- Keep "preferredExistingSlot": null.';
 
@@ -1295,14 +1378,14 @@ export async function generateAiOutfit(params: {
     settings: params.settings,
     vaultModels: params.vaultModels,
     activeLifeScene: params.activeLifeScene,
-    allowWholeOutfitSwitch: false,
+    allowWholeOutfitSwitch: params.settings.autoSwitchVrmModels !== false,
     preferLocalFirst: true,
   });
   return materializeOutfitPlan(plan, params.detectedMeshes);
 }
 
 /**
- * Lets the AI character autonomously design her own outfit silhouette & hairstyle (or swap into a saved whole-body VRM outfit)
+ * Lets the AI character autonomously design her own outfit silhouette & hairstyle (or swap into another VRM model type)
  * for the current real-world time of day, mood, and live scene using LM Studio first.
  */
 export async function generateTimeOccasionOutfit(params: {
@@ -1326,8 +1409,8 @@ export async function generateTimeOccasionOutfit(params: {
     settings: params.settings,
     vaultModels: params.vaultModels,
     activeLifeScene: params.activeLifeScene,
-    // Always let her generate a fresh 3D garment silhouette unless explicitly swapping VRM files
-    allowWholeOutfitSwitch: params.allowWholeOutfitSwitch ?? false,
+    allowWholeOutfitSwitch:
+      params.allowWholeOutfitSwitch ?? (params.settings.autoSwitchVrmModels !== false),
     preferLocalFirst: true,
   });
   const payload = await materializeOutfitPlan(plan, params.detectedMeshes);
@@ -1458,4 +1541,133 @@ Output ONLY the JSON object.`;
   }
 
   return fallback;
+}
+
+
+/**
+ * Lets the AI character freely choose which 3D VRM/GLB avatar model type to switch into right now
+ * (across all imported .vrm/.glb models in the Vault + built-in Default Anime VRM) via LM Studio first!
+ */
+export async function planAiVrmModelSwitch(params: {
+  persona: Persona;
+  vaultModels: VaultModelMeta[];
+  activeLifeScene?: ActiveLifeScene | null;
+  promptHint?: string;
+}): Promise<AiVrmSwitchPlan> {
+  const { persona, vaultModels, activeLifeScene = null, promptHint = '' } = params;
+  const activeSlot =
+    persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId) ||
+    persona.outfitSlots[0];
+  const activeVaultId = activeSlot?.modelVaultId ?? null;
+  const candidates = listAvailableVrmModels(vaultModels, activeVaultId);
+  const alternatives = candidates.filter((c) => !c.isActive);
+  const circadian = getCircadianContext();
+
+  // If only 1 VRM exists (just Default Anime VRM), return it cleanly
+  if (alternatives.length === 0) {
+    return {
+      targetModelId: candidates[0]?.id ?? null,
+      targetLabel: candidates[0]?.label ?? DEFAULT_SAMPLE_VRM_LABEL,
+      reason: 'Only one VRM model is currently in the Vault—import more .vrm files so I can switch between them!',
+      source: 'offline-stylist',
+    };
+  }
+
+  const pickOfflineCandidate = (): VrmSwitchCandidate => {
+    const hint = `${promptHint} ${activeLifeScene?.destination?.placeName || ''} ${activeLifeScene?.hobby?.hobbyName || ''}`.toLowerCase();
+    if (hint.trim()) {
+      const tokens = hint.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+      for (const c of alternatives) {
+        const hay = `${c.fileName} ${c.label}`.toLowerCase();
+        if (tokens.some((tok) => hay.includes(tok))) {
+          return c;
+        }
+      }
+    }
+    return alternatives[Math.floor(Math.random() * alternatives.length)];
+  };
+
+  const fallbackCandidate = pickOfflineCandidate();
+
+  const candidateListText = candidates
+    .map(
+      (c, i) =>
+        `  ${i + 1}. "${c.fileName}" (label: "${c.label}")${c.isActive ? ' [CURRENTLY ACTIVE]' : ''}`
+    )
+    .join('\n');
+
+  const sceneSummary = [
+    activeLifeScene?.destination && activeLifeScene.destination.destinationKind !== 'none'
+      ? `Location: ${activeLifeScene.destination.placeName}`
+      : '',
+    activeLifeScene?.hobby ? `Activity: ${activeLifeScene.hobby.hobbyName}` : '',
+    activeLifeScene?.dining ? `Dining: ${activeLifeScene.dining.dishName}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+
+  const systemPrompt = `You are a 3D Anime Virtual Idol freely choosing which 3D VRM avatar model type you want to switch into right now!
+Return ONLY valid raw JSON (no markdown fences, no commentary):
+{
+  "selectedModel": "exact fileName or label from the available VRM models list (prefer switching to a different VRM model than the currently active one!)",
+  "reason": "One short in-character sentence explaining why you chose this VRM type right now"
+}`;
+
+  const userText = `Character: ${persona.name} (${persona.title})
+Mood: ${persona.mood}
+Time: ${circadian.clockText} (${circadian.phaseLabel})
+${sceneSummary ? `Live Scene: ${sceneSummary}` : ''}
+${promptHint.trim() ? `Request / Hint: ${promptHint.trim()}` : 'Pick whichever VRM model type you feel like switching into right now!'}
+Available 3D VRM Models:
+${candidateListText}
+Output ONLY the JSON object.`;
+
+  const localResult = await queryLocalLlmForOutfit({
+    systemPrompt,
+    userText,
+    taskKind: 'wardrobe',
+    mood: persona.mood,
+  });
+
+  if (localResult?.text) {
+    const match = /\{[\s\S]*\}/.exec(localResult.text);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        const rawSel = String(parsed.selectedModel || '').trim().toLowerCase();
+        const resolved =
+          alternatives.find(
+            (c) =>
+              c.fileName.toLowerCase() === rawSel ||
+              c.label.toLowerCase() === rawSel ||
+              (rawSel.length >= 3 &&
+                (c.fileName.toLowerCase().includes(rawSel) ||
+                  c.label.toLowerCase().includes(rawSel) ||
+                  rawSel.includes(c.label.toLowerCase())))
+          ) || fallbackCandidate;
+
+        const reason =
+          typeof parsed.reason === 'string' && parsed.reason.trim()
+            ? parsed.reason.trim().slice(0, 140)
+            : `Switched my VRM model to ${resolved.label} for a fresh ${persona.mood.toLowerCase()} vibe!`;
+
+        return {
+          targetModelId: resolved.id,
+          targetLabel: resolved.label,
+          reason,
+          source: 'local-llm',
+          modelUsed: localResult.modelUsed,
+        };
+      } catch {
+        // fall through
+      }
+    }
+  }
+
+  return {
+    targetModelId: fallbackCandidate.id,
+    targetLabel: fallbackCandidate.label,
+    reason: `Switched my VRM type to ${fallbackCandidate.label} to match my ${persona.mood.toLowerCase()} mood!`,
+    source: 'offline-stylist',
+  };
 }

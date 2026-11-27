@@ -234,6 +234,7 @@ export interface AutonomousToolCallEvent {
     | 'move_on_stage'
     | 'travel_to_location'
     | 'switch_own_outfit'
+    | 'switch_vrm_model'
     | 'trigger_emote'
     | 'adjust_sleeping_position'
     | 'change_posture'
@@ -527,6 +528,8 @@ export interface StudioSettings {
   autoReactOnOutfitChange: boolean;
   /** Autonomously design & change into a fitting outfit via Local LLM when time of day / occasion shifts */
   autoDressByTimeOccasion?: boolean;
+  /** Allow AI character to autonomously switch between imported .VRM/.GLB avatar models & Default VRM */
+  autoSwitchVrmModels?: boolean;
   /** Autonomously eat, do hobbies, study in school, shower/brush teeth, or travel based on her live mood & needs */
   autoLifeByMood?: boolean;
   offlineVoiceOnly: boolean;

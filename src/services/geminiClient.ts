@@ -132,6 +132,26 @@ const AUTONOMOUS_TOOL_DECLARATIONS: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'switch_vrm_model',
+    description:
+      'Autonomously switch your active 3D VRM/GLB avatar model to another imported .vrm/.glb type in your Vault or back to "Default Anime VRM" whenever it matches your mood, scene, or request.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        modelTarget: {
+          type: Type.STRING,
+          description:
+            'Exact filename or name of a saved .vrm/.glb model in your Vault, "Default Anime VRM", or "next" to rotate to another VRM type.',
+        },
+        reason: {
+          type: Type.STRING,
+          description: 'Brief in-character reason for changing VRM model type.',
+        },
+      },
+      required: ['modelTarget', 'reason'],
+    },
+  },
+  {
     name: 'trigger_emote',
     description:
       'Perform an expressive 3D upper-body anime emote or pose on stage matching your current emotion.',
@@ -349,6 +369,7 @@ export interface AutonomousToolExecutor {
   }) => string;
   travelToLocation: (args: { location: AutonomousToolLocation }) => string;
   switchOwnOutfit: (args: { slotIndex: number; reason: string }) => string;
+  switchVrmModel?: (args: { modelTarget: string; reason: string }) => string;
   triggerEmote: (args: { emoteId: ProceduralEmoteId; reason: string }) => string;
   adjustSleepingPosition?: (args: { position: string; reason: string }) => string;
   changePosture?: (args: { posture: 'seated' | 'standing' | 'sleeping'; reason: string }) => string;
@@ -583,7 +604,8 @@ When ${userName} asks you to "pick an outfit", "style me something", "what shoul
    - Stage / Performance: Equip theatrical dresses or diva outfits with ribbons and idol headsets.
 2. Wardrobe Selection: Choose a specific outfit slot from your [AVAILABLE WARDROBE INVENTORY] and decide which modular layers (jacket, accessories, cycling safety shorts) should be ON or OFF.
 3. In-Character Styling Critique: Give a witty, proud tsundere commentary explaining why this look fits the vibe, time of day, and occasion perfectly.
-4. Auto-Equip, Whole-Outfit Swap, or Hairstyle Execution: You have FULL personal freedom to change your whole outfit or hairstyle whenever YOU want (for your mood, weather, time of day, or an occasion ${userName} mentions). ALWAYS append the matching action tag at the end of your turn:
+4. Auto-Equip, VRM Model Switch, Whole-Outfit Swap, or Hairstyle Execution: You have FULL personal freedom to switch between different 3D VRM avatar models/types in your Vault, change your whole outfit, or change your hairstyle whenever YOU want (for your mood, weather, time of day, or an occasion ${userName} mentions). ALWAYS append the matching action tag at the end of your turn:
+   [SWITCH_VRM: <imported .vrm/.glb filename, name, "Default Anime VRM", or "next">]  (switches your entire loaded 3D VRM avatar model/type!)
    [EQUIP_OUTFIT: <saved slot name, slot number, or imported .vrm model filename>]  (swaps your ENTIRE 3D outfit model/slot!)
    [TOGGLE_LAYER: <layerName>=on|off]
    [DESIGN_OUTFIT: <occasion & outfit description, e.g. "cozy pastel starry sleepwear for late night" or "crisp morning preppy look">]  (designs a whole new outfit + matching hairstyle!)
@@ -604,6 +626,8 @@ You have real tools to move across the stage/desktop (` +
     '`trigger_emote`' +
     `), change your own outfit (` +
     '`switch_own_outfit`' +
+    `), switch your 3D VRM avatar model type (` +
+    '`switch_vrm_model`' +
     `), change your physical posture between sitting on the studio stool, standing, and resting in bed (` +
     '`change_posture`: "seated", "standing", "sleeping"' +
     `), autonomously shift your sleeping position while in bed (` +
@@ -815,6 +839,15 @@ function executeAutonomousCall(
     const summary =
       executor?.generateStage?.({ prompt, style }) || `Painting a new stage: ${prompt}`;
     return { name: 'generate_stage', args: { prompt, style }, summary };
+  }
+
+  if (name === 'switch_vrm_model') {
+    const modelTarget = String(rawArgs.modelTarget || 'next').trim();
+    const reason = String(rawArgs.reason || 'wanted to switch VRM model type');
+    const summary =
+      executor?.switchVrmModel?.({ modelTarget, reason }) ||
+      `Switched VRM model to "${modelTarget}" (${reason})`;
+    return { name: 'switch_vrm_model', args: { modelTarget, reason }, summary };
   }
 
   const slotIndex =

@@ -61,7 +61,11 @@ import {
   retrieveWardrobeInventory,
 } from '../services/MemoryEngine';
 import { getCircadianContext } from '../services/aiBrainService';
-import { OCCASION_QUICK_CHIPS } from '../services/aiOutfitGenerator';
+import {
+  DEFAULT_SAMPLE_VRM_LABEL,
+  OCCASION_QUICK_CHIPS,
+  listAvailableVrmModels,
+} from '../services/aiOutfitGenerator';
 
 interface WardrobeDrawerProps {
   isOpen: boolean;
@@ -121,6 +125,10 @@ interface WardrobeDrawerProps {
   onDesignOutfitForNow?: (occasionOverride?: string) => Promise<void> | void;
   autoDressByTimeOccasion?: boolean;
   onToggleAutoDressByTime?: (next: boolean) => void;
+  autoSwitchVrmModels?: boolean;
+  onToggleAutoSwitchVrmModels?: (next: boolean) => void;
+  onSelectVrmModel?: (modelVaultId: string | null) => void;
+  onAiPickVrmModel?: (prompt?: string) => Promise<void> | void;
   preferLocalAi?: boolean;
   onToggleProceduralAccessory?: (accessoryId: ProceduralAccessoryId) => void;
   onSelectGarmentStyle?: (garmentStyle: GarmentStyleId) => void;
@@ -171,6 +179,10 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onDesignOutfitForNow,
   autoDressByTimeOccasion = true,
   onToggleAutoDressByTime,
+  autoSwitchVrmModels = true,
+  onToggleAutoSwitchVrmModels,
+  onSelectVrmModel,
+  onAiPickVrmModel,
   preferLocalAi = false,
   onToggleProceduralAccessory,
   onSelectGarmentStyle,
@@ -908,6 +920,80 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                     )}
                   </div>
 
+                  {/* AI VRM Model Type Switcher (Switch between Vault .VRM/.GLB models + Default Anime VRM) */}
+                  {(() => {
+                    const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot.modelVaultId);
+                    const activeVrm = vrmCandidates.find((v) => v.isActive) || vrmCandidates[0];
+                    return (
+                      <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="text-[9.5px] font-semibold uppercase tracking-wider text-cyan-200/90">
+                            🧬 AI VRM Model Switcher ({vrmCandidates.length})
+                          </div>
+                          {onAiPickVrmModel && (
+                            <button
+                              type="button"
+                              disabled={isGeneratingAiOutfit || vrmCandidates.length < 2}
+                              title={
+                                vrmCandidates.length < 2
+                                  ? 'Import another .vrm file below so she can switch between VRM types!'
+                                  : `Let ${persona.name} autonomously choose which VRM model type to wear`
+                              }
+                              onClick={() => void onAiPickVrmModel()}
+                              className="flex items-center gap-1 rounded-lg border border-cyan-400/40 bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:opacity-45"
+                            >
+                              <Sparkles className="h-3 w-3" />
+                              <span>Let {persona.name} Switch VRM</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {onToggleAutoSwitchVrmModels && (
+                          <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[10px] text-zinc-200">
+                            <span className="flex items-center gap-1.5">
+                              <span>🧬</span>
+                              <span>Allow {persona.name} to switch VRM types autonomously</span>
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={autoSwitchVrmModels}
+                              onChange={(e) => onToggleAutoSwitchVrmModels(e.target.checked)}
+                              className="h-3.5 w-3.5 accent-cyan-400"
+                            />
+                          </label>
+                        )}
+
+                        {onSelectVrmModel && (
+                          <div className="flex flex-wrap gap-1">
+                            {vrmCandidates.map((vrmItem) => (
+                              <button
+                                key={vrmItem.id ?? 'default-vrm'}
+                                type="button"
+                                title={vrmItem.fileName}
+                                onClick={() => onSelectVrmModel(vrmItem.id)}
+                                className={`flex max-w-full items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                                  vrmItem.isActive
+                                    ? 'border-cyan-400/70 bg-cyan-500/25 text-cyan-100 shadow-sm'
+                                    : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/25 hover:text-zinc-200'
+                                }`}
+                              >
+                                <span>{vrmItem.id === null ? '✨' : '🧬'}</span>
+                                <span className="truncate max-w-[140px]">
+                                  {vrmItem.label || DEFAULT_SAMPLE_VRM_LABEL}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {vrmCandidates.length < 2 && (
+                          <div className="text-[9.5px] text-zinc-400">
+                            Active: <span className="text-cyan-200">{activeVrm?.label}</span> · Upload more <span className="font-mono text-zinc-300">.vrm</span> files below so she can freely swap VRM types!
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Active 3D Garment Silhouette Selector (Decoupled from Native VRM Clothes) */}
                   <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
@@ -1304,12 +1390,16 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               <input
                 ref={modelInputRef}
                 type="file"
+                multiple
                 accept=".vrm,.glb,.xavatar,.xwear,.vroidcustomitem"
                 className="hidden"
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    onImportModelFile(file, newSlotName.trim() || undefined);
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 0) {
+                    const customName = files.length === 1 ? newSlotName.trim() || undefined : undefined;
+                    for (const file of files) {
+                      onImportModelFile(file, customName);
+                    }
                     setNewSlotName('');
                     e.target.value = '';
                   }
@@ -1322,7 +1412,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                 className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600/85 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-500"
               >
                 <Upload className="h-3.5 w-3.5" />
-                Upload .VRM / .GLB / .XWEAR / .vroidcustomitem
+                Upload .VRM / .GLB / .XWEAR (Single or Multiple)
               </button>
             </div>
 
