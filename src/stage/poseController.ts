@@ -7,10 +7,12 @@ import {
   applyCrossedArms,
   applyDiningArms,
   applyHobbyActivityArms,
+  applySeatedLapArms,
   expSmooth,
   getDiningAnimationFrame,
   getHobbyActivityFrame,
 } from './naturalArmPose';
+import { getVrmBoneSigns } from './vrmCoords';
 
 type PoseBoneName =
   | 'hips'
@@ -245,20 +247,15 @@ export class AvatarPoseController {
     const humanoid = vrm.humanoid;
     if (!humanoid) return;
 
-    const isVrm0 = vrm.meta?.metaVersion === '0';
-    // Normalized bone right-handed convention in @pixiv/three-vrm v3:
-    // - VRM 1.0 faces +Z in normalized bone space:
-    //   * Raising thigh forward (+Z) is NEGATIVE X rotation (-Math.PI * 0.48)
-    //   * Bending knee downward back to -Y is POSITIVE X rotation (+Math.PI * 0.48)
-    //   * Lowering left arm (+X -> -Y) is NEGATIVE Z rotation (-1.18)
-    // - VRM 0.x faces -Z in normalized bone space (rotated 180° on vrm.scene by rotateVRM0):
-    //   * Raising thigh forward (-Z) is POSITIVE X rotation (+Math.PI * 0.48)
-    //   * Bending knee downward back to -Y is NEGATIVE X rotation (-Math.PI * 0.48)
-    //   * Lowering left arm (-X -> -Y) is POSITIVE Z rotation (+1.18)
-    const forwardSign = isVrm0 ? 1 : -1;
-    // Right-hand rule: upward-pointing spine/chest/upperChest bend FORWARD with opposite X sign of downward-pointing legs!
-    const torsoForwardSign = isVrm0 ? -1 : 1;
-    const armDownSign = isVrm0 ? 1 : -1;
+    const {
+      legForwardSign: forwardSign,
+      kneeFlexSign,
+      torsoForwardSign,
+      armDownSign,
+      rollSign,
+      leftArmForwardY,
+      rightArmForwardY,
+    } = getVrmBoneSigns(vrm);
 
     const breath = Math.sin(elapsed * Math.max(1.4, bodyLang.breathingRate || 2.0));
     const gentleSway = Math.sin(elapsed * (isMusicPlaying ? 2.4 : 0.75));
@@ -289,7 +286,7 @@ export class AvatarPoseController {
 
     // 2. Seated bone target rotations (relative normalized offsets only — never overrides avatarRoot.rotation.y)
     const thighBendX = forwardSign * (Math.PI * 0.48); // ~86° forward toward knees
-    const kneeBendX = -forwardSign * (Math.PI * 0.48); // ~86° downward so calves hang vertically
+    const kneeBendX = kneeFlexSign * (Math.PI * 0.48); // ~86° downward so calves hang vertically
     const footLevelX = forwardSign * 0.05; // keep soles parallel to floor
 
     const isStudyingSeated =
@@ -315,7 +312,7 @@ export class AvatarPoseController {
       hips: {
         x: 0,
         y: Math.sin(elapsed * 0.65) * 0.014,
-        z: bodyLang.hipWeightShift * 0.45,
+        z: rollSign * bodyLang.hipWeightShift * 0.45,
       },
       spine: {
         // Comfortable waist/lumbar forward flex during seated dining & studying so neck never cranes alone!
@@ -324,7 +321,7 @@ export class AvatarPoseController {
           torsoForwardSign * (bodyLang.spineLeanX * 0.55) +
           (isMusicPlaying ? torsoForwardSign * musicBeat * 0.04 : 0),
         y: gentleSway * (isMusicPlaying ? 0.06 : 0.018) + activityTwistY * 0.6,
-        z: isMusicPlaying ? Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
+        z: isMusicPlaying ? rollSign * Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
       },
       chest: {
         // Gentle upper-thoracic follow-through + breathing sine wave
@@ -340,15 +337,15 @@ export class AvatarPoseController {
         y: 0,
         z: 0,
       },
-      // Clavicle / scapula forward protraction (clamped <= 0.08 rad) to prevent deltoid pinching
+      // Clavicle / scapula forward protraction (clamped <= 0.08 rad) — leftArmForwardY=-1, rightArmForwardY=+1 on BOTH VRM 0.x & 1.0!
       leftShoulder: {
         x: 0,
-        y: -armDownSign * clavicleFwd,
+        y: leftArmForwardY * clavicleFwd,
         z: -armDownSign * clavicleReliefZ,
       },
       rightShoulder: {
         x: 0,
-        y: armDownSign * clavicleFwd,
+        y: rightArmForwardY * clavicleFwd,
         z: armDownSign * clavicleReliefZ,
       },
       // Legs: 90° forward seated bend with knees together (modest anime posture)
@@ -434,11 +431,9 @@ export class AvatarPoseController {
       'rightHand',
     ]);
 
+    const useVectorArms = true;
     for (const boneName of POSE_BONES) {
-      if (
-        (useSeatedDining || useSeatedHobby || useSeatedColdRub || useSeatedCrossedArms) &&
-        vectorArmBones.has(boneName)
-      ) {
+      if (useVectorArms && vectorArmBones.has(boneName)) {
         continue;
       }
       const s = this.smoothRot[boneName];
@@ -453,7 +448,7 @@ export class AvatarPoseController {
       }
     }
 
-    if (useSeatedDining || useSeatedHobby || useSeatedColdRub || useSeatedCrossedArms) {
+    if (useVectorArms) {
       const armSmooth = snap ? 1 : expSmooth(8.0, dt);
       if (useSeatedDining) {
         applyDiningArms(vrm, elapsed, armSmooth);
@@ -461,8 +456,15 @@ export class AvatarPoseController {
         applyHobbyActivityArms(vrm, activeHobbyKind, elapsed, armSmooth);
       } else if (useSeatedColdRub) {
         applyColdRubArms(vrm, alpha, elapsed, bodyLang.coldRubArms);
-      } else {
+      } else if (useSeatedCrossedArms) {
         applyCrossedArms(vrm, alpha, { breath });
+      } else {
+        // Convention-free seated lap arms (identical on VRM 0.x & 1.0, ~18° outward carrying angle!)
+        applySeatedLapArms(vrm, armSmooth, {
+          breath,
+          droop: bodyLang.shoulderDroop,
+          fidget: bodyLang.shoulderFidget,
+        });
       }
       for (const boneName of vectorArmBones) {
         const node = humanoid.getNormalizedBoneNode(boneName as VRMHumanBoneName);

@@ -84,6 +84,7 @@ import {
   ROAM_BEHAVIOR_LABELS,
 } from '../stage/roamController';
 import { AvatarPoseController, STUDIO_SEAT_HEIGHT } from '../stage/poseController';
+import { getVrmBoneSigns, normalizeVrmOrientation } from '../stage/vrmCoords';
 import {
   expSmooth,
   getDiningAnimationFrame,
@@ -312,8 +313,7 @@ function applyPoseAndMicroReactions(params: {
   const humanoid = vrm.humanoid;
   if (!humanoid) return;
 
-  const isVrm0 = vrm.meta?.metaVersion === '0';
-  const armSign = isVrm0 ? 1 : -1;
+  const { armDownSign: armSign, torsoForwardSign, rollSign } = getVrmBoneSigns(vrm);
   const swaySpeed = isMusicPlaying ? 3.2 : 1.35;
   const swayAmp = isMusicPlaying ? 0.05 + musicBass * 0.08 : 0.022;
   const sway = Math.sin(elapsed * swaySpeed) * swayAmp;
@@ -341,20 +341,20 @@ function applyPoseAndMicroReactions(params: {
 
   let leftUpperZ = armSign * (1.22 + sway);
   let rightUpperZ = -armSign * (1.22 - sway);
-  let leftUpperX = isMusicPlaying ? -0.03 - musicBeat * 0.12 : -0.03;
-  let rightUpperX = isMusicPlaying ? -0.03 - musicBeat * 0.12 : -0.03;
-  let leftUpperY = 0.02;
-  let rightUpperY = -0.02;
+  let leftUpperX = 0;
+  let rightUpperX = 0;
+  let leftUpperY = isMusicPlaying ? -0.05 - musicBeat * 0.12 : -0.04;
+  let rightUpperY = isMusicPlaying ? 0.05 + musicBeat * 0.12 : 0.04;
   let leftLowerZ = armSign * 0.04;
   let rightLowerZ = -armSign * 0.04;
-  let leftLowerX = 0.10;
-  let rightLowerX = 0.10;
-  let leftLowerY = -0.16;
-  let rightLowerY = 0.16;
+  let leftLowerX = 0;
+  let rightLowerX = 0;
+  let leftLowerY = -0.18;
+  let rightLowerY = 0.18;
 
   const breath = Math.sin(elapsed * 1.9);
-  const musicSwayZ = isMusicPlaying ? Math.sin(elapsed * 2.4) * (0.035 + musicBass * 0.05) : 0;
-  let spineX = breath * 0.012 + (isMusicPlaying ? musicBeat * 0.04 : 0);
+  const musicSwayZ = isMusicPlaying ? rollSign * Math.sin(elapsed * 2.4) * (0.035 + musicBass * 0.05) : 0;
+  let spineX = torsoForwardSign * (breath * 0.012 + (isMusicPlaying ? musicBeat * 0.04 : 0));
   let spineY = Math.sin(elapsed * (isMusicPlaying ? 1.8 : 0.55)) * (isMusicPlaying ? 0.05 : 0.018);
   let spineZ = musicSwayZ;
   let targetContainerZ = 0;
@@ -362,25 +362,25 @@ function applyPoseAndMicroReactions(params: {
 
   if (reaction && reactionWeight > 0) {
     if (reaction.zone === 'outfit_tap') {
-      leftUpperZ = THREE.MathUtils.lerp(leftUpperZ, armSign * 0.72, reactionWeight);
-      rightUpperZ = THREE.MathUtils.lerp(rightUpperZ, -armSign * 0.72, reactionWeight);
-      leftUpperX = THREE.MathUtils.lerp(leftUpperX, -0.42, reactionWeight);
-      rightUpperX = THREE.MathUtils.lerp(rightUpperX, -0.42, reactionWeight);
-      leftLowerY = THREE.MathUtils.lerp(leftLowerY, 1.05, reactionWeight);
-      rightLowerY = THREE.MathUtils.lerp(rightLowerY, -1.05, reactionWeight);
-      spineX -= 0.06 * reactionWeight;
+      leftUpperZ = THREE.MathUtils.lerp(leftUpperZ, armSign * 0.78, reactionWeight);
+      rightUpperZ = THREE.MathUtils.lerp(rightUpperZ, -armSign * 0.78, reactionWeight);
+      leftUpperY = THREE.MathUtils.lerp(leftUpperY, -0.42, reactionWeight);
+      rightUpperY = THREE.MathUtils.lerp(rightUpperY, 0.42, reactionWeight);
+      leftLowerY = THREE.MathUtils.lerp(leftLowerY, -1.05, reactionWeight);
+      rightLowerY = THREE.MathUtils.lerp(rightLowerY, 1.05, reactionWeight);
+      spineX -= torsoForwardSign * 0.06 * reactionWeight;
       targetContainerZ = -0.14 * reactionWeight;
     } else if (reaction.zone === 'headpat') {
-      spineX += 0.07 * reactionWeight;
+      spineX += torsoForwardSign * 0.07 * reactionWeight;
       targetContainerZ = 0.04 * reactionWeight;
     } else if (reaction.zone === 'poke') {
       const flinch = Math.sin(Math.min(1, reactionAge * 4.5) * Math.PI) * reactionWeight;
-      spineZ = -0.09 * flinch;
+      spineZ = -rollSign * 0.09 * flinch;
       spineY = -0.1 * reactionWeight;
       targetContainerX = 0.03 * flinch;
     } else if (reaction.zone === 'hair_tug') {
       const bounce = Math.sin(reactionAge * 24) * Math.exp(-reactionAge * 2.8);
-      spineZ = bounce * 0.07;
+      spineZ = rollSign * bounce * 0.07;
       targetContainerX = bounce * 0.025;
     }
   }
@@ -1557,9 +1557,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           smoothPitch = THREE.MathUtils.lerp(smoothPitch, targetPitch, headLerp);
           smoothRoll = THREE.MathUtils.lerp(smoothRoll, targetRoll, headLerp);
 
-          const isVrm0 = vrm.meta?.metaVersion === '0';
-          // Right-hand rule: upward-pointing torso bones (spine, chest, upperChest) bend FORWARD with -X on VRM 0.x and +X on VRM 1.0!
-          const torsoForwardSign = isVrm0 ? -1 : 1;
+          const { torsoForwardSign, rollSign } = getVrmBoneSigns(vrm);
           const spineBone = vrm.humanoid?.getNormalizedBoneNode('spine');
           const chestBone = vrm.humanoid?.getNormalizedBoneNode('chest');
           const upperChestBone = vrm.humanoid?.getNormalizedBoneNode('upperChest');
@@ -1572,15 +1570,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               neckBone.rotation.x = THREE.MathUtils.lerp(neckBone.rotation.x, 0, headLerp);
             }
             headBone.rotation.y = smoothYaw;
-            headBone.rotation.x = smoothPitch;
-            headBone.rotation.z = smoothRoll;
+            headBone.rotation.x = torsoForwardSign * smoothPitch;
+            headBone.rotation.z = rollSign * smoothRoll;
           } else {
             // Distribute downward/upward gaze pitch across the FULL upper kinetic chain:
             // - chest / upperChest: ~28% of pitch (+ subtle lumbar spine flex when gazing down!)
             // - neck: ~35%, safely clamped to [-0.32, 0.28] rad
             // - head: ~37% with chin-crowding protection so jawline ALWAYS clears choker/collar!
             // Both poseController & roamController overwrite spine/chest/upperChest every frame (zero accumulation!)
-            // and hard anatomical clamps guarantee the upper body can NEVER bend backwards unexpectedly.
+            // and canonical torsoForwardSign guarantees chin-down & forward-lean match identically on VRM 0.x & 1.0!
             const chestPitchShare = THREE.MathUtils.clamp(smoothPitch * 0.28, -0.12, 0.14);
             if (!activeEmote && !activeReaction && Math.abs(chestPitchShare) > 0.001) {
               if (upperChestBone && chestBone) {
@@ -1621,13 +1619,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
             if (neckBone) {
               neckBone.rotation.y = smoothYaw * 0.4;
-              neckBone.rotation.x = clampedNeckPitch;
-              neckBone.rotation.z = smoothRoll * 0.35;
+              neckBone.rotation.x = torsoForwardSign * clampedNeckPitch;
+              neckBone.rotation.z = rollSign * smoothRoll * 0.35;
             }
             if (headBone) {
               headBone.rotation.y = smoothYaw * 0.6;
-              headBone.rotation.x = clampedHeadPitch;
-              headBone.rotation.z = smoothRoll * 0.65;
+              headBone.rotation.x = torsoForwardSign * clampedHeadPitch;
+              headBone.rotation.z = rollSign * smoothRoll * 0.65;
             }
           }
 
@@ -1875,12 +1873,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           if (vrm) {
             VRMUtils.removeUnnecessaryVertices(gltf.scene);
             VRMUtils.combineSkeletons(gltf.scene);
-            // Explicitly normalize VRM forward axis to +Z by spec version
-            if (vrm.meta?.metaVersion === '0') {
-              VRMUtils.rotateVRM0(vrm);
-            } else {
-              vrm.scene.rotation.set(0, 0, 0);
-            }
+            // Explicitly normalize VRM forward axis to +Z across both VRM 0.x and VRM 1.0
+            normalizeVrmOrientation(vrm);
             if (vrm.lookAt && lookAtTargetRef.current) {
               vrm.lookAt.target = lookAtTargetRef.current;
             }
@@ -2176,8 +2170,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             if (cancelled) continue;
 
             const guestVrm = gltf.userData.vrm as VRM | undefined;
-            if (guestVrm && guestVrm.meta?.metaVersion === '0') {
-              VRMUtils.rotateVRM0(guestVrm);
+            if (guestVrm) {
+              normalizeVrmOrientation(guestVrm);
             }
             const sceneRoot = guestVrm ? guestVrm.scene : gltf.scene;
             sceneRoot.traverse((obj) => {

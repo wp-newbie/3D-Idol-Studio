@@ -7,12 +7,14 @@ import {
   applyCrossedArms,
   applyHobbyActivityArms,
   applyNaturalArms,
+  applySeatedLapArms,
   applyShoulderStretchArms,
   DEFAULT_NATURAL_ARMS,
   expSmooth,
   getAnatomicalStretchFrame,
   getHobbyActivityFrame,
 } from './naturalArmPose';
+import { getVrmBoneSigns } from './vrmCoords';
 
 export interface RoamFrameStatus {
   normX: number;
@@ -476,8 +478,13 @@ export class AutonomousRoamController {
 
     // 3. Smoothly interpolate EVERY tracked bone (zero snapping!)
     if (vrm?.humanoid && !hasActiveReactionOrEmote) {
-      const isVrm0 = vrm.meta?.metaVersion === '0';
-      const armSign = isVrm0 ? 1 : -1;
+      const {
+        torsoForwardSign,
+        legForwardSign,
+        kneeFlexSign,
+        armDownSign: armSign,
+        rollSign,
+      } = getVrmBoneSigns(vrm);
 
       const breath = Math.sin(elapsed * bodyLang.breathingRate);
       const swaySpeed = isMusicPlaying ? 3.2 : 1.3;
@@ -486,27 +493,28 @@ export class AutonomousRoamController {
 
       const targets: Record<TrackedBone, { x: number; y: number; z: number }> = {
         hips: {
-          x: isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.035 + musicBeat * 0.045) : 0,
+          x: isMusicPlaying ? torsoForwardSign * Math.sin(elapsed * 2.8) * (0.035 + musicBeat * 0.045) : 0,
           y: isMusicPlaying
             ? Math.abs(Math.sin(elapsed * 5.6)) * (0.025 + musicBeat * 0.04)
             : Math.sin(elapsed * 0.7) * 0.015,
-          z: isMusicPlaying ? Math.sin(elapsed * 2.8) * 0.08 : bodyLang.hipWeightShift * 0.45,
+          z: isMusicPlaying
+            ? rollSign * Math.sin(elapsed * 2.8) * 0.08
+            : rollSign * bodyLang.hipWeightShift * 0.45,
         },
         spine: {
           x:
-            breath * 0.012 +
-            bodyLang.spineLeanX * 0.35 +
-            (isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0),
+            torsoForwardSign * (breath * 0.012 + bodyLang.spineLeanX * 0.35) +
+            (isMusicPlaying ? torsoForwardSign * Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0),
           y: Math.sin(elapsed * (isMusicPlaying ? 2.8 : 0.55)) * (isMusicPlaying ? 0.08 : 0.018),
-          z: isMusicPlaying ? Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0,
+          z: isMusicPlaying ? rollSign * Math.sin(elapsed * 2.8) * (0.04 + musicBass * 0.06) : 0,
         },
         chest: {
-          x: breath * 0.015 + bodyLang.spineLeanX * 0.22,
+          x: torsoForwardSign * (breath * 0.015 + bodyLang.spineLeanX * 0.22),
           y: 0,
           z: 0,
         },
         upperChest: {
-          x: breath * 0.01,
+          x: torsoForwardSign * breath * 0.01,
           y: 0,
           z: 0,
         },
@@ -570,61 +578,46 @@ export class AutonomousRoamController {
       };
 
       if (this.isDragging) {
-        // Cute surprised/flustered Shimeji dangle pose while picked up!
+        // Cute surprised/flustered Shimeji dangle pose while picked up! (Canonical signs for VRM 0.x & 1.0)
         const kick = Math.sin(elapsed * 11.5) * 0.24;
         targets.leftUpperArm.z = armSign * 0.48;
         targets.rightUpperArm.z = -armSign * 0.48;
-        targets.leftUpperArm.x = -0.32;
-        targets.rightUpperArm.x = -0.32;
-        targets.leftLowerArm.y = 0.65;
-        targets.rightLowerArm.y = -0.65;
-        targets.leftUpperLeg.x = 0.28 + kick;
-        targets.rightUpperLeg.x = 0.28 - kick;
-        targets.leftLowerLeg.x = -0.45 - Math.max(0, kick);
-        targets.rightLowerLeg.x = -0.45 - Math.max(0, -kick);
+        targets.leftUpperArm.y = -0.32;
+        targets.rightUpperArm.y = 0.32;
+        targets.leftLowerArm.y = -0.65;
+        targets.rightLowerArm.y = 0.65;
+        targets.leftUpperLeg.x = legForwardSign * (0.28 + kick);
+        targets.rightUpperLeg.x = legForwardSign * (0.28 - kick);
+        targets.leftLowerLeg.x = kneeFlexSign * (0.45 + Math.max(0, kick));
+        targets.rightLowerLeg.x = kneeFlexSign * (0.45 + Math.max(0, -kick));
       } else if (isMoving) {
         const swing = Math.sin(this.walkPhase) * 0.36;
         const kneeL = Math.max(0, -Math.cos(this.walkPhase)) * 0.44;
         const kneeR = Math.max(0, Math.cos(this.walkPhase)) * 0.44;
-        targets.hips.z = Math.sin(this.walkPhase) * 0.048;
+        targets.hips.z = rollSign * Math.sin(this.walkPhase) * 0.048;
         targets.hips.y = Math.cos(this.walkPhase) * 0.06;
-        targets.leftUpperLeg.x = swing;
-        targets.rightUpperLeg.x = -swing;
-        targets.leftLowerLeg.x = -kneeL;
-        targets.rightLowerLeg.x = -kneeR;
-        targets.leftUpperArm.x = -0.03 - swing * 0.55;
-        targets.rightUpperArm.x = -0.03 + swing * 0.55;
-        targets.leftLowerArm.x = 0.10 + Math.max(0, -swing) * 0.22;
-        targets.rightLowerArm.x = 0.10 + Math.max(0, swing) * 0.22;
+        targets.leftUpperLeg.x = legForwardSign * swing;
+        targets.rightUpperLeg.x = -legForwardSign * swing;
+        targets.leftLowerLeg.x = kneeFlexSign * kneeL;
+        targets.rightLowerLeg.x = kneeFlexSign * kneeR;
+        targets.leftUpperArm.y = -0.05 + swing * 0.48;
+        targets.rightUpperArm.y = 0.05 + swing * 0.48;
+        targets.leftLowerArm.y = -0.14 - Math.max(0, -swing) * 0.24;
+        targets.rightLowerArm.y = 0.14 + Math.max(0, swing) * 0.24;
       } else if (this.behavior === 'sit_taskbar') {
-        const forwardSign = isVrm0 ? 1 : -1;
         // Modest, grounded sitting posture on her 3D AI Chair (thighs flush at y=0.45m, knees at ~86°, feet at y=0)
+        // Arms are solved convention-free via applySeatedLapArms below!
         const gentleSway = Math.sin(elapsed * 1.6) * 0.03;
-        targets.leftUpperLeg.x = forwardSign * (Math.PI * 0.47);
-        targets.rightUpperLeg.x = forwardSign * (Math.PI * 0.47);
+        targets.leftUpperLeg.x = legForwardSign * (Math.PI * 0.47);
+        targets.rightUpperLeg.x = legForwardSign * (Math.PI * 0.47);
         targets.leftUpperLeg.z = armSign * 0.09; // Inward adduction: brings left knee to centerline
         targets.rightUpperLeg.z = -armSign * 0.09; // Inward adduction: brings right knee to centerline
-        targets.leftUpperLeg.y = forwardSign * 0.035; // Slight internal rotation keeps thighs pressed together
-        targets.rightUpperLeg.y = -forwardSign * 0.035;
-        targets.leftLowerLeg.x = -forwardSign * (Math.PI * 0.47 + gentleSway);
-        targets.rightLowerLeg.x = -forwardSign * (Math.PI * 0.47 - gentleSway);
+        targets.leftUpperLeg.y = legForwardSign * 0.035; // Slight internal rotation keeps thighs pressed together
+        targets.rightUpperLeg.y = -legForwardSign * 0.035;
+        targets.leftLowerLeg.x = kneeFlexSign * (Math.PI * 0.47 + gentleSway);
+        targets.rightLowerLeg.x = kneeFlexSign * (Math.PI * 0.47 - gentleSway);
         targets.leftLowerLeg.z = -armSign * 0.02; // Calves and ankles stay together
         targets.rightLowerLeg.z = armSign * 0.02;
-        // Resting hands neatly down forward on lap / thighs (never bent backwards)
-        targets.leftUpperArm.x = -0.12;
-        targets.rightUpperArm.x = -0.12;
-        targets.leftUpperArm.z = armSign * 1.25;
-        targets.rightUpperArm.z = -armSign * 1.25;
-        targets.leftLowerArm.x = 0.35;
-        targets.rightLowerArm.x = 0.35;
-        targets.leftLowerArm.y = -0.35;
-        targets.rightLowerArm.y = 0.35;
-        targets.leftLowerArm.z = armSign * 0.12;
-        targets.rightLowerArm.z = -armSign * 0.12;
-        targets.leftHand.x = 0.08;
-        targets.rightHand.x = 0.08;
-        targets.leftHand.z = armSign * 0.04;
-        targets.rightHand.z = -armSign * 0.04;
       } else if (bodyLang.coldRubArms > 0.25 && !isSleeping) {
         // Solved convention-free in character frame below via applyColdRubArms
       } else if (
@@ -632,28 +625,23 @@ export class AutonomousRoamController {
         (this.behavior === 'crossed_arms_wait' || bodyLang.armsCrossTension > 0.35)
       ) {
         // Solved convention-free in character frame below via applyCrossedArms
-        targets.hips.z += Math.sin(elapsed * 1.6) * 0.035;
+        targets.hips.z += rollSign * Math.sin(elapsed * 1.6) * 0.035;
       } else if (this.behavior === 'stretch_look') {
         const stretch = 0.5 - 0.5 * Math.cos(elapsed * 0.98);
-        const torsoForwardSign = isVrm0 ? -1 : 1;
         targets.chest.x = -torsoForwardSign * 0.06 * stretch;
         targets.spine.y = Math.sin(elapsed * 0.85) * 0.14;
       } else if (this.behavior === 'peek') {
         const leanDir = this.currentX < 0 ? -1 : 1;
-        const torsoForwardSign = isVrm0 ? -1 : 1;
         targets.spine.x = torsoForwardSign * 0.08;
-        targets.spine.z = leanDir * 0.16;
+        targets.spine.z = rollSign * leanDir * 0.16;
       }
 
-      // Relaxed idle, active hobby/bath actions, crossed-arms, and cold-hug arms are all solved from character-frame directions
+      // Relaxed idle, active hobby/bath actions, seated lap, crossed-arms, and cold-hug arms are all solved from character-frame directions
       // (+X left, +Y up, +Z forward) so VRM 0.x and VRM 1.0 produce identical front-facing poses with no backwards elbows.
       const useStandingHobby = !this.isDragging && !isSleeping && Boolean(activeHobbyKind);
       if (useStandingHobby && activeHobbyKind) {
         const stretchRoutine = activeStretchRoutine || 'overhead_sky_reach';
         const hf = getHobbyActivityFrame(activeHobbyKind, elapsed, stretchRoutine);
-        const legForwardSign = isVrm0 ? 1 : -1;
-        // Right-hand rule: upward-pointing spine/chest/upperChest bend FORWARD with the OPPOSITE X sign of downward-pointing legs!
-        const torsoForwardSign = isVrm0 ? -1 : 1;
         targets.spine.y = hf.spineTwistY * 0.65;
         targets.spine.x += torsoForwardSign * hf.spineLeanX;
         targets.chest.y = hf.spineTwistY * 0.35;
@@ -665,22 +653,23 @@ export class AutonomousRoamController {
           const safeSpineX = THREE.MathUtils.clamp(sf.spineLeanX, -0.09, 0.38);
           const safeChestX = THREE.MathUtils.clamp(sf.chestArchX, -0.09, 0.24);
           targets.hips.y = sf.spineTwistY * 0.22;
-          targets.hips.z = sf.hipsZ;
+          targets.hips.z = rollSign * sf.hipsZ;
           targets.spine.x = torsoForwardSign * safeSpineX;
-          targets.spine.z = sf.spineBendZ;
+          targets.spine.z = rollSign * sf.spineBendZ;
           targets.spine.y = sf.spineTwistY * 0.6;
           targets.chest.x = torsoForwardSign * safeChestX * 0.65;
-          targets.chest.z = sf.chestBendZ * 0.65;
+          targets.chest.z = rollSign * sf.chestBendZ * 0.65;
           targets.chest.y = sf.spineTwistY * 0.4;
           targets.upperChest.x = torsoForwardSign * safeChestX * 0.35;
-          targets.upperChest.z = sf.chestBendZ * 0.35;
+          targets.upperChest.z = rollSign * sf.chestBendZ * 0.35;
           targets.upperChest.y = 0;
           targets.leftUpperLeg.x = legForwardSign * sf.leftUpperLegX;
           targets.leftUpperLeg.z = armSign * sf.leftUpperLegZ;
           targets.rightUpperLeg.x = legForwardSign * sf.rightUpperLegX;
           targets.rightUpperLeg.z = -armSign * sf.rightUpperLegZ;
-          targets.leftLowerLeg.x = legForwardSign * sf.leftLowerLegX;
-          targets.rightLowerLeg.x = legForwardSign * sf.rightLowerLegX;
+          // Note: sf.leftLowerLegX is <= 0 for anatomical knee flexion; negate with kneeFlexSign so -0.5 -> +0.5*kneeFlexSign!
+          targets.leftLowerLeg.x = kneeFlexSign * Math.max(0, -sf.leftLowerLegX);
+          targets.rightLowerLeg.x = kneeFlexSign * Math.max(0, -sf.rightLowerLegX);
         } else if (activeHobbyKind === 'gym_treadmill') {
           // Rhythmic cardio jogging leg stride on the 3D treadmill!
           const jogPhase = elapsed * 6.8;
@@ -690,8 +679,8 @@ export class AutonomousRoamController {
           targets.hips.y = Math.abs(Math.sin(jogPhase)) * 0.04;
           targets.leftUpperLeg.x = legForwardSign * stride;
           targets.rightUpperLeg.x = -legForwardSign * stride;
-          targets.leftLowerLeg.x = -legForwardSign * kneeL;
-          targets.rightLowerLeg.x = -legForwardSign * kneeR;
+          targets.leftLowerLeg.x = kneeFlexSign * kneeL;
+          targets.rightLowerLeg.x = kneeFlexSign * kneeR;
         } else if (
           activeHobbyKind === 'gym_weights' ||
           activeHobbyKind === 'sports_basketball' ||
@@ -730,18 +719,29 @@ export class AutonomousRoamController {
         !useColdRubArms &&
         (this.behavior === 'crossed_arms_wait' || bodyLang.armsCrossTension > 0.35);
 
+      const useSeatedLapArms =
+        !useStandingHobby &&
+        !this.isDragging &&
+        !isMoving &&
+        !isSleeping &&
+        this.behavior === 'sit_taskbar';
       const armsBusy =
         useStandingHobby ||
         useShoulderStretch ||
+        useSeatedLapArms ||
         isMusicPlaying ||
         this.isDragging ||
         isMoving ||
-        this.behavior === 'sit_taskbar' ||
         useColdRubArms ||
         useCrossedArms;
       const naturalArms = !armsBusy;
       const vectorSolvedArms =
-        useStandingHobby || useShoulderStretch || naturalArms || useCrossedArms || useColdRubArms;
+        useStandingHobby ||
+        useShoulderStretch ||
+        useSeatedLapArms ||
+        naturalArms ||
+        useCrossedArms ||
+        useColdRubArms;
 
       const boneLerp = expSmooth(this.isDragging ? 11.5 : useStandingHobby ? 7.8 : 6.5, dt);
       for (const boneName of TRACKED_BONES) {
@@ -775,6 +775,12 @@ export class AutonomousRoamController {
               boneLerp,
               activeStretchRoutine || 'overhead_sky_reach'
             );
+          } else if (useSeatedLapArms) {
+            applySeatedLapArms(vrm, boneLerp, {
+              breath,
+              droop: bodyLang.shoulderDroop,
+              fidget: bodyLang.shoulderFidget,
+            });
           } else if (useShoulderStretch) {
             applyShoulderStretchArms(vrm, elapsed, boneLerp);
           } else if (useColdRubArms) {

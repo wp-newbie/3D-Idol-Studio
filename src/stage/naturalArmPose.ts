@@ -289,6 +289,69 @@ export function applyCrossedArms(
 }
 
 /**
+ * Convention-free relaxed seated lap arm pose (identical on VRM 0.x and VRM 1.0!).
+ * Uses a natural ~18° outward carrying angle on the upper arms so deltoids never pinch
+ * and elbows never collapse into the ribcage, with forearms & palms resting gently forward on thighs.
+ */
+export function applySeatedLapArms(
+  vrm: VRM,
+  t: number,
+  options?: { breath?: number; droop?: number; fidget?: number }
+): boolean {
+  const b = getArmBones(vrm);
+  if (!b) return false;
+  const breath = options?.breath ?? 0;
+  const droop = options?.droop ?? 0;
+  const fidget = options?.fidget ?? 0;
+  const isVrm0 = vrm.meta?.metaVersion === '0';
+
+  applyDirectedArms(
+    [
+      {
+        upper: b.lu,
+        lower: b.ll,
+        hand: b.lh,
+        upperDir: [0.30 - droop * 0.04, -0.90, 0.31 + breath * 0.015 + fidget * 0.05],
+        lowerDir: [-0.26, -0.34, 0.90],
+      },
+      {
+        upper: b.ru,
+        lower: b.rl,
+        hand: b.rh,
+        upperDir: [-0.30 + droop * 0.04, -0.90, 0.31 - breath * 0.015 - fidget * 0.05],
+        lowerDir: [0.26, -0.34, 0.90],
+      },
+    ],
+    vrm.scene.parent,
+    t
+  );
+
+  const frameObj = vrm.scene.parent || vrm.scene;
+  frameObj.updateWorldMatrix(true, false);
+  const frameQ = new THREE.Quaternion();
+  frameObj.getWorldQuaternion(frameQ);
+  orientHandInFrame({
+    hand: b.lh,
+    side: 1,
+    isVrm0,
+    fingerDir: [-0.22, -0.26, 0.94],
+    palmDir: [-0.14, -0.94, 0.30],
+    frameQ,
+    t,
+  });
+  orientHandInFrame({
+    hand: b.rh,
+    side: -1,
+    isVrm0,
+    fingerDir: [0.22, -0.26, 0.94],
+    palmDir: [0.14, -0.94, 0.30],
+    frameQ,
+    t,
+  });
+  return true;
+}
+
+/**
  * Convention-free cold self-hug / rubbing upper arms in front of the chest.
  */
 export function applyColdRubArms(
