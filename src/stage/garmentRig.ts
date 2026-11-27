@@ -1793,7 +1793,14 @@ function buildBodyClonedSkinnedGarment(params: {
         zone === 'torso_short_sleeve' ||
         zone === 'torso_long_sleeve'
       ) {
-        if (domR === REGION_TORSO || domR === REGION_PELVIS) {
+        if (
+          domR === REGION_TORSO ||
+          domR === REGION_PELVIS ||
+          domR === REGION_LEG_L_UP ||
+          domR === REGION_LEG_R_UP ||
+          domR === REGION_IGNORE
+        ) {
+          // Clamp ALL torso, pelvis, hip-border leg, and nape-border neck vertices onto straight tailored hems!
           vy = THREE.MathUtils.clamp(vy, yTorsoBottom, yNeckLimit);
         } else if (zone === 'torso_short_sleeve') {
           if (domR === REGION_ARM_L_UP) {

@@ -174,7 +174,7 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
 // Comprehensive base-VRM outfit/underwear/footwear/accessory matcher hidden whenever a non-native
 // 3D garment silhouette is active (and cleanly restored when switching back to native).
 const NATIVE_OUTFIT_HIDE_REGEX =
-  /cloth|top|shirt|blouse|sweater|hoodie|skirt|dress|onepiece|one[_\-\s]?piece|gown|pants|trouser|shorts|legging|jeans|jacket|coat|blazer|cardigan|vest|underwear|inner|panties|lingerie|(^|[_\-\s])bra([_\-\s\d]|$)|shoe|boot|heel|loafer|sneaker|sandal|footwear|sock|stocking|tights|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|scarf|belt|wristband|bracelet|watch|glove|acc(essory|essories)?([_\-\s\d]|$)/i;
+  /cloth|top|shirt|blouse|sweater|hoodie|skirt|dress|onepiece|one[_\-\s]?piece|gown|pants|trouser|shorts|legging|jeans|jacket|coat|blazer|cardigan|vest|underwear|inner|panties|lingerie|(^|[_\-\s])bra([_\-\s\d]|$)|shoe|boot|heel|loafer|sneaker|sandal|footwear|sock|stocking|tights|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|collar|strap|lanyard|pendant|necklace|scarf|belt|wristband|bracelet|watch|glove|acc(essory|essories)?([_\-\s\d]|$)/i;
 
 // Core body, face, and hair materials that MUST always stay visible when hiding native outfits.
 const PROTECTED_BODY_FACE_HAIR_REGEX =
