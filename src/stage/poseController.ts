@@ -189,6 +189,21 @@ export class AvatarPoseController {
     return this.seatedHipDrop * modelScale;
   }
 
+  /**
+   * Returns the current forward torso lean pitch (in positive radians) from `spine` + `chest`
+   * so lower skirts and open coat tails on `hips` can pitch smoothly forward over the legs during
+   * seated and forward-leaning poses instead of cutting backward into the body.
+   */
+  public getTorsoForwardLeanRad(vrm: VRM | null): number {
+    if (!vrm?.humanoid) return 0;
+    const { torsoForwardSign } = getVrmBoneSigns(vrm);
+    const spine = vrm.humanoid.getNormalizedBoneNode('spine');
+    const chest = vrm.humanoid.getNormalizedBoneNode('chest');
+    const spineFwd = spine ? spine.rotation.x * torsoForwardSign : 0;
+    const chestFwd = chest ? chest.rotation.x * torsoForwardSign : 0;
+    return THREE.MathUtils.clamp(spineFwd + chestFwd * 0.5, 0, 0.55);
+  }
+
   public restoreStandingHips(vrm: VRM, dt: number): void {
     if (!this.hasBoundVrm) return;
     const hips = vrm.humanoid?.getNormalizedBoneNode('hips');

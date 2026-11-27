@@ -1516,6 +1516,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             dt,
             isSeated: isPhysicallySeated,
             seatSurfaceWorldY: avatarContainer.position.y + STUDIO_SEAT_HEIGHT,
+            torsoForwardLeanRad: poseControllerRef.current.getTorsoForwardLeanRad(vrm),
           });
           syncSeatSpringBoneColliders(
             vrm,

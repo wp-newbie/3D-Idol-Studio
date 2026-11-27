@@ -171,10 +171,14 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
   },
 ];
 
-// Chest/waist clothing trims (neckties, sailor ribbons, chokers, scarves, belts) that belong
-// to the VRM's baked-in outfit and should hide alongside Tops/Bottoms when wearing a 3D garment silhouette.
-const OUTFIT_BOUND_TRIM_REGEX =
-  /necktie|(^|[_\-\s])tie([_\-\s\d]|$)|ribbon|(^|[_\-\s])bow([_\-\s\d]|$)|neckwear|choker|scarf|belt/i;
+// Comprehensive base-VRM outfit/underwear/footwear/accessory matcher hidden whenever a non-native
+// 3D garment silhouette is active (and cleanly restored when switching back to native).
+const NATIVE_OUTFIT_HIDE_REGEX =
+  /cloth|top|shirt|blouse|sweater|hoodie|skirt|dress|onepiece|one[_\-\s]?piece|gown|pants|trouser|shorts|legging|jeans|jacket|coat|blazer|cardigan|vest|underwear|inner|panties|lingerie|(^|[_\-\s])bra([_\-\s\d]|$)|shoe|boot|heel|loafer|sneaker|sandal|footwear|sock|stocking|tights|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|scarf|belt|wristband|bracelet|watch|glove|acc(essory|essories)?([_\-\s\d]|$)/i;
+
+// Core body, face, and hair materials that MUST always stay visible when hiding native outfits.
+const PROTECTED_BODY_FACE_HAIR_REGEX =
+  /(^|[_\-\s.])(body|skin|face|head|eye|iris|sclera|cornea|brow|eyebrow|lash|eyelash|mouth|teeth|tooth|tongue|blush|hair|twintail|ponytail|ahoge|bangs)([_\-\s.\d()]|$)|_(skin|face|eye|brow|lash|mouth|teeth|hair)\b/i;
 
 interface OriginalMaterialSnapshot {
   colorHex: string | null;
@@ -599,14 +603,23 @@ export function applyOutfitModsToScene(params: {
         classifyName(mat.name) || (mats.length === 1 && !hasSkinMat ? classifyName(name) : null);
 
       // Per-material hiding works on BOTH separate clothing meshes AND merged VRoid multi-material Body meshes!
-      const isOutfitBoundTrim =
-        matCategory === 'Accessories' &&
-        OUTFIT_BOUND_TRIM_REGEX.test(`${mat.name || ''} ${mats.length === 1 && !hasSkinMat ? name : ''}`);
-      if (
-        hideNativeGarment &&
-        !isSkinOrFace &&
-        (matCategory === 'Tops' || matCategory === 'Bottoms' || isOutfitBoundTrim)
-      ) {
+      // Keep skin/face/head/eye/brow/lash/mouth/teeth/hair ALWAYS visible; hide all conflicting native clothing,
+      // underwear, footwear, and outfit-bound accessories when a procedural 3D silhouette is active.
+      const matTargetName = `${mat.name || ''} ${mats.length === 1 && !hasSkinMat ? name : ''}`;
+      const isProtectedCoreOrHair =
+        isSkinOrFace ||
+        matCategory === 'Hair' ||
+        (PROTECTED_BODY_FACE_HAIR_REGEX.test(mat.name || '') &&
+          !NATIVE_OUTFIT_HIDE_REGEX.test(mat.name || ''));
+      const isNativeOutfitSlot =
+        !isProtectedCoreOrHair &&
+        (matCategory === 'Tops' ||
+          matCategory === 'Bottoms' ||
+          matCategory === 'Footwear' ||
+          matCategory === 'Accessories' ||
+          NATIVE_OUTFIT_HIDE_REGEX.test(matTargetName));
+
+      if (hideNativeGarment && isNativeOutfitSlot) {
         mat.visible = false;
         continue;
       } else if (!mat.visible) {
