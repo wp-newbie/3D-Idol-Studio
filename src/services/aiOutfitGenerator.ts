@@ -1781,8 +1781,8 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
   {
     keywords: /cyber|neon|future|tech|sci.?fi|hologram/i,
     variantName: 'Cyber Neon Idol VRM',
-    bodyScale: 1.0,
-    headScale: 1.0,
+    bodyScale: 1.03,
+    headScale: 0.99,
     eyeColorHex: '#22d3ee',
     skinToneShift: 'fair_porcelain',
     hairStyle: 'drill_twintails',
@@ -1795,13 +1795,13 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#f472b6',
     accessoryHex: '#22d3ee',
     accessories: ['cyber_visor', 'choker'],
-    reason: 'Generated a cyber-neon idol look with electric cyan eyes, twin drills & glowing visor!',
+    reason: 'Generated a tall cyber-neon idol VRM with electric cyan eyes, twin drills & glowing visor!',
   },
   {
     keywords: /fairy|petite|chibi|angel|pastel|princess|cute|sweet/i,
-    variantName: 'Pastel Fairy Idol VRM',
-    bodyScale: 1.0,
-    headScale: 1.0,
+    variantName: 'Petite Pastel Fairy VRM',
+    bodyScale: 0.92,
+    headScale: 1.06,
     eyeColorHex: '#f472b6',
     skinToneShift: 'warm_peach',
     hairStyle: 'twin_buns',
@@ -1814,13 +1814,13 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#f472b6',
     accessoryHex: '#fde047',
     accessories: ['fairy_wings', 'halo'],
-    reason: 'Generated a pastel fairy look with sakura hair, rosy eyes, halo & fairy wings!',
+    reason: 'Generated a petite pastel fairy VRM with sakura hair, rosy eyes, halo & fairy wings!',
   },
   {
     keywords: /goth|vamp|dark|crimson|queen|night|royal|evening/i,
     variantName: 'Crimson Gothic Queen VRM',
-    bodyScale: 1.0,
-    headScale: 1.0,
+    bodyScale: 1.06,
+    headScale: 0.98,
     eyeColorHex: '#f43f5e',
     skinToneShift: 'fair_porcelain',
     hairStyle: 'long_wavy',
@@ -1833,13 +1833,13 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#be123c',
     accessoryHex: '#fbbf24',
     accessories: ['idol_crown', 'choker'],
-    reason: 'Generated a porcelain gothic queen look with ruby eyes, long midnight waves & crimson gown!',
+    reason: 'Generated a tall porcelain gothic queen VRM with ruby eyes, long midnight waves & crimson gown!',
   },
   {
     keywords: /shrine|kimono|yukata|sakura|japanese|festival|onsen/i,
     variantName: 'Sakura Shrine Maiden VRM',
     bodyScale: 1.0,
-    headScale: 1.0,
+    headScale: 1.01,
     eyeColorHex: '#a855f7',
     skinToneShift: 'fair_porcelain',
     hairStyle: 'side_braid',
@@ -1852,12 +1852,12 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#fde047',
     accessoryHex: '#f43f5e',
     accessories: ['ribbon_bow'],
-    reason: 'Generated a classic Japanese shrine/festival look with violet eyes, side braid & sakura kimono!',
+    reason: 'Generated a classic Japanese shrine/festival VRM with violet eyes, side braid & sakura kimono!',
   },
   {
     keywords: /beach|summer|sun|tropical|swim|gyaru|blonde/i,
     variantName: 'Sun-Kissed Summer Idol VRM',
-    bodyScale: 1.0,
+    bodyScale: 1.01,
     headScale: 1.0,
     eyeColorHex: '#10b981',
     skinToneShift: 'sun_kissed',
@@ -1871,13 +1871,13 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#f472b6',
     accessoryHex: '#f472b6',
     accessories: ['ribbon_bow'],
-    reason: 'Generated a sun-kissed blonde summer look with emerald eyes, high ponytail & resort swimsuit!',
+    reason: 'Generated a sun-kissed blonde summer VRM with emerald eyes, high ponytail & resort swimsuit!',
   },
   {
     keywords: /cozy|gamer|neko|cat|hoodie|casual|lofi/i,
     variantName: 'Lavender Neko Gamer VRM',
-    bodyScale: 1.0,
-    headScale: 1.0,
+    bodyScale: 0.96,
+    headScale: 1.03,
     eyeColorHex: '#c084fc',
     skinToneShift: 'warm_peach',
     hairStyle: 'bob_cut',
@@ -1890,7 +1890,7 @@ const OFFLINE_VRM_ARCHETYPES: Array<{
     bottomAccentHex: '#c4b5fd',
     accessoryHex: '#a855f7',
     accessories: ['cat_ears'],
-    reason: 'Generated a cute lavender neko-gamer look with bob hair, amethyst eyes, cat ears & oversized hoodie!',
+    reason: 'Generated a cute lavender neko-gamer VRM with bob hair, amethyst eyes, cat ears & oversized hoodie!',
   },
 ];
 
@@ -1942,12 +1942,14 @@ export async function generateAiVrmVariant(params: {
   const fb = pickFallbackArchetype();
   const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot?.modelVaultId);
 
-  const systemPrompt = `You are a 3D Anime VRM Virtual Idol who THINKS for herself about the current day of the week, real-world time of day, and her live mood — then styles a brand-new VRM avatar look while keeping her exact natural human body proportions (just like a real person changing clothes, hair, eye contacts, and accessories)!
-You can change anime eye iris color, subtle skin warmth, 3D hairstyle & hair dye/highlights, sculpted 3D clothing silhouette, and 3D accessories. NEVER distort or shrink/stretch her body or head proportions.
+  const systemPrompt = `You are a 3D Anime VRM Virtual Idol who THINKS for herself about the current day of the week, real-world time of day, and her live mood — then generates a brand-new VRM avatar transformation!
+You can transform body proportions (petite vs tall), anime eye iris color, skin warmth, 3D hairstyle & hair dye/highlights, sculpted 3D clothing silhouette, and 3D accessories.
 Return ONLY valid raw JSON (no markdown fences, no commentary):
 {
-  "innerThought": "One vivid first-person thought reflecting on today's day of week, time of day, and your mood explaining why you want to dress up in this new look right now",
-  "variantName": "2-4 word VRM look title (e.g. 'Friday Neon Idol VRM', 'Sunday Pastel Fairy VRM', 'Midnight Crimson Diva VRM')",
+  "innerThought": "One vivid first-person thought reflecting on today's day of week, time of day, and your mood explaining why you want to transform into this new VRM right now",
+  "variantName": "2-4 word VRM type title (e.g. 'Friday Neon Idol VRM', 'Sunday Pastel Fairy VRM', 'Midnight Crimson Diva VRM')",
+  "bodyScale": 0.98,
+  "headScale": 1.02,
   "eyeColorHex": "#RRGGBB",
   "skinToneShift": "default|fair_porcelain|warm_peach|sun_kissed",
   "hairStyle": "high_ponytail|twin_tails|twin_buns|side_braid|long_wavy|drill_twintails|bob_cut|ahoge_clips",
@@ -1960,9 +1962,11 @@ Return ONLY valid raw JSON (no markdown fences, no commentary):
   "bottomAccentHex": "#RRGGBB",
   "accessoryHex": "#RRGGBB",
   "accessories": ["cat_ears"|"halo"|"ribbon_bow"|"cyber_visor"|"choker"|"fairy_wings"|"idol_crown"],
-  "reason": "One short exciting sentence describing this new AI-styled VRM look!"
+  "reason": "One short exciting sentence describing this new AI-generated VRM transformation!"
 }
 Rules:
+- bodyScale must be between 0.88 (petite/cute) and 1.08 (tall runway idol).
+- headScale must be between 0.96 and 1.08.
 - Match the day of the week (${ctx.dayName}), time (${ctx.phaseLabel} · ${ctx.clockText}), and mood (${ctx.mood}) authentically!
 - Choose vibrant anime eyeColorHex, hairColorHex, hairHighlightHex, and cohesive outfit colors that look dramatically fresh and distinct!
 - Only use "beach_swimsuit" when the request or scene is beach/summer/swim related.`;
@@ -1975,11 +1979,10 @@ ${activeLifeScene?.destination?.placeName ? `Live Scene: ${activeLifeScene.desti
 Request: ${prompt.trim() || `Think about how you feel on this ${ctx.dayName} ${ctx.phaseLabel.toLowerCase()} while feeling ${ctx.mood}, and generate a brand-new VRM avatar transformation!`}
 Output ONLY the JSON object.`;
 
-  let innerThought = `It's ${ctx.dayName} ${ctx.phaseLabel.toLowerCase()} and I'm feeling ${ctx.mood.toLowerCase()} — I want to change into ${fb.variantName}!`;
+  let innerThought = `It's ${ctx.dayName} ${ctx.phaseLabel.toLowerCase()} and I'm feeling ${ctx.mood.toLowerCase()} — I want to transform into ${fb.variantName}!`;
   let variantName = fb.variantName;
-  // Always keep natural 1.0 human proportions — changing clothes/VRM look never stretches or shrinks the body!
-  const bodyScale = 1.0;
-  const headScale = 1.0;
+  let bodyScale = fb.bodyScale;
+  let headScale = fb.headScale;
   let eyeColorHex: string | null = fb.eyeColorHex;
   let skinToneShift: NonNullable<VrmAppearanceVariant['skinToneShift']> = fb.skinToneShift;
   let hairStyle: HairStyleId = fb.hairStyle;
@@ -2014,6 +2017,12 @@ Output ONLY the JSON object.`;
         }
         if (typeof parsed.variantName === 'string' && parsed.variantName.trim()) {
           variantName = parsed.variantName.trim().slice(0, 40);
+        }
+        if (typeof parsed.bodyScale === 'number' && Number.isFinite(parsed.bodyScale)) {
+          bodyScale = Math.min(1.08, Math.max(0.88, parsed.bodyScale));
+        }
+        if (typeof parsed.headScale === 'number' && Number.isFinite(parsed.headScale)) {
+          headScale = Math.min(1.08, Math.max(0.96, parsed.headScale));
         }
         eyeColorHex = normalizeHex(parsed.eyeColorHex, fb.eyeColorHex);
         const rawSkin = String(parsed.skinToneShift || '').trim().toLowerCase();

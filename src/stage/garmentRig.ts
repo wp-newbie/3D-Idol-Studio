@@ -203,7 +203,7 @@ function makeAnimeSkinMaterial(skinHex: string): MToonMaterial {
     shadeColorFactor: shade,
     shadingToonyFactor: 0.62,
     shadingShiftFactor: -0.05,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   });
 }
 
@@ -714,12 +714,9 @@ interface BodySkinCoverage {
 
 const EXCLUDE_NON_BODY_MAT_REGEX =
   /hair|face|eye|iris|sclera|cornea|brow|lash|mouth|teeth|tooth|tongue|blush|shoe|boot|heel|sandal|loafer|sneaker|footwear|sock|stocking|tights|accessory|ribbon|bow|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|scarf|hat|beret|headset|earring|glasses|wing|halo|bag|belt/i;
-// Pure skirt/bottom meshes are excluded from legs & torso, while Onepiece/Dress/Coat upper bodies ARE valid torso & sleeve sources!
-const PURE_SKIRT_ONLY_REGEX = /skirt|pleat/i;
 const SKIRT_OR_LOOSE_BOTTOM_REGEX = /skirt|pleat|dress|gown|onepiece|one_piece|coat|trench|cloak|cape/i;
 const SKIN_MAT_REGEX = /body.*skin|skin.*body|_skin\b|^body$/i;
-const TOPS_MAT_REGEX =
-  /top|shirt|blouse|sweater|hoodie|tee|blazer|jacket|inner|cloth|outfit|bodice|uniform|sailor|onepiece|one_piece|dress|gown|coat|trench|cardigan|bolero|vest|outer|costume|garment/i;
+const TOPS_MAT_REGEX = /top|shirt|blouse|sweater|hoodie|tee|blazer|jacket|inner|cloth|outfit|bodice|uniform|sailor/i;
 const EXCLUDE_BONE_REGEX = /hair|skirt|ribbon|cape|tail|tie|ear|wing/i;
 
 function classifySkeletonBoneRegions(
@@ -1022,7 +1019,6 @@ function buildBodyClonedSkinnedGarment(params: {
   inflate: number;
   topNeckFrac?: number;
   uvScale?: number;
-  outCoverage?: { isSolid: boolean };
 }): number {
   const {
     vrm,
@@ -1032,22 +1028,9 @@ function buildBodyClonedSkinnedGarment(params: {
     inflate,
     topNeckFrac = 0.86,
     uvScale = 1.65,
-    outCoverage,
   } = params;
 
   let totalClonedTris = 0;
-  const addedMeshes: THREE.SkinnedMesh[] = [];
-  // Track actual bone-span & 360-degree angular coverage so partial VRoid cutout stubs
-  // (like a 2cm bare wrist or Swiss-cheese ribcage hole!) NEVER pass as solid full coverage!
-  let armMinFrac = 1;
-  let armMaxFrac = 0;
-  let collarMinFrac = 1;
-  let collarMaxFrac = 0;
-  let collarSectorMask = 0;
-  let torsoUpperSectorMask = 0;
-  let torsoWaistSectorMask = 0;
-  let torsoMinFrac = 1;
-  let torsoMaxFrac = 0;
 
   // Snapshot candidate source SkinnedMeshes first so adding cloned siblings doesn't re-traverse them
   const sourceMeshes: THREE.SkinnedMesh[] = [];
@@ -1126,18 +1109,17 @@ function buildBodyClonedSkinnedGarment(params: {
 
       const isSkin = SKIN_MAT_REGEX.test(matName);
       const isTops = TOPS_MAT_REGEX.test(matName);
-      const isPureSkirt = PURE_SKIRT_ONLY_REGEX.test(matName);
       const isSkirtOrLoose = SKIRT_OR_LOOSE_BOTTOM_REGEX.test(matName);
 
       if (zone === 'gloves' || isSkinZone) {
-        // Clone real sculpted arms/collarbone from Body_SKIN, Tops, OR Onepiece/Dress/Coat upper bodies
-        // (essential for VRoid models wearing Onepiece/Dress whose bare skin under the dress was deleted!)
-        if (isPureSkirt) continue;
+        // Clone real sculpted arms/collarbone from EITHER Body_SKIN OR Tops_CLOTH
+        // (essential for VRoid models that deleted bare arm/chest skin under their default long-sleeve sweater!)
+        if (isSkirtOrLoose) continue;
         if (!isSkin && !isTops) continue;
       } else if (isLowerZone) {
         if (isSkirtOrLoose || (isTops && !isSkin)) continue;
       } else if (isTorsoZone) {
-        if (isPureSkirt) continue;
+        if (isSkirtOrLoose) continue;
         if (!isSkin && !isTops) continue;
       }
 
@@ -1165,7 +1147,6 @@ function buildBodyClonedSkinnedGarment(params: {
 
         let keep = false;
 
-        const maxArmRadSq = (0.095 * unitScale) ** 2;
         if (zone === 'pants' || zone === 'shorts') {
           const isLegOrPelvis =
             domR === REGION_PELVIS ||
@@ -1207,116 +1188,45 @@ function buildBodyClonedSkinnedGarment(params: {
             keep = true;
           }
         } else if (zone === 'gloves') {
-          if (domR === REGION_ARM_L_LOW && distSqToSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= maxArmRadSq) {
+          if (domR === REGION_ARM_L_LOW) {
             const f = projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand);
-            if (f >= 0.08 && f <= 0.98) {
-              keep = true;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
-          } else if (domR === REGION_ARM_R_LOW && distSqToSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= maxArmRadSq) {
+            if (f >= 0.12 && f <= 0.98) keep = true;
+          } else if (domR === REGION_ARM_R_LOW) {
             const f = projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand);
-            if (f >= 0.08 && f <= 0.98) {
-              keep = true;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
+            if (f >= 0.12 && f <= 0.98) keep = true;
           }
         } else if (zone === 'skin_collarbone') {
-          // Real sculpted human upper-chest, clavicle, and shoulder bridge cloned from Tops/Onepiece/Body!
+          // Real sculpted human upper-chest, clavicle, and shoulder bridge cloned from Tops/Body!
           if (domR === REGION_TORSO && cy >= lm.chest.y - 0.02 * unitScale && cy <= lm.neck.y + 0.025 * unitScale) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
-            if (rad <= 0.23 * unitScale) {
-              keep = true;
-              const cf = (cy - lm.chest.y) / Math.max(0.05, lm.neck.y - lm.chest.y);
-              if (cf < collarMinFrac) collarMinFrac = cf;
-              if (cf > collarMaxFrac) collarMaxFrac = cf;
-              const sec = Math.floor(((Math.atan2(cx - lm.hips.x, cz - lm.hips.z) + Math.PI) / (Math.PI * 2)) * 8) & 7;
-              collarSectorMask |= 1 << sec;
-            }
+            if (rad <= 0.23 * unitScale) keep = true;
           }
         } else if (zone === 'skin_arms_full') {
-          if (domR === REGION_ARM_L_UP && distSqToSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= maxArmRadSq) {
+          if (
+            domR === REGION_ARM_L_UP ||
+            domR === REGION_ARM_R_UP ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.98) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.98)
+          ) {
             keep = true;
-            const f = projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) * 0.5;
-            if (f < armMinFrac) armMinFrac = f;
-            if (f > armMaxFrac) armMaxFrac = f;
-          } else if (domR === REGION_ARM_R_UP && distSqToSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= maxArmRadSq) {
-            keep = true;
-            const f = projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) * 0.5;
-            if (f < armMinFrac) armMinFrac = f;
-            if (f > armMaxFrac) armMaxFrac = f;
-          } else if (domR === REGION_ARM_L_LOW && distSqToSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= maxArmRadSq) {
-            const lf = projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand);
-            if (lf <= 0.98) {
-              keep = true;
-              const f = 0.5 + lf * 0.5;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
-          } else if (domR === REGION_ARM_R_LOW && distSqToSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= maxArmRadSq) {
-            const lf = projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand);
-            if (lf <= 0.98) {
-              keep = true;
-              const f = 0.5 + lf * 0.5;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
           }
         } else if (zone === 'skin_arms_upper') {
-          if (domR === REGION_ARM_L_UP && distSqToSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= maxArmRadSq) {
-            keep = true;
-            const f = projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm);
-            if (f < armMinFrac) armMinFrac = f;
-            if (f > armMaxFrac) armMaxFrac = f;
-          } else if (domR === REGION_ARM_R_UP && distSqToSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= maxArmRadSq) {
-            keep = true;
-            const f = projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm);
-            if (f < armMinFrac) armMinFrac = f;
-            if (f > armMaxFrac) armMaxFrac = f;
-          } else if (
-            (domR === REGION_ARM_L_LOW &&
-              distSqToSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= maxArmRadSq &&
-              projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.22) ||
-            (domR === REGION_ARM_R_LOW &&
-              distSqToSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= maxArmRadSq &&
-              projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.22)
+          if (
+            domR === REGION_ARM_L_UP ||
+            domR === REGION_ARM_R_UP ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.22) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.22)
           ) {
             keep = true;
           }
         } else if (zone === 'skin_arms_below_short') {
-          if (domR === REGION_ARM_L_UP && distSqToSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= maxArmRadSq) {
-            const uf = projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm);
-            if (uf >= 0.30) {
-              keep = true;
-              const f = (uf - 0.30) * 0.4;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
-          } else if (domR === REGION_ARM_R_UP && distSqToSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= maxArmRadSq) {
-            const uf = projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm);
-            if (uf >= 0.30) {
-              keep = true;
-              const f = (uf - 0.30) * 0.4;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
-          } else if (domR === REGION_ARM_L_LOW && distSqToSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= maxArmRadSq) {
-            const lf = projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand);
-            if (lf <= 0.98) {
-              keep = true;
-              const f = 0.28 + lf * 0.72;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
-          } else if (domR === REGION_ARM_R_LOW && distSqToSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= maxArmRadSq) {
-            const lf = projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand);
-            if (lf <= 0.98) {
-              keep = true;
-              const f = 0.28 + lf * 0.72;
-              if (f < armMinFrac) armMinFrac = f;
-              if (f > armMaxFrac) armMaxFrac = f;
-            }
+          if (
+            (domR === REGION_ARM_L_UP && projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) >= 0.30) ||
+            (domR === REGION_ARM_R_UP && projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) >= 0.30) ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.98) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.98)
+          ) {
+            keep = true;
           }
         } else if (zone === 'sleeves_full') {
           if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
@@ -1363,14 +1273,6 @@ function buildBodyClonedSkinnedGarment(params: {
 
         if (keep) {
           keptIndices.push(i0, i1, i2);
-          if (isTorsoZone && (domR === REGION_TORSO || domR === REGION_PELVIS)) {
-            const tf = (cy - yTorsoBottom) / Math.max(0.10, yNeckLimit - yTorsoBottom);
-            if (tf < torsoMinFrac) torsoMinFrac = tf;
-            if (tf > torsoMaxFrac) torsoMaxFrac = tf;
-            const sec = Math.floor(((Math.atan2(cx - lm.hips.x, cz - lm.hips.z) + Math.PI) / (Math.PI * 2)) * 8) & 7;
-            if (tf >= 0.45) torsoUpperSectorMask |= 1 << sec;
-            else torsoWaistSectorMask |= 1 << sec;
-          }
         }
       }
     }
@@ -1551,51 +1453,8 @@ function buildBodyClonedSkinnedGarment(params: {
     skinned.renderOrder = isSkinZone ? 1 : isTorsoZone ? 3 : 2;
     skinned.bind(src.skeleton, src.bindMatrix);
     src.parent.add(skinned);
-    addedMeshes.push(skinned);
 
     totalClonedTris += keptIndices.length / 3;
-  }
-
-  const popCount8 = (mask: number) => {
-    let n = 0;
-    for (let b = 0; b < 8; b++) if (mask & (1 << b)) n++;
-    return n;
-  };
-  const discardAddedStubs = () => {
-    for (const m of addedMeshes) {
-      m.parent?.remove(m);
-      m.geometry.dispose();
-    }
-    return 0;
-  };
-
-  // Validate real bone-length & 360-degree coverage so incomplete VRoid cutout stubs
-  // NEVER block the clean solid sculpted fallbacks!
-  if (zone === 'gloves') {
-    if (armMaxFrac - armMinFrac < 0.50 || armMinFrac > 0.36 || armMaxFrac < 0.72) {
-      return discardAddedStubs();
-    }
-  } else if (zone === 'skin_arms_full' || zone === 'skin_arms_upper' || zone === 'skin_arms_below_short') {
-    if (armMaxFrac - armMinFrac < 0.52 || armMinFrac > 0.32 || armMaxFrac < 0.68) {
-      return discardAddedStubs();
-    }
-  } else if (zone === 'skin_collarbone') {
-    if (collarMaxFrac - collarMinFrac < 0.44 || popCount8(collarSectorMask) < 6) {
-      return discardAddedStubs();
-    }
-  }
-
-  if (outCoverage) {
-    const upperSectors = popCount8(torsoUpperSectorMask);
-    const waistSectors = popCount8(torsoWaistSectorMask);
-    const vertSpan = torsoMaxFrac - torsoMinFrac;
-    outCoverage.isSolid =
-      totalClonedTris >= 80 &&
-      upperSectors >= 7 &&
-      waistSectors >= 7 &&
-      vertSpan >= 0.66 &&
-      torsoMinFrac <= 0.28 &&
-      torsoMaxFrac >= 0.80;
   }
 
   return totalClonedTris;
@@ -2041,8 +1900,8 @@ function addArmSleeves(params: {
                 childBone: hand,
                 fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
                 fallbackLen: 0.22,
-                // Gloves hug the forearm smoothly with +3mm anatomical radial padding (zero chunky cylinder or elbow gap!)
-                startFrac: mode === 'gloves' ? 0.06 : -0.03,
+                // Gloves hug the forearm smoothly with +3mm anatomical radial padding (zero chunky cylinder!)
+                startFrac: mode === 'gloves' ? 0.14 : -0.03,
                 endFrac: mode === 'gloves' ? 0.98 : 0.96,
                 radiusStart: (mode === 'gloves' ? 0.0275 : 0.039) * looseFactor,
                 radiusEnd: (mode === 'gloves' ? 0.0215 : 0.029) * looseFactor,
@@ -2064,8 +1923,8 @@ function addArmSleeves(params: {
             childBone: hand,
             fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
             fallbackLen: 0.22,
-            startFrac: mode === 'gloves' ? 0.04 : 0.85,
-            endFrac: mode === 'gloves' ? 0.16 : 0.99,
+            startFrac: mode === 'gloves' ? 0.12 : 0.85,
+            endFrac: mode === 'gloves' ? 0.24 : 0.99,
             radiusStart: (mode === 'gloves' ? 0.0295 : 0.0315) * looseFactor,
             radiusEnd: (mode === 'gloves' ? 0.0285 : 0.0285) * looseFactor,
             ellipseScaleZ: 0.88,
@@ -2135,7 +1994,6 @@ function addSculptedTorso(params: {
 
   // Primary path: True body-fitted SkinnedMesh torso (+ optional short/long sleeves) cloned directly
   // from the VRM's real sculpted anime bust, waist, shoulders & sleeves — ZERO boxy barrels or diaper shells!
-  const torsoCoverage = { isSolid: false };
   const clonedTorsoTris = buildBodyClonedSkinnedGarment({
     vrm,
     avatarRoot,
@@ -2144,55 +2002,52 @@ function addSculptedTorso(params: {
     inflate: skinnedInflate,
     topNeckFrac: necklineHeightFrac,
     uvScale: 1.7,
-    outCoverage: torsoCoverage,
   });
   const usedSkinnedTorso = clonedTorsoTris >= 80;
 
-  // Solid contoured bodice when model had no clonable torso OR slim internal liner sealing any VRoid ribcage/waist hole!
-  if ((!usedSkinnedTorso || !torsoCoverage.isSolid) && chestGroup) {
-    const linerScale = usedSkinnedTorso ? 0.93 : 1.0;
+  // Fallback sculpted lathe bodice ONLY if the loaded model had no clonable torso/top mesh
+  if (!usedSkinnedTorso && chestGroup) {
     const bodiceGeo = createContouredTorsoLathe({
       profile: [
-        [0.102 * scaleX * linerScale, yBottomInChest],
-        [0.092 * scaleX * linerScale, yWaistInChest],
-        [0.098 * scaleX * linerScale, 0.0],
-        [0.108 * scaleX * linerScale, yBustInChest],
-        [0.100 * scaleX * linerScale, yTop * 0.82],
-        [(necklineHeightFrac > 0.78 ? 0.086 : 0.096) * scaleX * linerScale, yTop],
-        [(necklineHeightFrac > 0.78 ? 0.060 : 0.082) * scaleX * linerScale, yTop + 0.006],
+        [0.102 * scaleX, yBottomInChest],
+        [0.092 * scaleX, yWaistInChest],
+        [0.098 * scaleX, 0.0],
+        [0.108 * scaleX, yBustInChest],
+        [0.100 * scaleX, yTop * 0.82],
+        [necklineHeightFrac > 0.78 ? 0.086 * scaleX : 0.096 * scaleX, yTop],
+        [necklineHeightFrac > 0.78 ? 0.060 * scaleX : 0.082 * scaleX, yTop + 0.008],
       ],
       scaleX: 1.06,
-      scaleZ: 0.88 * scaleZ * linerScale,
+      scaleZ: 0.88 * scaleZ,
       bustCenterY: yBustInChest,
-      bustBoost: usedSkinnedTorso ? bustBoost * 0.75 : bustBoost,
-      frontBellyBoost: usedSkinnedTorso ? 0.002 : 0.006,
+      bustBoost,
+      frontBellyBoost: 0.006,
       rearGluteY: yBottomInChest,
-      rearGluteBoost: usedSkinnedTorso ? 0.004 : 0.008,
+      rearGluteBoost: 0.008,
       fwdSign,
       segments: 30,
     });
     chestGroup.add(new THREE.Mesh(bodiceGeo, topMat));
   }
 
-  // Fallback slim pelvis liner ONLY when NOT covered by real skinned pants/swimsuit AND torso wasn't fully solid
-  if ((!usedSkinnedTorso || !torsoCoverage.isSolid) && !pelvisCoveredByPants && hipsGroup) {
-    const linerScale = usedSkinnedTorso ? 0.92 : 1.0;
+  // Fallback slim pelvis liner ONLY when NOT covered by real skinned pants/swimsuit AND torso wasn't skinned
+  if (!usedSkinnedTorso && !pelvisCoveredByPants && hipsGroup) {
     const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.48;
     const pelvisGeo = createContouredTorsoLathe({
       profile: [
-        [0.064 * scaleX * linerScale, -0.092],
-        [0.098 * scaleX * linerScale, -0.062],
-        [0.112 * scaleX * linerScale, -0.020],
-        [0.108 * scaleX * linerScale, 0.025],
-        [0.098 * scaleX * linerScale, metrics.ySpineFromHips * 0.92],
-        [0.094 * scaleX * linerScale, hipTopY],
+        [0.064 * scaleX, -0.092],
+        [0.098 * scaleX, -0.062],
+        [0.112 * scaleX, -0.020],
+        [0.108 * scaleX, 0.025],
+        [0.098 * scaleX, metrics.ySpineFromHips * 0.92],
+        [0.094 * scaleX, hipTopY],
       ],
       scaleX: 1.08,
-      scaleZ: 0.94 * scaleZ * linerScale,
+      scaleZ: 0.94 * scaleZ,
       bustBoost: 0,
-      frontBellyBoost: usedSkinnedTorso ? 0.002 : 0.005,
+      frontBellyBoost: 0.005,
       rearGluteY: -0.02,
-      rearGluteBoost: usedSkinnedTorso ? 0.006 : 0.012,
+      rearGluteBoost: 0.012,
       fwdSign,
       segments: 30,
     });
@@ -2611,7 +2466,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
-      armMode: 'full',
+      armMode: 'upper_only',
       collarboneBridge: true,
       fwdSign,
       coverage: skinCoverage,

@@ -2361,12 +2361,10 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       detectClothingMeshes(avatarRoot, activeSlot.materialMods)
     );
   }, [
-    activeSlot.id,
     activeSlot.meshVisibility,
     activeSlot.materialMods,
     activeSlot.cyclingShorts,
     activeSlot.garmentStyle,
-    isLoadingModel,
   ]);
 
   // 3e. Apply live AI-generated VRM appearance morphing (body scale, head proportions, eye iris color, skin warmth)
