@@ -606,8 +606,12 @@ export class AutonomousRoamController {
         targets.rightLowerArm.y = 0.14 + Math.max(0, swing) * 0.24;
       } else if (this.behavior === 'sit_taskbar') {
         // Modest, grounded sitting posture on her 3D AI Chair (thighs flush at y=0.45m, knees at ~86°, feet at y=0)
-        // Arms are solved convention-free via applySeatedLapArms below!
+        // Distribute subtle seated forward posture evenly across hips -> spine -> chest so waist stays gap-free!
         const gentleSway = Math.sin(elapsed * 1.6) * 0.03;
+        targets.hips.x = torsoForwardSign * 0.018;
+        targets.spine.x = torsoForwardSign * (0.032 + breath * 0.010 + bodyLang.spineLeanX * 0.32);
+        targets.chest.x = torsoForwardSign * (-0.010 + breath * 0.012 + bodyLang.spineLeanX * 0.20);
+        targets.upperChest.x = torsoForwardSign * (0.012 + breath * 0.008);
         targets.leftUpperLeg.x = legForwardSign * (Math.PI * 0.47);
         targets.rightUpperLeg.x = legForwardSign * (Math.PI * 0.47);
         targets.leftUpperLeg.z = armSign * 0.09; // Inward adduction: brings left knee to centerline
@@ -632,7 +636,9 @@ export class AutonomousRoamController {
         targets.spine.y = Math.sin(elapsed * 0.85) * 0.14;
       } else if (this.behavior === 'peek') {
         const leanDir = this.currentX < 0 ? -1 : 1;
-        targets.spine.x = torsoForwardSign * 0.08;
+        targets.hips.x = torsoForwardSign * 0.02;
+        targets.spine.x = torsoForwardSign * 0.045;
+        targets.chest.x = torsoForwardSign * 0.025;
         targets.spine.z = rollSign * leanDir * 0.16;
       }
 
@@ -642,10 +648,12 @@ export class AutonomousRoamController {
       if (useStandingHobby && activeHobbyKind) {
         const stretchRoutine = activeStretchRoutine || 'overhead_sky_reach';
         const hf = getHobbyActivityFrame(activeHobbyKind, elapsed, stretchRoutine);
+        targets.hips.x += torsoForwardSign * Math.min(0.05, hf.spineLeanX * 0.22);
         targets.spine.y = hf.spineTwistY * 0.65;
-        targets.spine.x += torsoForwardSign * hf.spineLeanX;
+        targets.spine.x += torsoForwardSign * hf.spineLeanX * 0.48;
         targets.chest.y = hf.spineTwistY * 0.35;
-        targets.chest.x += torsoForwardSign * hf.spineLeanX * 0.45;
+        targets.chest.x += torsoForwardSign * hf.spineLeanX * 0.32;
+        targets.upperChest.x += torsoForwardSign * hf.spineLeanX * 0.18;
 
         if (activeHobbyKind === 'stretching') {
           // Full-body smooth flexible anatomical stretching across hips, spine, chest, upperChest, legs & knees!
