@@ -629,6 +629,29 @@ export class AutonomousRoamController {
         targets.spine.x += forwardSign * hf.spineLeanX;
         targets.chest.y = hf.spineTwistY * 0.35;
         targets.chest.x += forwardSign * hf.spineLeanX * 0.45;
+
+        if (activeHobbyKind === 'gym_treadmill') {
+          // Rhythmic cardio jogging leg stride on the 3D treadmill!
+          const jogPhase = elapsed * 6.8;
+          const stride = Math.sin(jogPhase) * 0.34;
+          const kneeL = Math.max(0, -Math.cos(jogPhase)) * 0.56;
+          const kneeR = Math.max(0, Math.cos(jogPhase)) * 0.56;
+          targets.hips.y = Math.abs(Math.sin(jogPhase)) * 0.04;
+          targets.leftUpperLeg.x = forwardSign * stride;
+          targets.rightUpperLeg.x = -forwardSign * stride;
+          targets.leftLowerLeg.x = -forwardSign * kneeL;
+          targets.rightLowerLeg.x = -forwardSign * kneeR;
+        } else if (
+          activeHobbyKind === 'gym_weights' ||
+          activeHobbyKind === 'sports_basketball' ||
+          activeHobbyKind === 'sports_tennis'
+        ) {
+          // Athletic grounded stance with subtle lively energy bounce
+          const bounce = Math.abs(Math.sin(elapsed * 3.4)) * 0.025;
+          targets.hips.y = bounce;
+          targets.leftUpperLeg.z = -armSign * 0.05;
+          targets.rightUpperLeg.z = armSign * 0.05;
+        }
       }
 
       const useShoulderStretch =

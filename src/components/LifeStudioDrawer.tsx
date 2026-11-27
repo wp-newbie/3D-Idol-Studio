@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Compass,
   Droplets,
+  Dumbbell,
   GraduationCap,
   Loader2,
   Palette,
@@ -78,13 +79,22 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
     lifeScene.hobby?.hobbyKind === 'showering' ||
     lifeScene.hobby?.hobbyKind === 'towel_dry' ||
     lifeScene.hobby?.hobbyKind === 'brushing_teeth';
-  const isRegularHobby = Boolean(lifeScene.hobby) && !isStudying && !isBathing;
+  const isGymSport =
+    lifeScene.hobby?.hobbyKind === 'gym_weights' ||
+    lifeScene.hobby?.hobbyKind === 'gym_treadmill' ||
+    lifeScene.hobby?.hobbyKind === 'sports_basketball' ||
+    lifeScene.hobby?.hobbyKind === 'sports_tennis' ||
+    lifeScene.destination?.destinationKind === 'gym_studio' ||
+    lifeScene.destination?.destinationKind === 'sports_court';
+  const isRegularHobby = Boolean(lifeScene.hobby) && !isStudying && !isBathing && !isGymSport;
   const isTraveling =
     Boolean(lifeScene.destination) &&
     lifeScene.destination?.destinationKind !== 'none' &&
     lifeScene.destination?.destinationKind !== 'highschool_classroom' &&
     lifeScene.destination?.destinationKind !== 'college_campus' &&
-    lifeScene.destination?.destinationKind !== 'bathroom_spa';
+    lifeScene.destination?.destinationKind !== 'bathroom_spa' &&
+    lifeScene.destination?.destinationKind !== 'gym_studio' &&
+    lifeScene.destination?.destinationKind !== 'sports_court';
 
   const hasAnyScene =
     isDining ||
@@ -143,7 +153,7 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
 
         {/* Read-Only Status Indicators (Non-Clickable — Only the AI character decides!) */}
         <div
-          className="grid grid-cols-5 gap-1.5 pt-0.5 text-[10px] font-semibold select-none pointer-events-none"
+          className="grid grid-cols-6 gap-1 pt-0.5 text-[9.5px] font-semibold select-none pointer-events-none"
           aria-label="AI autonomous activity status indicators"
         >
           <div
@@ -188,6 +198,17 @@ export const LifeStudioDrawer: React.FC<LifeStudioDrawerProps> = ({
           >
             <Droplets className={`h-3.5 w-3.5 ${isBathing ? 'text-sky-300' : 'text-zinc-500'}`} />
             <span>Bath</span>
+          </div>
+
+          <div
+            className={`flex flex-col items-center justify-center gap-1 rounded-xl border py-2 transition ${
+              isGymSport
+                ? 'border-emerald-400/65 bg-emerald-500/25 text-emerald-100 shadow-sm'
+                : 'border-white/[0.07] bg-white/[0.02] text-zinc-500'
+            }`}
+          >
+            <Dumbbell className={`h-3.5 w-3.5 ${isGymSport ? 'text-emerald-300' : 'text-zinc-500'}`} />
+            <span>Gym</span>
           </div>
 
           <div

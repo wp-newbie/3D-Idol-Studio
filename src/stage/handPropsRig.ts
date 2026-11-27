@@ -202,6 +202,70 @@ function buildRightHandProp(
     return g;
   }
 
+  if (mode === 'gym_weights') {
+    // Sleek Chrome & Matte-Black 3D Dumbbell gripped inside her right fist!
+    const chrome = new THREE.MeshStandardMaterial({ color: '#e2e8f0', metalness: 0.88, roughness: 0.18 });
+    const plate = new THREE.MeshStandardMaterial({ color: accentHex || '#10b981', roughness: 0.38, metalness: 0.25 });
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 12), chrome);
+    bar.rotation.x = Math.PI / 2;
+    bar.position.set(s * 0.045, -0.014, 0.012);
+    const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.032, 8), plate);
+    p1.rotation.x = Math.PI / 2;
+    p1.position.set(s * 0.045, -0.014, 0.092);
+    const p2 = p1.clone();
+    p2.position.z = -0.068;
+    g.add(bar, p1, p2);
+    return g;
+  }
+
+  if (mode === 'sports_tennis') {
+    // Real 3D Tennis Racket gripped cleanly in her right hand!
+    const handle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.011, 0.012, 0.14, 10),
+      new THREE.MeshStandardMaterial({ color: '#18181b', roughness: 0.75 })
+    );
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(s * 0.05, -0.01, 0.015);
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.008, 0.01, 0.12, 8),
+      new THREE.MeshStandardMaterial({ color: accentHex || '#10b981', roughness: 0.3 })
+    );
+    shaft.rotation.z = Math.PI / 2;
+    shaft.position.set(s * 0.16, -0.01, 0.015);
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.115, 0.010, 10, 26),
+      new THREE.MeshStandardMaterial({ color: accentHex || '#10b981', roughness: 0.3 })
+    );
+    rim.scale.set(1.22, 0.92, 1);
+    rim.position.set(s * 0.34, -0.01, 0.015);
+    const strings = new THREE.Mesh(
+      new THREE.CircleGeometry(0.11, 18),
+      new THREE.MeshStandardMaterial({ color: '#f8fafc', wireframe: true, side: THREE.DoubleSide })
+    );
+    strings.scale.set(1.20, 0.90, 1);
+    strings.position.set(s * 0.34, -0.01, 0.015);
+    g.add(handle, shaft, rim, strings);
+    return g;
+  }
+
+  if (mode === 'sports_basketball') {
+    // Vibrant 3D Orange Basketball held/dribbled in her right hand!
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.105, 18, 14),
+      new THREE.MeshStandardMaterial({ color: '#ea580c', roughness: 0.62 })
+    );
+    ball.position.set(s * 0.075, -0.075, 0.045);
+    const seam1 = new THREE.Mesh(
+      new THREE.TorusGeometry(0.106, 0.004, 8, 24),
+      new THREE.MeshBasicMaterial({ color: '#18181b' })
+    );
+    seam1.position.copy(ball.position);
+    const seam2 = seam1.clone();
+    seam2.rotation.y = Math.PI / 2;
+    g.add(ball, seam1, seam2);
+    return g;
+  }
+
   if (mode === 'towel_dry') {
     const towel = new THREE.Mesh(
       new THREE.BoxGeometry(0.14, 0.038, 0.12),
@@ -359,6 +423,22 @@ function buildLeftHandProp(
     );
     pages.position.set(s * 0.06, 0.034, 0.03);
     g.add(cover, pages);
+    return g;
+  }
+
+  if (mode === 'gym_weights') {
+    // Matching Left-Hand 3D Dumbbell gripped inside her left fist!
+    const chrome = new THREE.MeshStandardMaterial({ color: '#e2e8f0', metalness: 0.88, roughness: 0.18 });
+    const plate = new THREE.MeshStandardMaterial({ color: accentHex || '#10b981', roughness: 0.38, metalness: 0.25 });
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 12), chrome);
+    bar.rotation.x = Math.PI / 2;
+    bar.position.set(s * 0.045, -0.014, 0.012);
+    const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.032, 8), plate);
+    p1.rotation.x = Math.PI / 2;
+    p1.position.set(s * 0.045, -0.014, 0.092);
+    const p2 = p1.clone();
+    p2.position.z = -0.068;
+    g.add(bar, p1, p2);
     return g;
   }
 

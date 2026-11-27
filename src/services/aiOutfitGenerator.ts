@@ -1017,7 +1017,13 @@ async function requestLlmOutfitPlan(params: {
     forcedSceneGarment = 'school_blazer';
   } else if (
     activeLifeScene?.hobby?.hobbyKind === 'yoga' ||
-    /\byoga\b|workout|athleisure|sporty.?tee/.test(combinedHay)
+    activeLifeScene?.hobby?.hobbyKind === 'gym_weights' ||
+    activeLifeScene?.hobby?.hobbyKind === 'gym_treadmill' ||
+    activeLifeScene?.hobby?.hobbyKind === 'sports_basketball' ||
+    activeLifeScene?.hobby?.hobbyKind === 'sports_tennis' ||
+    activeLifeScene?.destination?.destinationKind === 'gym_studio' ||
+    activeLifeScene?.destination?.destinationKind === 'sports_court' ||
+    /\byoga\b|workout|athleisure|sporty.?tee|\bgym\b|dumbbell|treadmill|cardio|basketball|tennis|fitness/.test(combinedHay)
   ) {
     forcedSceneGarment = 'sporty_tee_leggings';
   } else if (

@@ -152,6 +152,30 @@ export const HOBBY_KIND_META: Record<
     posture: 'standing',
     summary: 'Bathroom vanity sink, mirror, toothpaste, rinse cup & animated toothbrush',
   },
+  gym_weights: {
+    label: 'Dumbbell Strength Workout',
+    emoji: '🏋️‍♀️',
+    posture: 'standing',
+    summary: 'Fitness rubber mat, chrome dumbbell weight rack, gym mirror, hydration bottle & dual 3D dumbbells',
+  },
+  gym_treadmill: {
+    label: 'Treadmill Cardio Run',
+    emoji: '🏃‍♀️',
+    posture: 'standing',
+    summary: 'Modern cardio treadmill with glowing speed console, side rails & rhythmic running stride',
+  },
+  sports_basketball: {
+    label: 'Basketball Shootaround',
+    emoji: '🏀',
+    posture: 'standing',
+    summary: 'Athletic court hoop with glass backboard, net, court markings & lively 3D basketball',
+  },
+  sports_tennis: {
+    label: 'Tennis Rally Practice',
+    emoji: '🎾',
+    posture: 'standing',
+    summary: 'Sports court net, animated rallying tennis ball & real 3D tennis racket swings',
+  },
 };
 
 export const DESTINATION_KIND_META: Record<
@@ -246,6 +270,24 @@ export const DESTINATION_KIND_META: Record<
     groundHex: '#cbd5e1',
     accentHex: '#38bdf8',
     summary: 'Bright tiled bathroom with frosted shower glass, towel rack, shampoo/soap & mirror vanity',
+  },
+  gym_studio: {
+    label: 'Modern Fitness Gym Studio',
+    emoji: '🏋️‍♀️',
+    skyTopHex: '#0f172a',
+    skyBottomHex: '#1e293b',
+    groundHex: '#334155',
+    accentHex: '#10b981',
+    summary: 'Sleek athletic gym studio with rubber floor, weight racks, studio mirrors & emerald LED glow',
+  },
+  sports_court: {
+    label: 'Sunny Athletic Sports Court',
+    emoji: '🏟️',
+    skyTopHex: '#0284c7',
+    skyBottomHex: '#bae6fd',
+    groundHex: '#15803d',
+    accentHex: '#f97316',
+    summary: 'Open-air sunny sports court with crisp court lines, sideline bench & athletic vibe',
   },
 };
 
@@ -1616,6 +1658,176 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
     }
 
     root.add(vanity);
+  } else if (hobby.hobbyKind === 'gym_weights') {
+    // 3D Fitness Gym Mat + Chrome Dumbbell Rack + Water Bottle & Towel!
+    const matMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1.55, 0.018, 1.05),
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.85 })
+    );
+    matMesh.position.set(0, 0.009, 0.04);
+    const matTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(1.58, 0.012, 1.08),
+      new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.25 })
+    );
+    matTrim.position.set(0, 0.006, 0.04);
+    root.add(matMesh, matTrim);
+
+    // Sleek 2-tier Dumbbell Rack on her right side
+    const rack = new THREE.Group();
+    rack.position.set(-0.92, 0, 0.12);
+    rack.rotation.y = 0.28;
+    const rackSteel = new THREE.MeshStandardMaterial({ color: '#334155', metalness: 0.72, roughness: 0.28 });
+    const chrome = new THREE.MeshStandardMaterial({ color: '#e2e8f0', metalness: 0.9, roughness: 0.15 });
+    const plateMat = new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.55 });
+    for (const sx of [-0.36, 0.36]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.74, 0.32), rackSteel);
+      post.position.set(sx, 0.37, 0);
+      rack.add(post);
+    }
+    for (const sy of [0.34, 0.66]) {
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.035, 0.26), rackSteel);
+      shelf.position.set(0, sy, 0);
+      rack.add(shelf);
+      for (const dx of [-0.22, 0, 0.22]) {
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 10), chrome);
+        bar.rotation.x = Math.PI / 2;
+        bar.position.set(dx, sy + 0.055, 0);
+        const w1 = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.028, 8), plateMat);
+        w1.rotation.x = Math.PI / 2;
+        w1.position.set(dx, sy + 0.055, -0.072);
+        const w2 = w1.clone();
+        w2.position.z = 0.072;
+        rack.add(bar, w1, w2);
+      }
+    }
+    root.add(rack);
+
+    // Sports Hydration Bottle & Rolled Gym Towel on her left side
+    const bottle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.036, 0.036, 0.22, 16),
+      new THREE.MeshStandardMaterial({ color: '#38bdf8', roughness: 0.22, transparent: true, opacity: 0.85 })
+    );
+    bottle.position.set(0.66, 0.12, 0.28);
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.024, 0.035, 12),
+      new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.4 })
+    );
+    cap.position.set(0.66, 0.245, 0.28);
+    const gymTowel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.048, 0.048, 0.26, 12),
+      new THREE.MeshStandardMaterial({ color: accent, roughness: 0.9 })
+    );
+    gymTowel.rotation.z = Math.PI / 2;
+    gymTowel.rotation.y = 0.4;
+    gymTowel.position.set(0.54, 0.055, 0.36);
+    root.add(bottle, cap, gymTowel);
+  } else if (hobby.hobbyKind === 'gym_treadmill') {
+    // Sleek Modern 3D Cardio Treadmill right beneath her!
+    const tm = new THREE.Group();
+    const frameMat = new THREE.MeshStandardMaterial({ color: '#1e293b', metalness: 0.55, roughness: 0.35 });
+    const beltMat = new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.9 });
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.06, 1.48), frameMat);
+    deck.position.set(0, 0.03, 0.10);
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.60, 0.012, 1.38), beltMat);
+    belt.position.set(0, 0.062, 0.10);
+    tm.add(deck, belt);
+
+    // Side safety handrails & front console uprights
+    for (const sx of [-0.36, 0.36]) {
+      const upright = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.025, 1.12, 10), frameMat);
+      upright.position.set(sx, 0.58, 0.72);
+      upright.rotation.x = -0.14;
+      const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.52, 10), frameMat);
+      rail.rotation.x = Math.PI / 2;
+      rail.position.set(sx, 0.98, 0.44);
+      tm.add(upright, rail);
+    }
+
+    // Glowing Cardio Console Display
+    const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.18, 0.22), frameMat);
+    consoleBox.position.set(0, 1.12, 0.68);
+    consoleBox.rotation.x = -0.45;
+    const screenTex = makeCanvasTexture(256, 96, (ctx) => {
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(0, 0, 256, 96);
+      ctx.fillStyle = accent;
+      ctx.font = 'bold 28px monospace';
+      ctx.fillText('8.4 km/h', 18, 42);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '18px monospace';
+      ctx.fillText('BPM 138 · 245 kcal', 18, 76);
+    });
+    const screen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.62, 0.14),
+      new THREE.MeshBasicMaterial({ map: screenTex })
+    );
+    screen.position.set(0, 1.155, 0.61);
+    screen.rotation.x = -0.45;
+    screen.rotation.y = Math.PI;
+    tm.add(consoleBox, screen);
+    root.add(tm);
+  } else if (hobby.hobbyKind === 'sports_basketball') {
+    // 3D Basketball Court Hoop Stanchion + Glass Backboard + Orange Rim & Net!
+    const hoop = new THREE.Group();
+    hoop.position.set(0.95, 0, 1.35);
+    hoop.rotation.y = -0.58;
+    const poleMat = new THREE.MeshStandardMaterial({ color: '#1e293b', metalness: 0.65, roughness: 0.3 });
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 2.55, 12), poleMat);
+    pole.position.y = 1.275;
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.42), poleMat);
+    arm.position.set(0, 2.38, -0.18);
+    const board = new THREE.Mesh(
+      new THREE.BoxGeometry(0.98, 0.66, 0.03),
+      new THREE.MeshStandardMaterial({ color: '#f8fafc', transparent: true, opacity: 0.72, roughness: 0.15 })
+    );
+    board.position.set(0, 2.38, -0.40);
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.18, 0.014, 10, 24),
+      new THREE.MeshStandardMaterial({ color: '#ea580c', metalness: 0.4, roughness: 0.35 })
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.set(0, 2.18, -0.60);
+    const net = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.175, 0.11, 0.32, 16, 1, true),
+      new THREE.MeshStandardMaterial({ color: '#f8fafc', wireframe: true, side: THREE.DoubleSide })
+    );
+    net.position.set(0, 2.02, -0.60);
+    hoop.add(pole, arm, board, rim, net);
+    root.add(hoop);
+  } else if (hobby.hobbyKind === 'sports_tennis') {
+    // 3D Sports Court Tennis Net + Animated Bouncing Tennis Ball!
+    const netGroup = new THREE.Group();
+    netGroup.position.set(0, 0, 1.42);
+    const postMat = new THREE.MeshStandardMaterial({ color: '#0f172a', metalness: 0.6, roughness: 0.35 });
+    for (const sx of [-1.45, 1.45]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.03, 0.94, 10), postMat);
+      post.position.set(sx, 0.47, 0);
+      netGroup.add(post);
+    }
+    const topTape = new THREE.Mesh(
+      new THREE.BoxGeometry(2.92, 0.055, 0.025),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 })
+    );
+    topTape.position.set(0, 0.91, 0);
+    const meshNet = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.9, 0.85, 22, 6),
+      new THREE.MeshStandardMaterial({ color: '#e2e8f0', wireframe: true, side: THREE.DoubleSide })
+    );
+    meshNet.position.set(0, 0.46, 0);
+    netGroup.add(topTape, meshNet);
+    root.add(netGroup);
+
+    // Animated rallying glowing tennis ball!
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.042, 14, 12),
+      new THREE.MeshStandardMaterial({ color: '#d9f99d', emissive: '#bef264', emissiveIntensity: 0.45, roughness: 0.65 })
+    );
+    ball.position.set(0.32, 1.05, 0.58);
+    ball.userData.floatBaseY = 1.05;
+    ball.userData.floatSpeed = 5.4;
+    ball.userData.floatAmp = 0.24;
+    root.add(ball);
+    animatedNodes.push(ball);
   } else {
     // Reading Manga or Scrapbook Journaling cozy desk
     const desk = new THREE.Group();
@@ -2100,6 +2312,39 @@ function buildDestinationDiorama(
       }
       root.add(shelf);
     }
+  } else if (dest.destinationKind === 'gym_studio') {
+    // Sleek Modern Fitness Gym Studio wall mirror + glowing emerald LED light strip!
+    const mirrorFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 2.2, 0.08),
+      new THREE.MeshStandardMaterial({ color: '#1e293b', metalness: 0.6, roughness: 0.3 })
+    );
+    mirrorFrame.position.set(0, 1.15, -1.85);
+    const mirrorGlass = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.04, 2.04),
+      new THREE.MeshStandardMaterial({ color: '#cbd5e1', metalness: 0.85, roughness: 0.08 })
+    );
+    mirrorGlass.position.set(0, 1.15, -1.805);
+    const ledBar = new THREE.Mesh(
+      new THREE.BoxGeometry(3.1, 0.05, 0.05),
+      new THREE.MeshStandardMaterial({ color: '#10b981', emissive: '#10b981', emissiveIntensity: 1.2 })
+    );
+    ledBar.position.set(0, 2.28, -1.82);
+    root.add(mirrorFrame, mirrorGlass, ledBar);
+  } else if (dest.destinationKind === 'sports_court') {
+    // Sunny Athletic Court crisp painted court lines & wooden sideline bench!
+    const lineMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+    for (const lz of [-0.95, 1.35]) {
+      const line = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.008, 0.05), lineMat);
+      line.position.set(0, 0.005, lz);
+      root.add(line);
+    }
+    const bench = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.06, 0.36),
+      new THREE.MeshStandardMaterial({ color: '#b45309', roughness: 0.65 })
+    );
+    bench.position.set(-1.65, 0.44, -0.75);
+    bench.rotation.y = 0.25;
+    root.add(bench);
   }
 
   return { group: root, animatedNodes };

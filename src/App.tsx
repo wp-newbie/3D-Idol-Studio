@@ -102,11 +102,13 @@ import {
   planAiAutoRoamDecision,
   planAiChair,
   planAiDestination,
+  planAiGymSport,
   planAiHobby,
   planAiHygieneRoutine,
   planAiMoodFood,
   planAiSchoolStudy,
   planAiSpontaneousDesire,
+  type GymSportKindId,
   type HygieneRoutineId,
   type SchoolLevel,
 } from './services/aiLifePlanner';
@@ -292,6 +294,7 @@ export const App: React.FC = () => {
   const visitPlaceRef = useRef<(placePrompt?: string) => void>(() => {});
   const studySchoolRef = useRef<(studyPrompt?: string) => void>(() => {});
   const bathCareRef = useRef<(bathPrompt?: string) => void>(() => {});
+  const gymSportRef = useRef<(sportPrompt?: string) => void>(() => {});
   const equipWholeOutfitRef = useRef<(slotOrModelTarget: string) => boolean>(() => false);
   const switchToVrmRef = useRef<
     (
@@ -1330,6 +1333,11 @@ export const App: React.FC = () => {
         // AI-triggered SFW censored shower / towel / toothbrush routine: [SELF_CARE_BATH: <routine>]
         if (parsed.bathCareAction) {
           bathCareRef.current(parsed.bathCareAction);
+        }
+
+        // AI-triggered Gym & Sports session: [DO_GYM_SPORT: <workout or sport>]
+        if (parsed.gymSportAction) {
+          gymSportRef.current(parsed.gymSportAction);
         }
         const toolEventsMsgs: ChatMessage[] = reply.toolEvents.map((ev, idx) => ({
           id: `msg-tool-${Date.now()}-${idx}`,
@@ -2858,6 +2866,10 @@ export const App: React.FC = () => {
           'College university preppy blazer with ivory argyle vest, tailored navy plaid skirt and loafers',
         bathroom_spa:
           'Fluffy pastel bath towel wrap bath cloth for bathroom spa care',
+        gym_studio:
+          'Energetic fitness gym short-sleeve athletic tee and high-waist sport leggings with high ponytail',
+        sports_court:
+          'Crisp athletic short-sleeve sports jersey tee and sleek sport leggings with high ponytail',
       };
       designTimeOccasionRef.current(promptMap[destKind], {
         reuseDailySlot: false,
@@ -3050,6 +3062,86 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleStartGymSport = async (
+    hint?: string,
+    autoDressSportswear = true,
+    silentReaction = false
+  ) => {
+    if (isLifeBusyRef.current) return;
+    isLifeBusyRef.current = true;
+    setIsLifeBusy(true);
+    try {
+      const currentStudio = studioRef.current;
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const prevKind = lifeSceneRef.current.hobby?.hobbyKind;
+      const prevSport: GymSportKindId | null =
+        prevKind === 'gym_weights' ||
+        prevKind === 'gym_treadmill' ||
+        prevKind === 'sports_basketball' ||
+        prevKind === 'sports_tennis'
+          ? prevKind
+          : null;
+
+      const res = await planAiGymSport({
+        persona,
+        hint,
+        previousSportKind: prevSport,
+      });
+
+      setLifeScene((prev) => ({
+        ...prev,
+        dining: null,
+        chair: null,
+        hobby: res.hobby,
+        destination: res.destination,
+      }));
+      handleUpdateSettings({ defaultPosture: 'standing' });
+      setAutoRoamEnabled(false);
+      updateActivePersona((p) => ({
+        ...p,
+        brain: {
+          ...p.brain,
+          isSleeping: false,
+          boredom: Math.max(0, (p.brain?.boredom ?? 45) - 34),
+          comfort: Math.min(100, (p.brain?.comfort ?? 70) + 12),
+          innerThought: res.note,
+        },
+        updatedAt: Date.now(),
+      }));
+
+      const engineLabel =
+        res.source === 'lm-studio'
+          ? `LM Studio · ${res.modelUsed || 'Local'}`
+          : 'Smart Fitness';
+      setAutonomousActionToast(
+        `🏋️‍♀️ ${persona.name} started ${res.workoutName} (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (autoDressSportswear) {
+        const curSlotSport = persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId);
+        if (curSlotSport?.garmentStyle !== 'sporty_tee_leggings') {
+          designTimeOccasionRef.current(res.sportOutfitPrompt, {
+            silentReaction: true,
+            reuseDailySlot: false,
+          });
+        }
+      }
+
+      if (!silentReaction) {
+        triggerOutfitReaction(
+          res.workoutName,
+          `changed into athletic sportswear and started ${res.workoutName} at ${res.destination.placeName}: "${res.note}"`
+        );
+      }
+    } finally {
+      isLifeBusyRef.current = false;
+      setIsLifeBusy(false);
+    }
+  };
+
   const handleFollowWhim = async (options?: { silent?: boolean }) => {
     if (isLifeBusyRef.current || isLifeBusy) return;
     isLifeBusyRef.current = true;
@@ -3073,6 +3165,8 @@ export const App: React.FC = () => {
         await handleStartHygieneRoutine(undefined, whim.prompt || undefined, true, silent);
       } else if (whim.choice === 'study') {
         await handleStartSchoolStudy(undefined, whim.prompt || undefined, true, silent);
+      } else if (whim.choice === 'gym_sport') {
+        await handleStartGymSport(whim.prompt || undefined, true, silent);
       } else if (whim.choice === 'travel') {
         await handlePlanDestination(whim.prompt || undefined, true, silent);
       } else if (whim.choice === 'roam') {
@@ -3374,6 +3468,9 @@ export const App: React.FC = () => {
       ? 'shower'
       : undefined;
     void handleStartHygieneRoutine(inferred, bathPrompt, true, true);
+  };
+  gymSportRef.current = (sportPrompt) => {
+    void handleStartGymSport(sportPrompt, true, true);
   };
 
   const applyGeneratedOutfitToPersona = (
@@ -3721,8 +3818,14 @@ export const App: React.FC = () => {
         curScene.hobby?.hobbyKind === 'towel_dry' ||
         curScene.hobby?.hobbyKind === 'brushing_teeth' ||
         curScene.hobby?.hobbyKind === 'studying' ||
+        curScene.hobby?.hobbyKind === 'gym_weights' ||
+        curScene.hobby?.hobbyKind === 'gym_treadmill' ||
+        curScene.hobby?.hobbyKind === 'sports_basketball' ||
+        curScene.hobby?.hobbyKind === 'sports_tennis' ||
         curScene.destination?.destinationKind === 'tropical_beach' ||
-        curScene.destination?.destinationKind === 'mountain_onsen'
+        curScene.destination?.destinationKind === 'mountain_onsen' ||
+        curScene.destination?.destinationKind === 'gym_studio' ||
+        curScene.destination?.destinationKind === 'sports_court'
       ) {
         return;
       }

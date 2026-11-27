@@ -1310,8 +1310,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               poseControllerRef.current.restoreStandingHips(vrm, dt);
             }
             if (!activeReaction && !activeEmoteRef.current) {
-              if (lifeSceneRef.current?.hobby?.hobbyKind === 'brushing_teeth') {
-                poseControllerRef.current.applyToothbrushFingerGrip(vrm, dt);
+              const hk = lifeSceneRef.current?.hobby?.hobbyKind;
+              if (hk === 'gym_weights') {
+                poseControllerRef.current.applyPropFingerGrip(vrm, dt, 'both');
+              } else if (hk === 'brushing_teeth' || hk === 'sports_tennis') {
+                poseControllerRef.current.applyPropFingerGrip(vrm, dt, 'right');
               } else {
                 poseControllerRef.current.applyStandingFingerRelax(vrm, dt);
               }

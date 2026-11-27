@@ -955,6 +955,50 @@ export function getHobbyActivityFrame(
         happySmile: 0.25,
         relaxedEyes: 0,
       };
+    case 'gym_weights':
+      return {
+        headPitch: 0.02 + Math.sin(elapsed * 2.8) * 0.03,
+        headYaw: Math.sin(elapsed * 1.4) * 0.08,
+        headRoll: Math.sin(elapsed * 2.8) * 0.04,
+        spineTwistY: Math.sin(elapsed * 2.8) * 0.05,
+        spineLeanX: 0.02,
+        mouthIh: 0.06,
+        happySmile: 0.45,
+        relaxedEyes: 0,
+      };
+    case 'gym_treadmill':
+      return {
+        headPitch: 0.04 + Math.abs(Math.sin(elapsed * 6.8)) * 0.025,
+        headYaw: Math.sin(elapsed * 1.6) * 0.05,
+        headRoll: Math.sin(elapsed * 3.4) * 0.03,
+        spineTwistY: Math.sin(elapsed * 6.8) * 0.06,
+        spineLeanX: 0.07,
+        mouthIh: 0.12,
+        happySmile: 0.40,
+        relaxedEyes: 0,
+      };
+    case 'sports_basketball':
+      return {
+        headPitch: -0.06 + Math.sin(elapsed * 2.4) * 0.08,
+        headYaw: -0.14 + Math.sin(elapsed * 1.8) * 0.10,
+        headRoll: Math.sin(elapsed * 2.4) * 0.04,
+        spineTwistY: -0.08 + Math.sin(elapsed * 2.4) * 0.09,
+        spineLeanX: 0.06,
+        mouthIh: 0.08,
+        happySmile: 0.52,
+        relaxedEyes: 0,
+      };
+    case 'sports_tennis':
+      return {
+        headPitch: 0.02 + Math.sin(elapsed * 3.2) * 0.04,
+        headYaw: Math.sin(elapsed * 2.2) * 0.16,
+        headRoll: Math.sin(elapsed * 2.2) * 0.05,
+        spineTwistY: Math.sin(elapsed * 2.2) * 0.16,
+        spineLeanX: 0.08,
+        mouthIh: 0.08,
+        happySmile: 0.50,
+        relaxedEyes: 0,
+      };
     case 'showering':
       return {
         headPitch: -0.10 + Math.sin(elapsed * 1.6) * 0.05,
@@ -1185,6 +1229,37 @@ export function applyHobbyActivityArms(
     lLow = [-0.52, THREE.MathUtils.lerp(0.10, 0.74, aim), THREE.MathUtils.lerp(0.84, 0.42, aim)];
     rUp = [-0.26, THREE.MathUtils.lerp(-0.68, -0.18, aim), THREE.MathUtils.lerp(0.68, 0.94, aim)];
     rLow = [0.52, THREE.MathUtils.lerp(0.10, 0.74, aim), THREE.MathUtils.lerp(0.84, 0.42, aim)];
+  } else if (hobbyKind === 'gym_weights') {
+    // Alternating athletic dumbbell bicep curls!
+    const curlL = 0.5 - 0.5 * Math.cos(elapsed * 2.8);
+    const curlR = 0.5 - 0.5 * Math.cos(elapsed * 2.8 + Math.PI);
+    lUp = [0.22, -0.92, 0.28];
+    lLow = [-0.08, THREE.MathUtils.lerp(-0.42, 0.86, curlL), THREE.MathUtils.lerp(0.88, 0.42, curlL)];
+    rUp = [-0.22, -0.92, 0.28];
+    rLow = [0.08, THREE.MathUtils.lerp(-0.42, 0.86, curlR), THREE.MathUtils.lerp(0.88, 0.42, curlR)];
+  } else if (hobbyKind === 'gym_treadmill') {
+    // Energetic cardio runner pumping arms in rhythm with treadmill stride!
+    const pump = Math.sin(elapsed * 6.8);
+    lUp = [0.22, -0.78 + pump * 0.16, 0.22 + pump * 0.55];
+    lLow = [-0.14, 0.16 + pump * 0.28, 0.92];
+    rUp = [-0.22, -0.78 - pump * 0.16, 0.22 - pump * 0.55];
+    rLow = [0.14, 0.16 - pump * 0.28, 0.92];
+  } else if (hobbyKind === 'sports_basketball') {
+    // Lively dribble cycles followed by an athletic high jump-shot follow-through!
+    const phase = elapsed % 4.2;
+    const shoot = smoothPulse(phase, 2.5, 3.0, 3.4, 4.0);
+    const dribble = Math.sin(elapsed * 7.8) * 0.18;
+    rUp = [-0.24, THREE.MathUtils.lerp(-0.68, 0.62, shoot), THREE.MathUtils.lerp(0.68, 0.72, shoot)];
+    rLow = [0.12, THREE.MathUtils.lerp(-0.28 + dribble, 0.88, shoot), THREE.MathUtils.lerp(0.92, 0.42, shoot)];
+    lUp = [0.26, THREE.MathUtils.lerp(-0.74, 0.38, shoot), THREE.MathUtils.lerp(0.58, 0.82, shoot)];
+    lLow = [-0.22, THREE.MathUtils.lerp(-0.14, 0.66, shoot), THREE.MathUtils.lerp(0.92, 0.66, shoot)];
+  } else if (hobbyKind === 'sports_tennis') {
+    // Crisp athletic forehand & follow-through tennis racket rallies!
+    const swing = Math.sin(elapsed * 2.4);
+    rUp = [-0.36 + swing * 0.34, -0.42 + Math.max(0, swing) * 0.38, 0.72 + swing * 0.22];
+    rLow = [0.24 + swing * 0.58, -0.05 + Math.max(0, swing) * 0.52, 0.82];
+    lUp = [0.30, -0.68, 0.64];
+    lLow = [-0.28, 0.08, 0.92];
   } else if (hobbyKind === 'yoga') {
     // Calm flowing Sun-Salutation: sweep arms wide & high overhead -> glide down to heart prayer!
     const raise = 0.5 - 0.5 * Math.cos(elapsed * 0.85);

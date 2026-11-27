@@ -85,7 +85,11 @@ export type HobbyKindId =
   | 'studying'
   | 'showering'
   | 'towel_dry'
-  | 'brushing_teeth';
+  | 'brushing_teeth'
+  | 'gym_weights'
+  | 'gym_treadmill'
+  | 'sports_basketball'
+  | 'sports_tennis';
 
 export type DestinationKindId =
   | 'none'
@@ -97,7 +101,9 @@ export type DestinationKindId =
   | 'amusement_park'
   | 'highschool_classroom'
   | 'college_campus'
-  | 'bathroom_spa';
+  | 'bathroom_spa'
+  | 'gym_studio'
+  | 'sports_court';
 
 export interface ActiveDiningScene {
   dishName: string;

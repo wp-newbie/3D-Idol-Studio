@@ -515,10 +515,14 @@ export class AvatarPoseController {
   }
 
   /**
-   * Applies an anatomical closed-fist toothbrush grip on the right hand (fingers wrapped snugly
-   * around the handle + thumb bracing the top) while keeping the left hand softly relaxed.
+   * Applies an anatomical closed-fist grip for handheld props (toothbrush, tennis racket on right hand,
+   * or BOTH hands gripping dumbbells during gym strength training!).
    */
-  public applyToothbrushFingerGrip(vrm: VRM, dt: number): void {
+  public applyPropFingerGrip(
+    vrm: VRM,
+    dt: number,
+    hands: 'right' | 'both' = 'right'
+  ): void {
     const humanoid = vrm.humanoid;
     if (!humanoid) return;
     const isVrm0 = vrm.meta?.metaVersion === '0';
@@ -530,7 +534,8 @@ export class AvatarPoseController {
       const node = humanoid.getNormalizedBoneNode(f.name);
       if (!node) continue;
       const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
-      if (f.side === 'left') {
+      const shouldGrip = hands === 'both' || f.side === 'right';
+      if (!shouldGrip) {
         const relax = f.weight * 0.42;
         if (f.name.includes('Thumb')) {
           node.rotation.y = sideSign * relax;
@@ -540,7 +545,6 @@ export class AvatarPoseController {
         }
         continue;
       }
-      // Right hand: snug wrap grip around the toothbrush handle!
       let curl = 0.85;
       if (f.name.includes('Thumb')) {
         curl = f.name.includes('Proximal') ? 0.68 : 0.46;
@@ -555,6 +559,10 @@ export class AvatarPoseController {
         node.rotation.z = sideSign * curl;
       }
     }
+  }
+
+  public applyToothbrushFingerGrip(vrm: VRM, dt: number): void {
+    this.applyPropFingerGrip(vrm, dt, 'right');
   }
 
   /**

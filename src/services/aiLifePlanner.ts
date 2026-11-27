@@ -41,9 +41,26 @@ export interface PlannedDestinationResult {
 }
 
 export interface SpontaneousDesireResult {
-  choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'roam';
+  choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam';
   prompt: string;
   thought: string;
+  source: LifeEngineSource;
+  modelUsed?: string;
+}
+
+export type GymSportKindId =
+  | 'gym_weights'
+  | 'gym_treadmill'
+  | 'sports_basketball'
+  | 'sports_tennis';
+
+export interface PlannedGymSportResult {
+  sportKind: GymSportKindId;
+  workoutName: string;
+  note: string;
+  hobby: ActiveHobbyScene;
+  destination: ActiveDestinationScene;
+  sportOutfitPrompt: string;
   source: LifeEngineSource;
   modelUsed?: string;
 }
@@ -526,7 +543,7 @@ export async function planAiSpontaneousDesire(params: {
   const mood = persona.mood;
 
   // Identify current active category so she naturally transitions to something fresh when her mood shifts
-  const activeCategory: 'dining' | 'hobby' | 'study' | 'hygiene' | 'travel' | 'none' =
+  const activeCategory: 'dining' | 'hobby' | 'study' | 'hygiene' | 'gym_sport' | 'travel' | 'none' =
     currentScene?.dining
       ? 'dining'
       : currentScene?.hobby?.hobbyKind === 'studying'
@@ -535,6 +552,11 @@ export async function planAiSpontaneousDesire(params: {
         currentScene?.hobby?.hobbyKind === 'towel_dry' ||
         currentScene?.hobby?.hobbyKind === 'brushing_teeth'
       ? 'hygiene'
+      : currentScene?.hobby?.hobbyKind === 'gym_weights' ||
+        currentScene?.hobby?.hobbyKind === 'gym_treadmill' ||
+        currentScene?.hobby?.hobbyKind === 'sports_basketball' ||
+        currentScene?.hobby?.hobbyKind === 'sports_tennis'
+      ? 'gym_sport'
       : currentScene?.hobby
       ? 'hobby'
       : currentScene?.destination && currentScene.destination.destinationKind !== 'none'
@@ -543,58 +565,63 @@ export async function planAiSpontaneousDesire(params: {
 
   const moodGuidanceMap: Record<string, string> = {
     Pouty: 'Feeling pouty — craves comfort food/sweets at the dining table OR a relaxing warm shower/towel-dry to cheer up.',
-    Annoyed: 'Feeling annoyed — wants spicy ramen/comfort food OR a warm refreshing censored shower with soap/bubbles OR solo gaming/music to blow off steam.',
-    Warm: 'Feeling warm & happy — loves cozy creative hobbies (painting, baking, journaling), cafe treats, or a sunny beach/terrace cafe trip.',
+    Annoyed: 'Feeling annoyed — wants spicy ramen/comfort food OR an energetic gym dumbbell/treadmill workout to blow off steam OR solo gaming.',
+    Warm: 'Feeling warm & happy — loves cozy creative hobbies (painting, baking, journaling), playful tennis/basketball outdoors, cafe treats, or a sunny beach trip.',
     Shy: 'Feeling shy & quiet — prefers peaceful pen-and-paper studying, reading manga, journaling, or a quiet mountain onsen.',
-    Flustered: 'Feeling flustered — wants a quick refreshing wash/brush teeth, sweet strawberry cake, or focusing on drawing/studying to cool down.',
-    Proud: 'Feeling proud & energetic — wants to go out to a shopping mall, amusement park, beach vacation, or perform music on her synth keyboard.',
-    Amused: 'Feeling playful & amused — loves trying fun trips (amusement park, shopping mall), gaming, photography, or gourmet treats.',
-    Deadpan: 'Feeling calm & focused — ideal for high school/college studying with pen & paper in uniform, quiet reading, or a simple savory meal.',
+    Flustered: 'Feeling flustered — wants a quick refreshing wash/brush teeth, sweet strawberry cake, or light cardio jog to clear her head.',
+    Proud: 'Feeling proud & energetic — wants to crush a fitness gym dumbbell/cardio session, play competitive tennis/basketball, visit a shopping mall, or perform music.',
+    Amused: 'Feeling playful & amused — loves fun sports (basketball shootaround, tennis rally), amusement park trips, gaming, photography, or gourmet treats.',
+    Deadpan: 'Feeling calm & focused — ideal for steady treadmill cardio, high school/college studying with pen & paper, quiet reading, or a simple savory meal.',
   };
   const moodHint = moodGuidanceMap[mood] || moodGuidanceMap.Deadpan;
 
-  const systemPrompt = `You are a 3D Anime Virtual Idol living your own daily life automatically based on your MOOD, physical needs, and real-world time of day.
+  const systemPrompt = `You are a 3D Anime Virtual Idol living your own daily life automatically based on your MOOD, physical needs, energy, and real-world time of day.
 Choose one of:
 - "dining" (craving mood-based food & eating at a wooden dining table with kitchen)
 - "hobby" (doing a creative or fun hobby like painting, synth music, gaming, baking, reading, yoga)
 - "study" (going to high school or college in school uniform to study with pen & paper)
 - "hygiene" (SFW frosted-glass censored shower with shampoo & soap, bath towel dry, or brushing teeth)
+- "gym_sport" (changing into athletic sportswear to hit the 3D gym for dumbbells/treadmill cardio OR play basketball/tennis on the sports court!)
 - "travel" (visiting a shopping mall, tropical beach, vacation cafe, mountain onsen, or amusement park)
 - "roam" (standing up, stretching your legs, and freely auto-roaming / walking around the stage or desktop)
 Return ONLY valid raw JSON:
 {
-  "choice": "dining|hobby|study|hygiene|travel|roam",
-  "prompt": "Specific dish, hobby, school subject, bath/toothbrush routine, destination, or roaming mood",
+  "choice": "dining|hobby|study|hygiene|gym_sport|travel|roam",
+  "prompt": "Specific dish, hobby, school subject, bath/toothbrush routine, gym workout or sport, destination, or roaming mood",
   "thought": "Short 1-sentence in-character mood reason"
 }`;
 
   const userPrompt = `Character: ${persona.name}
 Current Mood: ${mood} (${moodHint})
-Needs: Hunger ${hunger}%, Boredom ${boredom}%, Comfort ${comfort}%
+Needs: Hunger ${hunger}%, Boredom ${boredom}%, Comfort ${comfort}%, Energy ${Math.round(persona.brain?.energy ?? 75)}%
 Time of Day: ${circadian.clockText} (${circadian.phaseLabel})
 Currently doing: ${activeCategory} (prefer switching to a fresh activity if appropriate!)
 Output ONLY the JSON object.`;
 
-  const pickMoodFallback = (): 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'roam' => {
-    const candidates: ('dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'roam')[] = [];
+  const pickMoodFallback = (): 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam' => {
+    const candidates: ('dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam')[] = [];
+    const energy = Math.round(persona.brain?.energy ?? 75);
     if (hunger >= 58) candidates.push('dining');
     if (comfort <= 45 || circadian.phase === 'late_night') candidates.push('hygiene');
-    if (boredom >= 62 && (persona.brain?.energy ?? 75) >= 55) candidates.push('roam');
+    if (energy >= 62 && circadian.phase !== 'late_night' && (mood === 'Proud' || mood === 'Amused' || mood === 'Annoyed')) {
+      candidates.push('gym_sport');
+    }
+    if (boredom >= 62 && energy >= 55) candidates.push('roam');
 
     if (mood === 'Pouty' || mood === 'Annoyed') {
-      candidates.push('dining', 'roam', 'hygiene', 'hobby');
+      candidates.push('gym_sport', 'dining', 'roam', 'hygiene', 'hobby');
     } else if (mood === 'Proud' || mood === 'Amused') {
-      candidates.push('roam', 'travel', 'hobby', 'dining');
+      candidates.push('gym_sport', 'roam', 'travel', 'hobby', 'dining');
     } else if (mood === 'Deadpan' || mood === 'Shy') {
-      candidates.push('study', 'hobby', 'hygiene');
+      candidates.push('study', 'hobby', 'gym_sport', 'hygiene');
     } else if (mood === 'Flustered') {
       candidates.push('hygiene', 'dining', 'study');
     } else {
       // Warm
-      candidates.push('hobby', 'roam', 'travel', 'dining');
+      candidates.push('hobby', 'gym_sport', 'roam', 'travel', 'dining');
     }
 
-    if (circadian.phase === 'morning') candidates.push('study', 'hygiene');
+    if (circadian.phase === 'morning') candidates.push('gym_sport', 'study', 'hygiene');
     const fresh = candidates.find((c) => c !== activeCategory);
     return fresh || candidates[0] || 'hobby';
   };
@@ -607,14 +634,17 @@ Output ONLY the JSON object.`;
   });
   if (res?.json) {
     const rawChoice = String(res.json.choice || '').toLowerCase();
-    const choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'roam' =
+    const choice: 'dining' | 'hobby' | 'travel' | 'study' | 'hygiene' | 'gym_sport' | 'roam' =
       rawChoice === 'dining' ||
       rawChoice === 'hobby' ||
       rawChoice === 'travel' ||
       rawChoice === 'study' ||
       rawChoice === 'hygiene' ||
+      rawChoice === 'gym_sport' ||
       rawChoice === 'roam'
         ? rawChoice
+        : /gym|sport|workout|dumbbell|treadmill|tennis|basketball/.test(rawChoice)
+        ? 'gym_sport'
         : pickMoodFallback();
     return {
       choice,
@@ -639,6 +669,8 @@ Output ONLY the JSON object.`;
         ? `Feeling ${mood.toLowerCase()} — time to freshen up in the bathroom!`
         : choice === 'study'
         ? `In a focused ${mood.toLowerCase()} mood — putting on my school uniform to study with pen & paper!`
+        : choice === 'gym_sport'
+        ? `Feeling ${mood.toLowerCase()} and energized — changing into my sportswear for a gym & sports session!`
         : choice === 'travel'
         ? `Feeling ${mood.toLowerCase()} — let's head out for a change of scenery!`
         : choice === 'roam'
@@ -1119,6 +1151,153 @@ Output ONLY the JSON object.`;
     fallbackSubject,
     `Sitting at the desk in school uniform writing neat pen-and-paper notes for ${fallbackSubject}.`,
     inferredLevel === 'college' ? '#0284c7' : '#2563eb',
+    'offline-planner'
+  );
+}
+
+
+/**
+ * Lets the AI character freely choose her own Gym or Sports lifestyle session
+ * (Dumbbell Strength Training, Treadmill Cardio Jog, Basketball Shootaround, or Tennis Rally)
+ * based on her live mood, energy, and time of day via LM Studio!
+ */
+export async function planAiGymSport(params: {
+  persona: Persona;
+  hint?: string;
+  previousSportKind?: GymSportKindId | null;
+}): Promise<PlannedGymSportResult> {
+  const { persona, hint = '', previousSportKind = null } = params;
+  const circadian = getCircadianContext();
+  const validKinds: GymSportKindId[] = [
+    'gym_weights',
+    'gym_treadmill',
+    'sports_basketball',
+    'sports_tennis',
+  ];
+
+  const inferKind = (raw: string): GymSportKindId => {
+    const s = raw.toLowerCase();
+    if (/treadmill|run|jog|cardio|sprint/.test(s)) return 'gym_treadmill';
+    if (/basketball|hoop|dribble|dunk|shoot/.test(s)) return 'sports_basketball';
+    if (/tennis|racket|badminton|volley|rally/.test(s)) return 'sports_tennis';
+    if (/weight|dumbbell|lift|curl|strength|press|gym/.test(s)) return 'gym_weights';
+    const moodPools: Record<string, GymSportKindId[]> = {
+      Proud: ['gym_weights', 'sports_tennis', 'sports_basketball'],
+      Amused: ['sports_basketball', 'sports_tennis', 'gym_treadmill'],
+      Annoyed: ['gym_weights', 'gym_treadmill', 'sports_tennis'],
+      Warm: ['sports_tennis', 'gym_treadmill', 'sports_basketball'],
+      Deadpan: ['gym_treadmill', 'gym_weights'],
+      Pouty: ['gym_weights', 'sports_basketball'],
+      Shy: ['gym_treadmill', 'sports_tennis'],
+      Flustered: ['gym_treadmill', 'sports_tennis'],
+    };
+    const pool = (moodPools[persona.mood] || validKinds).filter((k) => k !== previousSportKind);
+    const pick = pool.length > 0 ? pool : validKinds;
+    return pick[Math.floor(Math.random() * pick.length)];
+  };
+
+  const buildResult = (
+    sportKind: GymSportKindId,
+    workoutName: string,
+    note: string,
+    accentHex: string,
+    source: LifeEngineSource,
+    modelUsed?: string
+  ): PlannedGymSportResult => {
+    const destKind: Exclude<DestinationKindId, 'none'> =
+      sportKind === 'gym_weights' || sportKind === 'gym_treadmill'
+        ? 'gym_studio'
+        : 'sports_court';
+    const destMeta = DESTINATION_KIND_META[destKind];
+    const sportOutfitPrompt =
+      sportKind === 'sports_tennis'
+        ? 'Crisp athletic short-sleeve tennis jersey tee and sleek sport leggings with high ponytail'
+        : sportKind === 'sports_basketball'
+        ? 'Vibrant sporty short-sleeve basketball jersey tee and athletic leggings with high ponytail'
+        : 'Energetic fitness gym short-sleeve athletic tee and high-waist sport leggings with high ponytail';
+
+    return {
+      sportKind,
+      workoutName,
+      note,
+      hobby: {
+        hobbyName: workoutName,
+        hobbyKind: sportKind,
+        accentHex,
+        description: note,
+        recommendedPosture: 'standing',
+      },
+      destination: {
+        placeName:
+          destKind === 'gym_studio'
+            ? `Fitness Gym Studio · ${workoutName}`
+            : `Sunny Sports Court · ${workoutName}`,
+        destinationKind: destKind,
+        accentHex: destMeta.accentHex,
+        description: destMeta.summary,
+        skyTopHex: destMeta.skyTopHex,
+        skyBottomHex: destMeta.skyBottomHex,
+        groundHex: destMeta.groundHex,
+      },
+      sportOutfitPrompt,
+      source,
+      modelUsed,
+    };
+  };
+
+  const systemPrompt = `You are a 3D Anime Virtual Idol choosing your own Gym Workout or Sports activity based on your live mood, energy, and time of day!
+Choose whichever of these 4 gym/sports activities YOU personally want right now:
+- "gym_weights" (strength training with 3D dumbbells in the fitness gym studio)
+- "gym_treadmill" (cardio running / jogging on the 3D treadmill in the fitness gym)
+- "sports_basketball" (shooting hoops & dribbling on the 3D basketball court)
+- "sports_tennis" (playing an energetic tennis rally with a 3D racket on the sports court)
+
+Return ONLY valid raw JSON:
+{
+  "sportKind": "gym_weights|gym_treadmill|sports_basketball|sports_tennis",
+  "workoutName": "2-4 word energetic workout/sport title (e.g. 'Power Dumbbell Session', 'Sunrise Cardio Run', 'Court Hoops Practice', 'Pro Tennis Rally')",
+  "note": "One short in-character sentence about why you feel like doing this workout or sport right now",
+  "accentHex": "#RRGGBB"
+}`;
+
+  const userPrompt = `Character: ${persona.name} (${persona.title})
+Mood: ${persona.mood}, Energy: ${Math.round(persona.brain?.energy ?? 75)}%, Time: ${circadian.clockText} (${circadian.phaseLabel})
+${previousSportKind ? `Previous sport: ${previousSportKind} (feel free to pick a fresh one!)` : ''}
+${hint.trim() ? `Hint / request: ${hint.trim()}` : 'Freely pick the gym workout or sport you feel like doing right now!'}
+Output ONLY the JSON object.`;
+
+  const res = await queryLmStudioJson({
+    systemPrompt,
+    userPrompt,
+    taskKind: 'hobby',
+    mood: persona.mood,
+  });
+
+  if (res?.json) {
+    const rawKind = String(res.json.sportKind || '').trim().toLowerCase();
+    const resolvedKind: GymSportKindId = validKinds.includes(rawKind as GymSportKindId)
+      ? (rawKind as GymSportKindId)
+      : inferKind(`${rawKind} ${String(res.json.workoutName || '')} ${hint}`);
+    const defaultTitle = HOBBY_KIND_META[resolvedKind].label;
+    const workoutName =
+      typeof res.json.workoutName === 'string' && res.json.workoutName.trim()
+        ? res.json.workoutName.trim().slice(0, 40)
+        : defaultTitle;
+    const note =
+      typeof res.json.note === 'string' && res.json.note.trim()
+        ? res.json.note.trim().slice(0, 140)
+        : `Getting an energizing ${workoutName.toLowerCase()} session in to stay fit and sharp!`;
+    const accentHex = cleanHex(res.json.accentHex, '#10b981');
+    return buildResult(resolvedKind, workoutName, note, accentHex, 'lm-studio', res.modelUsed);
+  }
+
+  const fbKind = inferKind(hint);
+  const fbMeta = HOBBY_KIND_META[fbKind];
+  return buildResult(
+    fbKind,
+    fbMeta.label,
+    `Feeling ${persona.mood.toLowerCase()} — hitting ${fbMeta.label.toLowerCase()} for an energizing workout!`,
+    '#10b981',
     'offline-planner'
   );
 }
