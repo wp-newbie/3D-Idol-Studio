@@ -10,36 +10,69 @@ let child = null;
 let isRestarting = false;
 
 function launchElectron() {
-  child = spawn(electronBinary, ['.'], {
+  const proc = spawn(electronBinary, ['.'], {
     stdio: 'inherit',
     env,
   });
+  child = proc;
 
-  child.on('exit', (code) => {
+  proc.on('exit', (code) => {
+    if (child === proc) child = null;
     if (!isRestarting) {
       process.exit(code ?? 0);
     }
   });
 }
 
+function stopCurrentChild() {
+  return new Promise((resolve) => {
+    const prev = child;
+    if (!prev || prev.exitCode !== null || prev.killed) {
+      child = null;
+      resolve();
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (child === prev) child = null;
+      resolve();
+    };
+    prev.once('exit', finish);
+    try {
+      prev.kill('SIGTERM');
+    } catch {
+      finish();
+      return;
+    }
+    // Wait gracefully for Chromium disk cache / state files to flush before relaunching
+    setTimeout(() => {
+      if (!settled) {
+        try {
+          prev.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+        setTimeout(finish, 150);
+      }
+    }, 1500);
+  });
+}
+
 let debounceTimer = null;
 function restartElectron() {
   if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
+  debounceTimer = setTimeout(async () => {
+    if (isRestarting) return;
     isRestarting = true;
-    if (child) {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // ignore
-      }
-    }
-    setTimeout(() => {
-      isRestarting = false;
-      console.log('[ELECTRON LAUNCHER] Reloading Electron main process...');
-      launchElectron();
-    }, 400);
-  }, 300);
+    await stopCurrentChild();
+    // Small settle delay so Windows releases userData file handles cleanly
+    await new Promise((r) => setTimeout(r, 250));
+    isRestarting = false;
+    console.log('[ELECTRON LAUNCHER] Reloading Electron main process...');
+    launchElectron();
+  }, 450);
 }
 
 launchElectron();

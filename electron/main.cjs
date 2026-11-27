@@ -5,9 +5,86 @@ const fs = require('fs');
 
 // Unlock Chromium autoplay so Gemini TTS and proactive voice check-ins never stall in Electron
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Prevent Chromium HTTP disk cache corruption (`backend_impl.cc Critical error found -8`) on rapid dev reloads
+// (Does NOT affect IndexedDB model vault, Local Storage, or zeta-studio-state.json)
+if (!app.isPackaged) {
+  app.commandLine.appendSwitch('disable-http-cache');
+}
 
 const STATE_FILE = () => path.join(app.getPath('userData'), 'zeta-studio-state.json');
+const STATE_BACKUP_FILE = () => path.join(app.getPath('userData'), 'zeta-studio-state.json.bak');
 const API_CONFIG_FILE = () => path.join(app.getPath('userData'), 'api-config.json');
+
+// Serialize state writes so concurrent saves or dev reloads can never truncate zeta-studio-state.json
+let stateWriteQueue = Promise.resolve();
+
+async function atomicWriteJsonFile(filePath, data, backupPath) {
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const serialized = JSON.stringify(data, null, 2);
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  await fs.promises.writeFile(tmpPath, serialized, 'utf-8');
+
+  if (backupPath && fs.existsSync(filePath)) {
+    try {
+      const existingStat = await fs.promises.stat(filePath);
+      if (existingStat.size > 2) {
+        await fs.promises.copyFile(filePath, backupPath);
+      }
+    } catch {
+      // Best-effort backup
+    }
+  }
+
+  // Atomic replace with brief retry for Windows file locks (AV / concurrent readers)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await fs.promises.rename(tmpPath, filePath);
+      return;
+    } catch (err) {
+      if (attempt === 3) {
+        try {
+          await fs.promises.copyFile(tmpPath, filePath);
+        } finally {
+          await fs.promises.unlink(tmpPath).catch(() => {});
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+    }
+  }
+}
+
+async function safeReadJsonFile(filePath, backupPath) {
+  const tryParse = async (p) => {
+    if (!p || !fs.existsSync(p)) return { ok: false, empty: true, data: null };
+    const raw = await fs.promises.readFile(p, 'utf-8');
+    const trimmed = raw.replace(/^\uFEFF/, '').replace(/\0+$/g, '').trim();
+    if (!trimmed) return { ok: false, empty: true, data: null };
+    return { ok: true, empty: false, data: JSON.parse(trimmed) };
+  };
+
+  try {
+    const primary = await tryParse(filePath);
+    if (primary.ok) return primary.data;
+  } catch (err) {
+    console.warn(`[Electron] Primary JSON file corrupted (${path.basename(filePath)}), attempting backup recovery:`, err.message);
+  }
+
+  if (backupPath) {
+    try {
+      const backup = await tryParse(backupPath);
+      if (backup.ok) {
+        await atomicWriteJsonFile(filePath, backup.data, null).catch(() => {});
+        return backup.data;
+      }
+    } catch (backupErr) {
+      console.warn(`[Electron] Backup JSON also unreadable (${path.basename(backupPath)}):`, backupErr.message);
+    }
+  }
+
+  return null;
+}
 
 let mainWindow = null;
 let normalStudioBounds = null;
@@ -162,10 +239,9 @@ function createWindow() {
 
 ipcMain.handle('studio:readState', async () => {
   try {
-    const filePath = STATE_FILE();
-    if (!fs.existsSync(filePath)) return null;
-    const raw = await fs.promises.readFile(filePath, 'utf-8');
-    return JSON.parse(raw);
+    // Wait for any in-flight atomic write before reading
+    await stateWriteQueue.catch(() => {});
+    return await safeReadJsonFile(STATE_FILE(), STATE_BACKUP_FILE());
   } catch (err) {
     console.error('[Electron] Failed to read studio state:', err);
     return null;
@@ -173,11 +249,19 @@ ipcMain.handle('studio:readState', async () => {
 });
 
 ipcMain.handle('studio:writeState', async (_event, payload) => {
+  const filePath = STATE_FILE();
+  const writeTask = stateWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      await atomicWriteJsonFile(filePath, payload, STATE_BACKUP_FILE());
+      return { ok: true, path: filePath };
+    });
+  stateWriteQueue = writeTask.then(
+    () => undefined,
+    () => undefined
+  );
   try {
-    const filePath = STATE_FILE();
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.promises.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf-8');
-    return { ok: true, path: filePath };
+    return await writeTask;
   } catch (err) {
     console.error('[Electron] Failed to write studio state:', err);
     return { ok: false, error: String(err) };
@@ -202,10 +286,7 @@ ipcMain.handle('studio:readLocalEnvKey', async () => {
 
 ipcMain.handle('desktop:readApiConfig', async () => {
   try {
-    const filePath = API_CONFIG_FILE();
-    if (!fs.existsSync(filePath)) return { apiKey: '' };
-    const raw = await fs.promises.readFile(filePath, 'utf-8');
-    const parsed = JSON.parse(raw);
+    const parsed = await safeReadJsonFile(API_CONFIG_FILE(), null);
     const key = typeof parsed?.apiKey === 'string' ? parsed.apiKey.trim().replace(/^["']|["']$/g, '').trim() : '';
     return { apiKey: /•/.test(key) ? '' : key };
   } catch (err) {
@@ -224,12 +305,7 @@ ipcMain.handle('desktop:writeApiConfig', async (_event, apiKey) => {
     if (/•/.test(cleaned)) {
       return { ok: false, error: 'Refused to persist masked API key' };
     }
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.promises.writeFile(
-      filePath,
-      JSON.stringify({ apiKey: cleaned, updatedAt: Date.now() }, null, 2),
-      'utf-8'
-    );
+    await atomicWriteJsonFile(filePath, { apiKey: cleaned, updatedAt: Date.now() }, null);
     return { ok: true, path: filePath };
   } catch (err) {
     console.error('[Electron] Failed to write api-config.json:', err);
