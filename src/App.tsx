@@ -14,6 +14,7 @@ import type {
   DisplayInfo,
   EquippedAccessory,
   FoodVisualId,
+  GarmentStyleId,
   HairStyleId,
   HobbyKindId,
   IdleCheckInMinutes,
@@ -87,6 +88,7 @@ import {
   type OutfitEngineSource,
 } from './services/aiOutfitGenerator';
 import { HAIR_STYLE_META } from './stage/hairStyleRig';
+import { GARMENT_STYLE_META } from './stage/garmentRig';
 import {
   DESTINATION_KIND_META,
   FOOD_VISUAL_META,
@@ -2184,6 +2186,27 @@ export const App: React.FC = () => {
     return false;
   };
   equipWholeOutfitRef.current = equipWholeOutfitByTarget;
+
+  const handleSelectGarmentStyle = (garmentStyle: GarmentStyleId) => {
+    const meta = GARMENT_STYLE_META[garmentStyle];
+    const hidesNative = meta.hidesNativeClothes;
+    const meshes = detectedMeshesRef.current;
+    updateActiveSlot((slot) => {
+      const nextVis = { ...slot.meshVisibility };
+      for (const m of meshes) {
+        if (m.category === 'Tops' || m.category === 'Bottoms') {
+          nextVis[m.name] = !hidesNative;
+        }
+      }
+      return {
+        ...slot,
+        garmentStyle,
+        meshVisibility: nextVis,
+      };
+    });
+    setAutonomousActionToast(`👗 3D Outfit: ${meta.emoji} ${meta.label}`);
+    window.setTimeout(() => setAutonomousActionToast(null), 2800);
+  };
 
   const handleSelectHairStyle = (hairStyle: HairStyleId) => {
     updateActiveSlot((slot) => ({
@@ -4571,6 +4594,7 @@ export const App: React.FC = () => {
               }
               preferLocalAi={Boolean(studio.settings.preferLocalAi)}
               onToggleProceduralAccessory={handleToggleProceduralAccessory}
+              onSelectGarmentStyle={handleSelectGarmentStyle}
               onSelectHairStyle={handleSelectHairStyle}
               onSelectHairColor={handleSelectHairColor}
               onAiPickHairStyle={(prompt) => void handleAiPickHairStyle(prompt)}

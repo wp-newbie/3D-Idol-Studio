@@ -235,6 +235,213 @@ function attachGroup(parent: THREE.Object3D | null, name: string): THREE.Group |
   return g;
 }
 
+/**
+ * Samples the loaded VRM avatar's actual skin color (from Body_00_SKIN / Face_00_SKIN texture or material)
+ * so sleeveless / bare-shoulder 3D garments seamlessly fill any arm/shoulder skin triangles that VRoid Studio's
+ * default "Delete transparent meshes" export removed underneath the VRM's original long sleeves.
+ */
+function sampleAvatarSkinColorHex(avatarRoot: THREE.Object3D): string {
+  const fallbackHex = '#f7d5c8';
+  let foundColor: THREE.Color | null = null;
+  let foundMap: THREE.Texture | null = null;
+
+  avatarRoot.traverse((obj) => {
+    if (foundMap && foundColor) return;
+    if (!(obj instanceof THREE.Mesh) || obj.userData?.[GARMENT_TAG]) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) {
+      if (!m?.name) continue;
+      const n = m.name.toLowerCase();
+      if (/(body.*skin|skin.*body|face.*skin|_skin\b)/.test(n) && !/cloth|hair|eye|mouth|brow|lash/.test(n)) {
+        const anyM = m as unknown as { color?: THREE.Color; map?: THREE.Texture | null };
+        if (!foundColor && anyM.color) {
+          foundColor = anyM.color.clone();
+        }
+        if (!foundMap && anyM.map) {
+          foundMap = anyM.map;
+        }
+        if (foundMap) break;
+      }
+    }
+  });
+
+  // Sample a clean cheek/arm skin pixel from the avatar's actual texture in browser environments
+  if (foundMap && typeof document !== 'undefined') {
+    const img = (foundMap as THREE.Texture).image as
+      | HTMLImageElement
+      | HTMLCanvasElement
+      | ImageBitmap
+      | undefined;
+    const w = img ? (img as HTMLImageElement).naturalWidth || img.width || 0 : 0;
+    const h = img ? (img as HTMLImageElement).naturalHeight || img.height || 0 : 0;
+    if (img && w > 8 && h > 8) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, 32, 32);
+          const data = ctx.getImageData(0, 0, 32, 32).data;
+          // Pick bright warm skin-like pixels (ignoring transparent/dark clothing/UV margins)
+          let rSum = 0;
+          let gSum = 0;
+          let bSum = 0;
+          let count = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            const a = data[i + 3];
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            if (a > 200 && r > 155 && r >= g && g >= b * 0.78 && r + g + b > 420) {
+              rSum += r;
+              gSum += g;
+              bSum += b;
+              count++;
+            }
+          }
+          if (count > 0) {
+            const sampled = new THREE.Color(
+              rSum / count / 255,
+              gSum / count / 255,
+              bSum / count / 255
+            );
+            if (foundColor) {
+              sampled.multiply(foundColor);
+            }
+            return `#${sampled.getHexString()}`;
+          }
+        }
+      } catch {
+        // Fallback to material color / warm skin tone below
+      }
+    }
+  }
+
+  if (foundColor) {
+    const c = foundColor as THREE.Color;
+    // Avoid returning pure white (#ffffff) when the skin tone lived purely in the texture
+    if (!(c.r > 0.97 && c.g > 0.97 && c.b > 0.97)) {
+      return `#${c.getHexString()}`;
+    }
+  }
+  return fallbackHex;
+}
+
+/**
+ * Adds slim, skin-tone-matched arm/shoulder/upper-thigh underlay meshes when wearing sleeveless,
+ * short-sleeve, or bare-shoulder 3D garments so VRoid models exported with "Delete transparent meshes"
+ * never show invisible arms or floating hands when their original long sleeves are hidden!
+ */
+function addExposedLimbSkinUnderlay(params: {
+  vrm: VRM;
+  skinHex: string;
+  armMode?: 'full' | 'forearms_only' | 'upper_only' | 'below_cap' | 'none';
+  upperThighs?: boolean;
+}): void {
+  const { vrm, skinHex, armMode = 'none', upperThighs = false } = params;
+  const h = vrm.humanoid;
+  if (!h) return;
+  const isVrm0 = vrm.meta?.metaVersion === '0';
+
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: skinHex,
+    roughness: 0.78,
+    metalness: 0.0,
+  });
+
+  if (armMode !== 'none') {
+    const sides: Array<{
+      upper: VRMHumanBoneName;
+      lower: VRMHumanBoneName;
+      hand: VRMHumanBoneName;
+      side: 1 | -1;
+    }> = [
+      { upper: 'leftUpperArm', lower: 'leftLowerArm', hand: 'leftHand', side: 1 },
+      { upper: 'rightUpperArm', lower: 'rightLowerArm', hand: 'rightHand', side: -1 },
+    ];
+
+    for (const s of sides) {
+      const up = h.getRawBoneNode(s.upper);
+      const low = h.getRawBoneNode(s.lower);
+      const hand = h.getRawBoneNode(s.hand);
+      const fallbackX = (s.side === 1) !== isVrm0 ? 1 : -1;
+
+      if (up && armMode !== 'forearms_only') {
+        const upG = attachGroup(up, `GarmentSkinArmUp_${s.upper}`);
+        if (upG) {
+          const startFrac = armMode === 'below_cap' ? 0.16 : -0.06;
+          const tube = createBoneSegmentTube({
+            bone: up,
+            childBone: low,
+            fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+            fallbackLen: 0.24,
+            startFrac,
+            endFrac: 1.02,
+            radiusStart: 0.036,
+            radiusEnd: 0.031,
+            mat: skinMat,
+            radialSegments: 14,
+          });
+          upG.add(tube);
+
+          if (armMode !== 'below_cap') {
+            const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.037, 12, 10), skinMat);
+            upG.add(shoulderBall);
+          }
+        }
+      }
+
+      if (low && armMode !== 'upper_only') {
+        const lowG = attachGroup(low, `GarmentSkinArmLow_${s.lower}`);
+        if (lowG) {
+          const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.031, 12, 10), skinMat);
+          const tube = createBoneSegmentTube({
+            bone: low,
+            childBone: hand,
+            fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+            fallbackLen: 0.22,
+            startFrac: 0.0,
+            endFrac: 0.98,
+            radiusStart: 0.031,
+            radiusEnd: 0.024,
+            mat: skinMat,
+            radialSegments: 14,
+          });
+          lowG.add(elbowBall, tube);
+        }
+      }
+    }
+  }
+
+  if (upperThighs) {
+    const legSides: Array<{ upper: VRMHumanBoneName; lower: VRMHumanBoneName }> = [
+      { upper: 'leftUpperLeg', lower: 'leftLowerLeg' },
+      { upper: 'rightUpperLeg', lower: 'rightLowerLeg' },
+    ];
+    for (const ls of legSides) {
+      const up = h.getRawBoneNode(ls.upper);
+      const low = h.getRawBoneNode(ls.lower);
+      const upG = attachGroup(up, `GarmentSkinLegUp_${ls.upper}`);
+      if (upG && up) {
+        const thigh = createBoneSegmentTube({
+          bone: up,
+          childBone: low,
+          fallbackDir: new THREE.Vector3(0, -1, 0),
+          fallbackLen: 0.38,
+          startFrac: -0.02,
+          endFrac: 0.52,
+          radiusStart: 0.064,
+          radiusEnd: 0.052,
+          mat: skinMat,
+          radialSegments: 14,
+        });
+        upG.add(thigh);
+      }
+    }
+  }
+}
+
 function addLegPants(params: {
   vrm: VRM;
   mat: THREE.Material;
@@ -494,38 +701,51 @@ function addTorsoCore(params: {
   const hips = h.getRawBoneNode('hips');
   const spine = h.getRawBoneNode('spine');
   const chest = h.getRawBoneNode('upperChest') || h.getRawBoneNode('chest') || spine;
+  const neck = h.getRawBoneNode('neck');
+
+  // Measure actual torso segment lengths from this VRM's skeleton so bodice never clips chin or leaves waist gaps!
+  const chestToNeckLen =
+    neck && neck.position.lengthSq() > 1e-4
+      ? THREE.MathUtils.clamp(neck.position.y, 0.11, 0.24)
+      : 0.17;
+  const spineToChestLen =
+    chest && chest !== spine && chest.position.lengthSq() > 1e-4
+      ? THREE.MathUtils.clamp(chest.position.y, 0.08, 0.18)
+      : 0.12;
 
   const hipsGroup = attachGroup(hips, 'GarmentHips');
   const spineGroup = attachGroup(spine, 'GarmentSpine');
   const chestGroup = attachGroup(chest, 'GarmentChest');
 
   if (chestGroup) {
-    // Upper torso bodice smoothly encapsulating chest & shoulders
+    // Upper torso bodice smoothly spanning from chest bone up to just below collarbone (never poking chin!)
+    const bodiceH = chestToNeckLen * 0.92;
     const bodice = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.126 * scaleX, 0.108 * scaleX, 0.22, 20),
+      new THREE.CylinderGeometry(0.122 * scaleX, 0.108 * scaleX, bodiceH, 20),
       topMat
     );
     bodice.scale.set(1.08, 1, 0.78 * scaleZ);
-    bodice.position.set(0, 0.07, 0);
+    bodice.position.set(0, bodiceH * 0.42, 0);
     chestGroup.add(bodice);
 
-    // Rounded collarbone / upper-chest transition
+    // Rounded collarbone / shoulder yoke cap
     const yoke = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12 * scaleX, 18, 12),
+      new THREE.SphereGeometry(0.118 * scaleX, 18, 12),
       topMat
     );
-    yoke.scale.set(1.12, 0.56, 0.76 * scaleZ);
-    yoke.position.set(0, 0.165, 0);
+    yoke.scale.set(1.12, 0.46, 0.76 * scaleZ);
+    yoke.position.set(0, bodiceH * 0.85, 0);
     chestGroup.add(yoke);
   }
 
   if (spineGroup) {
+    const waistH = Math.max(0.14, spineToChestLen * 1.35);
     const mid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.112 * scaleX, 0.118 * scaleX, 0.17, 20),
+      new THREE.CylinderGeometry(0.112 * scaleX, 0.118 * scaleX, waistH, 20),
       waistMat
     );
     mid.scale.set(1.06, 1, 0.8 * scaleZ);
-    mid.position.set(0, 0.04, 0);
+    mid.position.set(0, waistH * 0.28, 0);
     spineGroup.add(mid);
   }
 
@@ -588,6 +808,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const fwdSign = isVrm0 ? -1 : 1;
+  const avatarSkinHex = sampleAvatarSkinColorHex(avatarRoot);
 
   const topMat = makeFabricMaterial(topHex, {
     textureDataUrl: topTextureDataUrl,
@@ -671,6 +892,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsMat: topMat,
     });
     // Sleeveless / cute light ruffled cap sleeves leaving her bare arms cool & airy!
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'below_cap', upperThighs: true });
     addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'cap', looseFactor: 0.98 });
 
     if (chestGroup) {
@@ -724,6 +946,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       scaleZ: 1.02,
       hipsMat: bottomMat,
     });
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'none', upperThighs: true });
     addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.12 });
     addLegPants({
       vrm,
@@ -774,6 +997,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsMat: bottomMat,
     });
     // Real short-sleeve athletic tee leaving bare forearms!
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'forearms_only' });
     addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'short', looseFactor: 1.02 });
     addLegPants({
       vrm,
@@ -852,6 +1076,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsMat: bottomMat,
     });
     // Elegant bare shoulders + long opera gloves on forearms!
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'upper_only' });
     addArmSleeves({ vrm, mat: accMat, cuffMat: goldMat, mode: 'gloves', looseFactor: 0.98 });
 
     if (chestGroup) {
@@ -1029,6 +1254,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       roughness: 0.88,
       doubleSide: true,
     });
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'full', upperThighs: true });
     const { chestGroup, spineGroup, hipsGroup } = addTorsoCore({
       vrm,
       topMat: towelMat,
@@ -1091,6 +1317,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       opacity: 0.84,
       side: THREE.DoubleSide,
     });
+    addExposedLimbSkinUnderlay({ vrm, skinHex: avatarSkinHex, armMode: 'full', upperThighs: true });
     const { chestGroup, spineGroup, hipsGroup } = addTorsoCore({
       vrm,
       topMat: swimMat,

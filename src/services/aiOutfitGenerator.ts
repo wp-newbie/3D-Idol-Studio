@@ -966,6 +966,8 @@ async function requestLlmOutfitPlan(params: {
     forcedSceneGarment = 'cozy_pajamas';
   }
 
+  const explicitNativeRequest = /\b(default|original|native)\s*(vrm|outfit|clothes|mesh)\b/i.test(prompt);
+
   const enforceSceneGarment = (plan: AiOutfitPlan): AiOutfitPlan => {
     if (forcedSceneGarment) {
       return {
@@ -979,9 +981,24 @@ async function requestLlmOutfitPlan(params: {
       return {
         ...plan,
         garmentStyle:
-          fallback.garmentStyle !== 'bath_wrap' && fallback.garmentStyle !== 'beach_swimsuit'
+          fallback.garmentStyle !== 'bath_wrap' &&
+          fallback.garmentStyle !== 'beach_swimsuit' &&
+          fallback.garmentStyle !== 'default'
             ? fallback.garmentStyle
             : 'summer_sundress',
+      };
+    }
+    // Never lazily stay locked in the VRM's baked-in skirt & long sleeves unless explicitly asked!
+    if (plan.garmentStyle === 'default' && !explicitNativeRequest) {
+      return {
+        ...plan,
+        garmentStyle:
+          fallback.garmentStyle !== 'default' &&
+          fallback.garmentStyle !== 'bath_wrap' &&
+          fallback.garmentStyle !== 'beach_swimsuit'
+            ? fallback.garmentStyle
+            : 'streetwear_jacket_shorts',
+        preferredExistingSlot: null,
       };
     }
     return plan;
@@ -1023,7 +1040,7 @@ Return ONLY a valid raw JSON object (no markdown fences, no commentary) with thi
   "outfitName": "2 to 4 word outfit title",
   "occasionLabel": "short time/occasion label",
   "styleNote": "concise 1-sentence reason why she picked this clothing type & hairstyle for the time, mood, and scene",
-  "garmentStyle": "bath_wrap|beach_swimsuit|cozy_hoodie_pants|summer_sundress|streetwear_jacket_shorts|sporty_tee_leggings|kimono_yukata|evening_gown|cozy_pajamas|school_blazer|trench_coat_pants|default",
+  "garmentStyle": "bath_wrap|beach_swimsuit|cozy_hoodie_pants|summer_sundress|streetwear_jacket_shorts|sporty_tee_leggings|kimono_yukata|evening_gown|cozy_pajamas|school_blazer|trench_coat_pants",
   "topHex": "#RRGGBB",
   "topAccentHex": "#RRGGBB",
   "topPattern": "none|plaid|gothic_lace|cyber_grid|sakura_petals|starry_night|pastel_stripes|polka_dots|argyle",
@@ -1051,7 +1068,7 @@ MANDATORY Scene-Appropriate Wardrobe Rules (ALWAYS match the scene!):
 - "streetwear_jacket_shorts": Cropped bomber jacket + belted casual shorts (shopping mall, amusement park, proud/amused outings)
 - "evening_gown": Off-shoulder floor-length evening gown & opera gloves (gothic cathedral, evening dinner/date, concert stage)
 - "trench_coat_pants": Chic double-breasted belted trench coat + tailored trousers (crisp weekday mornings, rainy walks, evening city strolls)
-- "default": Native idol outfit silhouette (use occasionally, NOT every time!)
+- NEVER lock her into her VRM model's default skirt & long sleeves: always pick the best 3D clothing silhouette above for the time, mood, and live scene!
 - Pick a matching "hairStyle" and 0 to 2 tasteful accessories from ONLY: "cat_ears", "halo", "ribbon_bow", "cyber_visor", "choker", "fairy_wings", "idol_crown".
 - Keep hairTintHex & hairHighlightHex as null unless explicitly asked to dye hair.
 ${wholeOutfitRule}`;
@@ -1309,7 +1326,8 @@ export async function generateTimeOccasionOutfit(params: {
     settings: params.settings,
     vaultModels: params.vaultModels,
     activeLifeScene: params.activeLifeScene,
-    allowWholeOutfitSwitch: params.allowWholeOutfitSwitch ?? true,
+    // Always let her generate a fresh 3D garment silhouette unless explicitly swapping VRM files
+    allowWholeOutfitSwitch: params.allowWholeOutfitSwitch ?? false,
     preferLocalFirst: true,
   });
   const payload = await materializeOutfitPlan(plan, params.detectedMeshes);

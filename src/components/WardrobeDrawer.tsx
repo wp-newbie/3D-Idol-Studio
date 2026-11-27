@@ -28,6 +28,7 @@ import type {
   AccessoryAttachTarget,
   ClothingCategory,
   EquippedAccessory,
+  GarmentStyleId,
   HairStyleId,
   MeshDescriptor,
   OutfitSlot,
@@ -51,6 +52,10 @@ import {
   HAIR_STYLE_META,
   HAIR_STYLE_ORDER,
 } from '../stage/hairStyleRig';
+import {
+  GARMENT_STYLE_META,
+  GARMENT_STYLE_ORDER,
+} from '../stage/garmentRig';
 import {
   formatWardrobeSummaryText,
   retrieveWardrobeInventory,
@@ -118,6 +123,7 @@ interface WardrobeDrawerProps {
   onToggleAutoDressByTime?: (next: boolean) => void;
   preferLocalAi?: boolean;
   onToggleProceduralAccessory?: (accessoryId: ProceduralAccessoryId) => void;
+  onSelectGarmentStyle?: (garmentStyle: GarmentStyleId) => void;
   onSelectHairStyle?: (hairStyle: HairStyleId) => void;
   onSelectHairColor?: (hairColorHex: string | null, hairHighlightHex?: string | null) => void;
   onAiPickHairStyle?: (prompt?: string) => Promise<void> | void;
@@ -167,6 +173,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onToggleAutoDressByTime,
   preferLocalAi = false,
   onToggleProceduralAccessory,
+  onSelectGarmentStyle,
   onSelectHairStyle,
   onSelectHairColor,
   onAiPickHairStyle,
@@ -901,6 +908,43 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                     )}
                   </div>
 
+                  {/* Active 3D Garment Silhouette Selector (Decoupled from Native VRM Clothes) */}
+                  <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[9.5px] font-semibold uppercase tracking-wider text-fuchsia-200/90">
+                        👗 3D Garment Silhouette
+                      </div>
+                      <span className="rounded-full border border-fuchsia-400/35 bg-fuchsia-500/20 px-2 py-0.5 text-[9.5px] font-semibold text-fuchsia-100">
+                        {GARMENT_STYLE_META[activeSlot.garmentStyle || 'default'].emoji}{' '}
+                        {GARMENT_STYLE_META[activeSlot.garmentStyle || 'default'].label}
+                      </span>
+                    </div>
+                    {onSelectGarmentStyle && (
+                      <div className="flex flex-wrap gap-1">
+                        {GARMENT_STYLE_ORDER.map((gId) => {
+                          const meta = GARMENT_STYLE_META[gId];
+                          const active = (activeSlot.garmentStyle || 'default') === gId;
+                          return (
+                            <button
+                              key={gId}
+                              type="button"
+                              title={meta.summary}
+                              onClick={() => onSelectGarmentStyle(gId)}
+                              className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                                active
+                                  ? 'border-fuchsia-400/70 bg-fuchsia-500/25 text-fuchsia-100 shadow-sm'
+                                  : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/25 hover:text-zinc-200'
+                              }`}
+                            >
+                              <span>{meta.emoji}</span>
+                              <span>{meta.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
                   {onToggleProceduralAccessory && (
                     <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
                       <div className="text-[9.5px] font-semibold uppercase tracking-wider text-zinc-400">
@@ -1034,7 +1078,12 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                   <div className="truncate text-sm font-bold text-white">
                     {activeSlot.name}
                   </div>
-                  <div className="text-[11px] text-zinc-400 flex items-center gap-2 mt-0.5">
+                  <div className="text-[11px] text-zinc-400 flex flex-wrap items-center gap-1.5 mt-0.5">
+                    <span className="text-fuchsia-200 font-medium">
+                      {GARMENT_STYLE_META[activeSlot.garmentStyle || 'default'].emoji}{' '}
+                      {GARMENT_STYLE_META[activeSlot.garmentStyle || 'default'].label}
+                    </span>
+                    <span>·</span>
                     <span>
                       {(activeSlot.accessories || []).length} Accessories
                     </span>

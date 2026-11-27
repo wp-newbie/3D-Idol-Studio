@@ -159,9 +159,19 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
       /sleeve/i,
       /sailor/i,
       /uniform/i,
+      /\bcloth(es|ing)?\b/i,
+      /_cloth\b/i,
+      /outfit/i,
+      /costume/i,
+      /garment/i,
     ],
   },
 ];
+
+// Chest/waist clothing trims (neckties, sailor ribbons, chokers, scarves, belts) that belong
+// to the VRM's baked-in outfit and should hide alongside Tops/Bottoms when wearing a 3D garment silhouette.
+const OUTFIT_BOUND_TRIM_REGEX =
+  /necktie|(^|[_\-\s])tie([_\-\s\d]|$)|ribbon|(^|[_\-\s])bow([_\-\s\d]|$)|neckwear|choker|scarf|belt/i;
 
 interface OriginalMaterialSnapshot {
   colorHex: string | null;
@@ -335,6 +345,7 @@ export function detectClothingMeshes(
 
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
+    if (isProceduralOverlayObject(obj)) return;
     const name = obj.name?.trim();
     if (!name || seenNames.has(name)) return;
 
@@ -485,6 +496,22 @@ export function getCyclingShortsTexture(
   return canvasTex;
 }
 
+function isProceduralOverlayObject(obj: THREE.Object3D): boolean {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (
+      cur.userData?.__zeta_procedural_garment__ ||
+      cur.userData?.__zeta_procedural_hair__ ||
+      cur.userData?.__zeta_procedural_accessory__ ||
+      cur.userData?.__zeta_activity_hand_prop__
+    ) {
+      return true;
+    }
+    cur = cur.parent;
+  }
+  return false;
+}
+
 export function applyOutfitModsToScene(params: {
   root: THREE.Object3D;
   meshVisibility: Record<string, boolean>;
@@ -492,6 +519,7 @@ export function applyOutfitModsToScene(params: {
   isImportedModel: boolean;
   textureCache: Map<string, THREE.Texture>;
   cyclingShorts?: boolean;
+  hideNativeGarment?: boolean;
   onTextureLoaded?: () => void;
 }): void {
   const {
@@ -501,6 +529,7 @@ export function applyOutfitModsToScene(params: {
     isImportedModel,
     textureCache,
     cyclingShorts = true,
+    hideNativeGarment = false,
     onTextureLoaded,
   } = params;
   const loader = new THREE.TextureLoader();
@@ -538,24 +567,48 @@ export function applyOutfitModsToScene(params: {
 
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
+    if (isProceduralOverlayObject(obj)) return;
     const name = obj.name?.trim();
     if (!name) return;
 
-    // 1. Visibility toggle (restores original visibility cleanly on Reset Default!)
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const hasSkinMat = mats.some(
+      (m) => m && (isCoreSkinOrFaceMaterial(m.name) || isBodySkinMaterial(m.name))
+    );
+
+    // 1. Visibility toggle (NEVER hide a merged Body mesh that contains skin via obj.visible!)
     const origVisible = snapshotOriginalVisible(obj);
     if (name in meshVisibility) {
-      obj.visible = meshVisibility[name];
+      obj.visible = hasSkinMat && meshVisibility[name] === false ? origVisible : meshVisibility[name];
     } else if (obj.visible !== origVisible) {
       obj.visible = origVisible;
     }
 
-    // 2. Material color / MToon shadeColorFactor / custom PNG texture overlay
+    // 2. Material color / MToon shadeColorFactor / custom PNG texture overlay / per-material garment hiding
     const mod = materialMods[name];
-    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
 
     for (const mat of mats) {
       if (!mat) continue;
       const snap = snapshotMaterial(mat);
+      const isSkinOrFace =
+        isCoreSkinOrFaceMaterial(mat.name) || isBodySkinMaterial(mat.name);
+      const matCategory =
+        classifyName(mat.name) || (mats.length === 1 && !hasSkinMat ? classifyName(name) : null);
+
+      // Per-material hiding works on BOTH separate clothing meshes AND merged VRoid multi-material Body meshes!
+      const isOutfitBoundTrim =
+        matCategory === 'Accessories' &&
+        OUTFIT_BOUND_TRIM_REGEX.test(`${mat.name || ''} ${mats.length === 1 && !hasSkinMat ? name : ''}`);
+      if (
+        hideNativeGarment &&
+        !isSkinOrFace &&
+        (matCategory === 'Tops' || matCategory === 'Bottoms' || isOutfitBoundTrim)
+      ) {
+        mat.visible = false;
+        continue;
+      } else if (!mat.visible) {
+        mat.visible = true;
+      }
       const anyMat = mat as unknown as {
         color?: THREE.Color;
         shadeColorFactor?: THREE.Color;

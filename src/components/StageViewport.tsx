@@ -1924,6 +1924,9 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             isImportedModel: true,
             textureCache: textureCacheRef.current,
             cyclingShorts: activeSlot.cyclingShorts ?? true,
+            hideNativeGarment: Boolean(
+              activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
+            ),
           });
 
           syncProceduralAccessoriesToVrm({
@@ -2247,12 +2250,20 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       isImportedModel: true,
       textureCache: textureCacheRef.current,
       cyclingShorts: activeSlot.cyclingShorts ?? true,
+      hideNativeGarment: Boolean(
+        activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
+      ),
     });
 
     onMeshesDetectedRef.current(
       detectClothingMeshes(avatarRoot, activeSlot.materialMods)
     );
-  }, [activeSlot.meshVisibility, activeSlot.materialMods, activeSlot.cyclingShorts]);
+  }, [
+    activeSlot.meshVisibility,
+    activeSlot.materialMods,
+    activeSlot.cyclingShorts,
+    activeSlot.garmentStyle,
+  ]);
 
   // 3b. Sync LLM-generated / user-toggled procedural 3D bone-tracked accessories
   useEffect(() => {
