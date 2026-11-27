@@ -58,14 +58,13 @@ export function applyVrmAppearanceVariant(params: {
 }): void {
   const { vrm, avatarRoot, variant } = params;
 
-  // 1. Body scale & head proportion morphing (cleanly resets to 1.0 when variant is null)
-  const bodyScale = variant ? THREE.MathUtils.clamp(variant.bodyScale ?? 1.0, 0.86, 1.10) : 1.0;
-  avatarRoot.scale.setScalar(bodyScale);
+  // 1. Maintain natural, consistent human body proportions like a normal person changing clothes
+  //    (always aligned with chairs, desks, and dining tables — zero shrinking/stretching!)
+  avatarRoot.scale.setScalar(1.0);
 
   const headBone = vrm?.humanoid?.getRawBoneNode('head');
   if (headBone) {
-    const headScale = variant ? THREE.MathUtils.clamp(variant.headScale ?? 1.0, 0.94, 1.12) : 1.0;
-    headBone.scale.setScalar(headScale);
+    headBone.scale.setScalar(1.0);
   }
   enforceCanonicalBoneScales(vrm);
 

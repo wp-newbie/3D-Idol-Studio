@@ -2441,6 +2441,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     activeSlot.garmentStyle,
     activeSlot.garmentPalette,
     activeSlot.accessoryColorHex,
+    activeSlot.vrmVariant,
     activeSlot.id,
     persona.accentColor,
     isLoadingModel,

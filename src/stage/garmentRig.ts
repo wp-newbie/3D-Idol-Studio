@@ -678,20 +678,6 @@ interface DynamicCollarRingData {
   armClearance: number;
 }
 
-function registerDynamicCollarRing(
-  mesh: THREE.Mesh,
-  fwdSign: number,
-  armClearance = 0.044
-): void {
-  const pos = mesh.geometry.attributes.position;
-  if (!pos) return;
-  mesh.userData.dynamicCollarRing = {
-    restPos: new Float32Array(pos.array as Float32Array),
-    fwdSign,
-    armClearance,
-  } satisfies DynamicCollarRingData;
-}
-
 const REGION_IGNORE = 0;
 const REGION_PELVIS = 1;
 const REGION_TORSO = 2;
@@ -713,7 +699,11 @@ type SkinnedGarmentZone =
   | 'torso_short_sleeve'
   | 'torso_long_sleeve'
   | 'sleeves_full'
-  | 'gloves';
+  | 'gloves'
+  | 'skin_collarbone'
+  | 'skin_arms_full'
+  | 'skin_arms_upper'
+  | 'skin_arms_below_short';
 
 interface BodySkinCoverage {
   hasCollarboneSkin: boolean;
@@ -898,17 +888,29 @@ function distSqToSegment(
 }
 
 /**
- * Inspects the loaded VRM's intact Body_SKIN SkinnedMesh triangles so we NEVER spawn redundant
- * synthetic arm/thigh skin tubes (or wrist seams!) when the VRM already has real sculpted skin there.
+ * Inspects the loaded VRM's intact Body_SKIN SkinnedMesh coverage using ACTUAL BONE-LENGTH SPAN
+ * (not just raw triangle count!) so a 2cm bare wrist on VRoid models NEVER tricks us into skipping
+ * full bare arms or collarbone skin when VRoid deleted skin under the original sweater!
  */
 function inspectVrmBodySkinCoverage(
   vrm: VRM,
   avatarRoot: THREE.Object3D
 ): BodySkinCoverage {
   let collarCount = 0;
-  let upperArmCount = 0;
-  let forearmCount = 0;
+  let collarMin = 1;
+  let collarMax = 0;
+
+  let upArmCount = 0;
+  let upArmMin = 1;
+  let upArmMax = 0;
+
+  let lowArmCount = 0;
+  let lowArmMin = 1;
+  let lowArmMax = 0;
+
   let thighCount = 0;
+  let thighMin = 1;
+  let thighMax = 0;
 
   avatarRoot.traverse((obj) => {
     if (!(obj instanceof THREE.SkinnedMesh) || obj.userData?.[GARMENT_TAG]) return;
@@ -941,6 +943,8 @@ function inspectVrmBodySkinCoverage(
       return bestR;
     };
 
+    const chestToNeck = Math.max(0.05, lm.neck.y - lm.chest.y);
+
     for (const grp of groups) {
       const mat = mats[grp.materialIndex ?? 0];
       const matName = `${obj.name || ''} ${mat?.name || ''}`;
@@ -950,25 +954,51 @@ function inspectVrmBodySkinCoverage(
       for (let tri = grp.start; tri + 2 < end; tri += 3) {
         const i0 = idxAttr ? idxAttr.getX(tri) : tri;
         const r = getDominantRegion(i0);
+        const x = pos.getX(i0);
         const y = pos.getY(i0);
-        if (r === REGION_TORSO && y > lm.chest.y + (lm.neck.y - lm.chest.y) * 0.55 && y < lm.neck.y + 0.01) {
-          collarCount++;
+        const z = pos.getZ(i0);
+
+        if (r === REGION_TORSO) {
+          const cf = (y - lm.chest.y) / chestToNeck;
+          if (cf >= 0.35 && cf <= 1.05) {
+            collarCount++;
+            if (cf < collarMin) collarMin = cf;
+            if (cf > collarMax) collarMax = cf;
+          }
         } else if (r === REGION_ARM_L_UP || r === REGION_ARM_R_UP) {
-          upperArmCount++;
+          const f =
+            r === REGION_ARM_L_UP
+              ? projectFracAlongSegment(x, y, z, lm.lUpArm, lm.lLowArm)
+              : projectFracAlongSegment(x, y, z, lm.rUpArm, lm.rLowArm);
+          upArmCount++;
+          if (f < upArmMin) upArmMin = f;
+          if (f > upArmMax) upArmMax = f;
         } else if (r === REGION_ARM_L_LOW || r === REGION_ARM_R_LOW) {
-          forearmCount++;
-        } else if ((r === REGION_LEG_L_UP || r === REGION_LEG_R_UP) && y > (lm.lUpLeg.y + lm.lLowLeg.y) * 0.5) {
+          const f =
+            r === REGION_ARM_L_LOW
+              ? projectFracAlongSegment(x, y, z, lm.lLowArm, lm.lHand)
+              : projectFracAlongSegment(x, y, z, lm.rLowArm, lm.rHand);
+          lowArmCount++;
+          if (f < lowArmMin) lowArmMin = f;
+          if (f > lowArmMax) lowArmMax = f;
+        } else if (r === REGION_LEG_L_UP || r === REGION_LEG_R_UP) {
+          const f =
+            r === REGION_LEG_L_UP
+              ? projectFracAlongSegment(x, y, z, lm.lUpLeg, lm.lLowLeg)
+              : projectFracAlongSegment(x, y, z, lm.rUpLeg, lm.rLowLeg);
           thighCount++;
+          if (f < thighMin) thighMin = f;
+          if (f > thighMax) thighMax = f;
         }
       }
     }
   });
 
   return {
-    hasCollarboneSkin: collarCount >= 40,
-    hasUpperArmSkin: upperArmCount >= 40,
-    hasForearmSkin: forearmCount >= 40,
-    hasUpperThighSkin: thighCount >= 40,
+    hasCollarboneSkin: collarCount >= 40 && collarMax - collarMin >= 0.48,
+    hasUpperArmSkin: upArmCount >= 50 && upArmMax - upArmMin >= 0.55 && upArmMin <= 0.30,
+    hasForearmSkin: lowArmCount >= 50 && lowArmMax - lowArmMin >= 0.55 && lowArmMin <= 0.30,
+    hasUpperThighSkin: thighCount >= 40 && thighMax - thighMin >= 0.50 && thighMin <= 0.30,
   };
 }
 
@@ -1057,6 +1087,11 @@ function buildBodyClonedSkinnedGarment(params: {
 
     // Determine which material groups are valid sources for this garment zone
     const isLowerZone = zone === 'pants' || zone === 'shorts';
+    const isSkinZone =
+      zone === 'skin_collarbone' ||
+      zone === 'skin_arms_full' ||
+      zone === 'skin_arms_upper' ||
+      zone === 'skin_arms_below_short';
     const isTorsoZone =
       zone === 'torso_sleeveless' ||
       zone === 'torso_short_sleeve' ||
@@ -1075,8 +1110,11 @@ function buildBodyClonedSkinnedGarment(params: {
       const isTops = TOPS_MAT_REGEX.test(matName);
       const isSkirtOrLoose = SKIRT_OR_LOOSE_BOTTOM_REGEX.test(matName);
 
-      if (zone === 'gloves') {
-        if (!isSkin) continue;
+      if (zone === 'gloves' || isSkinZone) {
+        // Clone real sculpted arms/collarbone from EITHER Body_SKIN OR Tops_CLOTH
+        // (essential for VRoid models that deleted bare arm/chest skin under their default long-sleeve sweater!)
+        if (isSkirtOrLoose) continue;
+        if (!isSkin && !isTops) continue;
       } else if (isLowerZone) {
         if (isSkirtOrLoose || (isTops && !isSkin)) continue;
       } else if (isTorsoZone) {
@@ -1093,14 +1131,12 @@ function buildBodyClonedSkinnedGarment(params: {
         const r0 = getDominantRegion(i0);
         const r1 = getDominantRegion(i1);
         const r2 = getDominantRegion(i2);
-        if (
-          r0 === REGION_IGNORE ||
-          r1 === REGION_IGNORE ||
-          r2 === REGION_IGNORE ||
-          r0 === REGION_HAND ||
-          r1 === REGION_HAND ||
-          r2 === REGION_HAND
-        ) {
+        const domR = r0 === r1 || r0 === r2 ? r0 : r1;
+        if (domR === REGION_IGNORE || domR === REGION_HAND) {
+          continue;
+        }
+        // Still exclude hand/finger vertices from creeping into cuffs/gloves
+        if (r0 === REGION_HAND && r1 === REGION_HAND && r2 === REGION_HAND) {
           continue;
         }
 
@@ -1108,7 +1144,6 @@ function buildBodyClonedSkinnedGarment(params: {
         const cy = (posAttr.getY(i0) + posAttr.getY(i1) + posAttr.getY(i2)) / 3;
         const cz = (posAttr.getZ(i0) + posAttr.getZ(i1) + posAttr.getZ(i2)) / 3;
 
-        const domR = r0 === r1 || r0 === r2 ? r0 : r1;
         let keep = false;
 
         if (zone === 'pants' || zone === 'shorts') {
@@ -1118,10 +1153,9 @@ function buildBodyClonedSkinnedGarment(params: {
             domR === REGION_LEG_L_LOW ||
             domR === REGION_LEG_R_UP ||
             domR === REGION_LEG_R_LOW;
-          if (isLegOrPelvis && cy <= yWaistTop) {
-            const minY = zone === 'shorts' ? yShortHem : yAnkle + 0.028 * unitScale;
+          if (isLegOrPelvis && cy <= yWaistTop + 0.015 * unitScale) {
+            const minY = zone === 'shorts' ? yShortHem - 0.015 * unitScale : yAnkle + 0.024 * unitScale;
             if (cy >= minY) {
-              // Exclude any stray flared/wide cloth vertices far from hip/leg bones
               const d2 =
                 domR === REGION_PELVIS
                   ? (cx - lm.hips.x) ** 2 + (cz - lm.hips.z) ** 2
@@ -1142,44 +1176,81 @@ function buildBodyClonedSkinnedGarment(params: {
             domR === REGION_PELVIS ||
             domR === REGION_LEG_L_UP ||
             domR === REGION_LEG_R_UP;
-          if (isTorsoOrPelvis && cy >= ySwimBottom && cy <= yNeckLimit) {
+          if (isTorsoOrPelvis && cy >= ySwimBottom && cy <= yNeckLimit + 0.012 * unitScale) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
             if (rad <= 0.21 * unitScale) keep = true;
           }
         } else if (zone === 'gloves') {
           if (domR === REGION_ARM_L_LOW) {
             const f = projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand);
-            if (f >= 0.14 && f <= 0.96) keep = true;
+            if (f >= 0.12 && f <= 0.98) keep = true;
           } else if (domR === REGION_ARM_R_LOW) {
             const f = projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand);
-            if (f >= 0.14 && f <= 0.96) keep = true;
+            if (f >= 0.12 && f <= 0.98) keep = true;
+          }
+        } else if (zone === 'skin_collarbone') {
+          // Real sculpted human upper-chest, clavicle, and shoulder bridge cloned from Tops/Body!
+          if (domR === REGION_TORSO && cy >= lm.chest.y - 0.02 * unitScale && cy <= lm.neck.y + 0.025 * unitScale) {
+            const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
+            if (rad <= 0.23 * unitScale) keep = true;
+          }
+        } else if (zone === 'skin_arms_full') {
+          if (
+            domR === REGION_ARM_L_UP ||
+            domR === REGION_ARM_R_UP ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.98) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.98)
+          ) {
+            keep = true;
+          }
+        } else if (zone === 'skin_arms_upper') {
+          if (
+            domR === REGION_ARM_L_UP ||
+            domR === REGION_ARM_R_UP ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.22) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.22)
+          ) {
+            keep = true;
+          }
+        } else if (zone === 'skin_arms_below_short') {
+          if (
+            (domR === REGION_ARM_L_UP && projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) >= 0.30) ||
+            (domR === REGION_ARM_R_UP && projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) >= 0.30) ||
+            (domR === REGION_ARM_L_LOW && projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.98) ||
+            (domR === REGION_ARM_R_LOW && projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.98)
+          ) {
+            keep = true;
           }
         } else if (zone === 'sleeves_full') {
           if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
             keep = true;
           } else if (domR === REGION_ARM_L_LOW) {
-            if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.94) keep = true;
+            if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.95) keep = true;
           } else if (domR === REGION_ARM_R_LOW) {
-            if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.94) keep = true;
+            if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.95) keep = true;
           }
         } else {
           // torso_sleeveless / torso_short_sleeve / torso_long_sleeve
-          if ((domR === REGION_TORSO || domR === REGION_PELVIS) && cy >= yTorsoBottom && cy <= yNeckLimit) {
+          if (
+            (domR === REGION_TORSO || domR === REGION_PELVIS) &&
+            cy >= yTorsoBottom - 0.014 * unitScale &&
+            cy <= yNeckLimit + 0.014 * unitScale
+          ) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
             if (rad <= 0.24 * unitScale) keep = true;
           } else if (zone === 'torso_short_sleeve') {
             if (domR === REGION_ARM_L_UP) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= 0.44) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= 0.46) keep = true;
             } else if (domR === REGION_ARM_R_UP) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= 0.44) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= 0.46) keep = true;
             }
           } else if (zone === 'torso_long_sleeve') {
             if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
               keep = true;
             } else if (domR === REGION_ARM_L_LOW) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.94) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.95) keep = true;
             } else if (domR === REGION_ARM_R_LOW) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.94) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.95) keep = true;
             }
           }
         }
@@ -1232,11 +1303,33 @@ function buildBodyClonedSkinnedGarment(params: {
     const newSkinIdx = new Uint16Array(vCount * 4);
     const newSkinW = new Float32Array(vCount * 4);
 
+    // Helper: snaps any vertex sticking past a cut fraction along an arm segment cleanly onto the straight cuff plane!
+    const snapAlongSegment = (
+      x: number,
+      y: number,
+      z: number,
+      a: THREE.Vector3,
+      b: THREE.Vector3,
+      minFrac: number,
+      maxFrac: number
+    ): [number, number, number] => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dz = b.z - a.z;
+      const lenSq = dx * dx + dy * dy + dz * dz;
+      if (lenSq < 1e-6) return [x, y, z];
+      const f = ((x - a.x) * dx + (y - a.y) * dy + (z - a.z) * dz) / lenSq;
+      const cf = THREE.MathUtils.clamp(f, minFrac, maxFrac);
+      const df = cf - f;
+      if (Math.abs(df) < 1e-5) return [x, y, z];
+      return [x + dx * df, y + dy * df, z + dz * df];
+    };
+
     for (let ni = 0; ni < vCount; ni++) {
       const oi = uniqueVerts[ni];
-      const vx = posAttr.getX(oi);
-      const vy = posAttr.getY(oi);
-      const vz = posAttr.getZ(oi);
+      let vx = posAttr.getX(oi);
+      let vy = posAttr.getY(oi);
+      let vz = posAttr.getZ(oi);
 
       const acc = weldedNormals.get(quantKey(vx, vy, vz));
       let nx = acc ? acc[0] : normAttr.getX(oi);
@@ -1246,6 +1339,37 @@ function buildBodyClonedSkinnedGarment(params: {
       nx /= nLen;
       ny /= nLen;
       nz /= nLen;
+
+      const domR = getDominantRegion(oi);
+
+      // Snap cut-boundary vertices cleanly onto tailored straight hems / necklines / cuffs (ZERO sawtooth teeth!)
+      if (zone === 'pants') {
+        vy = THREE.MathUtils.clamp(vy, yAnkle + 0.026 * unitScale, yWaistTop);
+      } else if (zone === 'shorts') {
+        vy = THREE.MathUtils.clamp(vy, yShortHem, yWaistTop);
+      } else if (zone === 'swimsuit') {
+        vy = THREE.MathUtils.clamp(vy, ySwimBottom, yNeckLimit);
+      } else if (
+        zone === 'torso_sleeveless' ||
+        zone === 'torso_short_sleeve' ||
+        zone === 'torso_long_sleeve'
+      ) {
+        if (domR === REGION_TORSO || domR === REGION_PELVIS) {
+          vy = THREE.MathUtils.clamp(vy, yTorsoBottom, yNeckLimit);
+        } else if (zone === 'torso_short_sleeve') {
+          if (domR === REGION_ARM_L_UP) {
+            [vx, vy, vz] = snapAlongSegment(vx, vy, vz, lm.lUpArm, lm.lLowArm, -0.25, 0.45);
+          } else if (domR === REGION_ARM_R_UP) {
+            [vx, vy, vz] = snapAlongSegment(vx, vy, vz, lm.rUpArm, lm.rLowArm, -0.25, 0.45);
+          }
+        }
+      } else if (zone === 'gloves') {
+        if (domR === REGION_ARM_L_LOW) {
+          [vx, vy, vz] = snapAlongSegment(vx, vy, vz, lm.lLowArm, lm.lHand, 0.14, 0.96);
+        } else if (domR === REGION_ARM_R_LOW) {
+          [vx, vy, vz] = snapAlongSegment(vx, vy, vz, lm.rLowArm, lm.rHand, 0.14, 0.96);
+        }
+      }
 
       // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes through!
       // Tops get +2.5mm extra ease over the waist overlap band so shirts cleanly layer over pant waistbands.
@@ -1264,7 +1388,6 @@ function buildBodyClonedSkinnedGarment(params: {
       newNorm[ni * 3 + 2] = nz;
 
       // Clean seamless cylindrical UVs (per-leg centerline on legs so plaid/stripes run straight!)
-      const domR = getDominantRegion(oi);
       let u = 0;
       let v = vy * uvScale;
       if (domR === REGION_LEG_L_UP || domR === REGION_LEG_L_LOW) {
@@ -1301,15 +1424,17 @@ function buildBodyClonedSkinnedGarment(params: {
     subGeo.computeVertexNormals();
 
     // Depth polygonOffset prevents z-fighting against underlying base VRM body skin at any camera distance
-    mat.polygonOffset = true;
-    mat.polygonOffsetFactor = isTorsoZone ? -2 : -1;
-    mat.polygonOffsetUnits = isTorsoZone ? -2 : -1;
+    if (!isSkinZone) {
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = isTorsoZone ? -2 : -1;
+      mat.polygonOffsetUnits = isTorsoZone ? -2 : -1;
+    }
 
     const skinned = new THREE.SkinnedMesh(subGeo, mat);
     skinned.name = `GarmentSkinned_${zone}`;
     skinned.userData[GARMENT_TAG] = true;
     skinned.frustumCulled = false;
-    skinned.renderOrder = isTorsoZone ? 3 : 2;
+    skinned.renderOrder = isSkinZone ? 1 : isTorsoZone ? 3 : 2;
     skinned.bind(src.skeleton, src.bindMatrix);
     src.parent.add(skinned);
 
@@ -1328,7 +1453,7 @@ function addExposedSkinUnderlay(params: {
   avatarRoot: THREE.Object3D;
   metrics: TorsoMetrics;
   skinHex: string;
-  armMode?: 'full' | 'forearms_only' | 'upper_only' | 'below_cap' | 'none';
+  armMode?: 'full' | 'forearms_only' | 'upper_only' | 'below_cap' | 'below_short_sleeve' | 'none';
   collarboneBridge?: boolean;
   upperThighs?: boolean;
   fwdSign: number;
@@ -1350,100 +1475,135 @@ function addExposedSkinUnderlay(params: {
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const skinMat = makeAnimeSkinMaterial(skinHex);
 
-  // 1. Collarbone + Upper Chest Skin Bridge ONLY if VRoid deleted upper-chest skin triangles
-  if (collarboneBridge && !cov.hasCollarboneSkin && metrics.chest) {
-    const bridgeG = attachGroup(metrics.chest, 'GarmentSkinCollarbone');
-    if (bridgeG) {
-      const yLow = metrics.yShoulderFromChest - 0.065;
-      const yMid = metrics.yShoulderFromChest - 0.005;
-      const yCollar = metrics.yNeckFromChest - 0.015;
-      const yNeckTop = metrics.yNeckFromChest + 0.045;
-      const bridgeGeo = createContouredTorsoLathe({
-        profile: [
-          [0.080, yLow],
-          [0.088, yMid],
-          [0.070, yCollar],
-          [0.038, metrics.yNeckFromChest + 0.005],
-          [0.036, yNeckTop],
-        ],
-        scaleX: 0.98,
-        scaleZ: 0.66,
-        bustBoost: 0,
-        fwdSign,
-        segments: 24,
-      });
-      bridgeG.add(new THREE.Mesh(bridgeGeo, skinMat));
-
-      // Smooth slim shoulder clavicles tucked neatly inside intact VRM skin while filling VRoid cutouts
-      for (const sx of [-1, 1]) {
-        const clav = new THREE.Mesh(new THREE.SphereGeometry(0.029, 14, 12), skinMat);
-        clav.scale.set(1.2, 0.82, 0.80);
-        clav.position.set(sx * (metrics.halfShoulderW * 0.76), metrics.yShoulderFromChest + 0.004, 0);
-        bridgeG.add(clav);
+  // 1. REAL Sculpted SkinnedMesh Collarbone + Upper Chest Skin (ZERO hollow chest/neck gap!)
+  if (collarboneBridge && !cov.hasCollarboneSkin) {
+    const clonedCollarTris = buildBodyClonedSkinnedGarment({
+      vrm,
+      avatarRoot,
+      mat: skinMat,
+      zone: 'skin_collarbone',
+      inflate: -0.0022,
+    });
+    if (clonedCollarTris < 40 && metrics.chest) {
+      const bridgeG = attachGroup(metrics.chest, 'GarmentSkinCollarbone');
+      if (bridgeG) {
+        const yLow = metrics.yShoulderFromChest - 0.065;
+        const yMid = metrics.yShoulderFromChest - 0.005;
+        const yCollar = metrics.yNeckFromChest - 0.015;
+        const yNeckTop = metrics.yNeckFromChest + 0.045;
+        const bridgeGeo = createContouredTorsoLathe({
+          profile: [
+            [0.080, yLow],
+            [0.088, yMid],
+            [0.070, yCollar],
+            [0.038, metrics.yNeckFromChest + 0.005],
+            [0.036, yNeckTop],
+          ],
+          scaleX: 0.98,
+          scaleZ: 0.66,
+          bustBoost: 0,
+          fwdSign,
+          segments: 24,
+        });
+        bridgeG.add(new THREE.Mesh(bridgeGeo, skinMat));
       }
     }
   }
 
-  // 2. Smooth Slim Tapered Anime Arms (seamless from deltoid -> elbow -> wrist!)
+  // 2. REAL Sculpted SkinnedMesh Human Arms (cloned from VRM arm topology when VRoid deleted Body_SKIN under sweater!)
+  //    Falls back to smooth tapered elliptical bone-tracked arms ONLY if the model has no clonable arm mesh.
   if (armMode !== 'none') {
-    const sides: Array<{
-      upper: VRMHumanBoneName;
-      lower: VRMHumanBoneName;
-      hand: VRMHumanBoneName;
-      side: 1 | -1;
-    }> = [
-      { upper: 'leftUpperArm', lower: 'leftLowerArm', hand: 'leftHand', side: 1 },
-      { upper: 'rightUpperArm', lower: 'rightLowerArm', hand: 'rightHand', side: -1 },
-    ];
+    const needsUpper =
+      (armMode === 'full' ||
+        armMode === 'upper_only' ||
+        armMode === 'below_cap' ||
+        armMode === 'below_short_sleeve') &&
+      !cov.hasUpperArmSkin;
+    const needsForearm =
+      (armMode === 'full' ||
+        armMode === 'forearms_only' ||
+        armMode === 'below_cap' ||
+        armMode === 'below_short_sleeve') &&
+      !cov.hasForearmSkin;
 
-    for (const s of sides) {
-      const up = h.getRawBoneNode(s.upper);
-      const low = h.getRawBoneNode(s.lower);
-      const hand = h.getRawBoneNode(s.hand);
-      const fallbackX = (s.side === 1) !== isVrm0 ? 1 : -1;
+    let clonedArmTris = 0;
+    if (needsUpper || needsForearm) {
+      const skinArmZone: SkinnedGarmentZone =
+        armMode === 'upper_only'
+          ? 'skin_arms_upper'
+          : armMode === 'below_short_sleeve' || armMode === 'forearms_only'
+          ? 'skin_arms_below_short'
+          : 'skin_arms_full';
+      clonedArmTris = buildBodyClonedSkinnedGarment({
+        vrm,
+        avatarRoot,
+        mat: skinMat,
+        zone: skinArmZone,
+        inflate: -0.0028,
+      });
+    }
 
-      if (up && armMode !== 'forearms_only' && !cov.hasUpperArmSkin) {
-        const upG = attachGroup(up, `GarmentSkinArmUp_${s.upper}`);
-        if (upG) {
-          const startFrac = armMode === 'below_cap' ? 0.14 : -0.05;
-          const tube = createBoneSegmentTube({
-            bone: up,
-            childBone: low,
-            fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
-            fallbackLen: 0.24,
-            startFrac,
-            endFrac: 1.02,
-            radiusStart: 0.029,
-            radiusEnd: 0.024,
-            mat: skinMat,
-            radialSegments: 16,
-          });
-          upG.add(tube);
+    if (clonedArmTris < 50 && (needsUpper || needsForearm)) {
+      const sides: Array<{
+        upper: VRMHumanBoneName;
+        lower: VRMHumanBoneName;
+        hand: VRMHumanBoneName;
+        side: 1 | -1;
+      }> = [
+        { upper: 'leftUpperArm', lower: 'leftLowerArm', hand: 'leftHand', side: 1 },
+        { upper: 'rightUpperArm', lower: 'rightLowerArm', hand: 'rightHand', side: -1 },
+      ];
 
-          if (armMode !== 'below_cap') {
-            const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.030, 14, 12), skinMat);
-            upG.add(shoulderBall);
+      for (const s of sides) {
+        const up = h.getRawBoneNode(s.upper);
+        const low = h.getRawBoneNode(s.lower);
+        const hand = h.getRawBoneNode(s.hand);
+        const fallbackX = (s.side === 1) !== isVrm0 ? 1 : -1;
+
+        if (up && needsUpper) {
+          const upG = attachGroup(up, `GarmentSkinArmUp_${s.upper}`);
+          if (upG) {
+            const startFrac =
+              armMode === 'below_short_sleeve' ? 0.34 : armMode === 'below_cap' ? 0.14 : -0.05;
+            const tube = createTaperedEllipticalForearmTube({
+              bone: up,
+              childBone: low,
+              fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+              fallbackLen: 0.24,
+              startFrac,
+              endFrac: 1.03,
+              radiusStart: 0.029,
+              radiusEnd: 0.0235,
+              ellipseScaleZ: 0.90,
+              mat: skinMat,
+            });
+            upG.add(tube);
+
+            if (armMode !== 'below_cap' && armMode !== 'below_short_sleeve') {
+              const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.029, 14, 12), skinMat);
+              upG.add(shoulderBall);
+            }
           }
         }
-      }
 
-      if (low && armMode !== 'upper_only' && !cov.hasForearmSkin) {
-        const lowG = attachGroup(low, `GarmentSkinArmLow_${s.lower}`);
-        if (lowG) {
-          const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), skinMat);
-          const tube = createTaperedEllipticalForearmTube({
-            bone: low,
-            childBone: hand,
-            fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
-            fallbackLen: 0.22,
-            startFrac: 0.0,
-            endFrac: 0.99,
-            radiusStart: 0.024,
-            radiusEnd: 0.018,
-            ellipseScaleZ: 0.88,
-            mat: skinMat,
-          });
-          lowG.add(elbowBall, tube);
+        if (low && needsForearm) {
+          const lowG = attachGroup(low, `GarmentSkinArmLow_${s.lower}`);
+          if (lowG) {
+            const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.0235, 12, 10), skinMat);
+            const tube = createTaperedEllipticalForearmTube({
+              bone: low,
+              childBone: hand,
+              fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+              fallbackLen: 0.22,
+              startFrac: 0.0,
+              endFrac: 1.01,
+              radiusStart: 0.0235,
+              radiusEnd: 0.0175,
+              ellipseScaleZ: 0.88,
+              mat: skinMat,
+            });
+            lowG.add(elbowBall, tube);
+          }
         }
       }
     }
@@ -1942,6 +2102,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   const goldMat = makeAnimeFabricMaterial('#facc15', { doubleSide: true, emissiveBoost: 0.34 });
 
   if (garmentStyle === 'cozy_hoodie_pants') {
+    addExposedSkinUnderlay({
+      vrm,
+      avatarRoot,
+      metrics,
+      skinHex: avatarSkinHex,
+      armMode: 'none',
+      collarboneBridge: true,
+      fwdSign,
+      coverage: skinCoverage,
+    });
     const usedSkinnedPants = addLegPants({
       vrm,
       avatarRoot,
@@ -2168,7 +2338,8 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
-      armMode: 'forearms_only',
+      armMode: 'below_short_sleeve',
+      collarboneBridge: true,
       fwdSign,
       coverage: skinCoverage,
     });
@@ -2311,18 +2482,17 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     }
 
     if (chestGroup) {
-      // Dynamic off-shoulder satin shawl: sleek profile + real-time upper-arm conformity so it NEVER slices through biceps!
-      const shawl = new THREE.Mesh(new THREE.TorusGeometry(0.132, 0.013, 14, 40), topAccentMat);
-      shawl.rotation.x = Math.PI / 2;
-      shawl.scale.set(1.12, 0.74, 1);
-      shawl.position.set(0, topNeckY - 0.006, 0.004 * fwdSign);
-      registerDynamicCollarRing(shawl, fwdSign, 0.046);
+      // Sleek fitted satin bustline trim tucked neatly along neckline (zero floating hoop slicing arms!)
+      const bustTrim = new THREE.Mesh(new THREE.TorusGeometry(0.104, 0.009, 10, 32), topAccentMat);
+      bustTrim.rotation.x = Math.PI / 2;
+      bustTrim.scale.set(1.06, 0.84, 1);
+      bustTrim.position.set(0, topNeckY, 0.005 * fwdSign);
 
       const corsage = new THREE.Mesh(new THREE.TorusGeometry(0.106, 0.012, 10, 28), goldMat);
       corsage.rotation.x = Math.PI / 2;
       corsage.scale.set(1.06, 0.85, 1);
       corsage.position.set(0, waistYInChest, 0);
-      chestGroup.add(shawl, corsage);
+      chestGroup.add(bustTrim, corsage);
     }
     if (hipsGroup) {
       const outerGown = new THREE.Mesh(
@@ -2354,6 +2524,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(outerGown, peplum);
     }
   } else if (garmentStyle === 'cozy_pajamas') {
+    addExposedSkinUnderlay({
+      vrm,
+      avatarRoot,
+      metrics,
+      skinHex: avatarSkinHex,
+      armMode: 'none',
+      collarboneBridge: true,
+      fwdSign,
+      coverage: skinCoverage,
+    });
     const usedSkinnedPants = addLegPants({
       vrm,
       avatarRoot,
@@ -2396,6 +2576,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       chestGroup.add(pocket);
     }
   } else if (garmentStyle === 'school_blazer') {
+    addExposedSkinUnderlay({
+      vrm,
+      avatarRoot,
+      metrics,
+      skinHex: avatarSkinHex,
+      armMode: 'none',
+      collarboneBridge: true,
+      fwdSign,
+      coverage: skinCoverage,
+    });
     const { chestGroup, hipsGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
       vrm,
       avatarRoot,
@@ -2448,6 +2638,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(skirt);
     }
   } else if (garmentStyle === 'trench_coat_pants') {
+    addExposedSkinUnderlay({
+      vrm,
+      avatarRoot,
+      metrics,
+      skinHex: avatarSkinHex,
+      armMode: 'none',
+      collarboneBridge: true,
+      fwdSign,
+      coverage: skinCoverage,
+    });
     const usedSkinnedPants = addLegPants({
       vrm,
       avatarRoot,
