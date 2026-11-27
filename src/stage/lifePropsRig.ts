@@ -1247,7 +1247,7 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
     root.add(chair);
 
     const desk = new THREE.Group();
-    desk.position.set(0, 0, 0.54);
+    desk.position.set(0, 0, 0.50);
     const deskWood = new THREE.MeshStandardMaterial({ color: '#c89d6c', roughness: 0.48 });
     const steelMat = new THREE.MeshStandardMaterial({ color: '#64748b', roughness: 0.35, metalness: 0.65 });
 
@@ -1323,32 +1323,12 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
       new THREE.BoxGeometry(0.38, 0.014, 0.25),
       new THREE.MeshStandardMaterial({ map: paperTex || undefined, color: '#ffffff', roughness: 0.85 })
     );
-    notebook.position.set(-0.04, 0.743, -0.08);
+    notebook.position.set(-0.02, 0.743, -0.08);
     notebook.rotation.y = 0.04;
     desk.add(notebook);
 
-    // Animated Ballpoint Pen actively writing across the notebook paper!
-    const penGroup = new THREE.Group();
-    penGroup.position.set(0.05, 0.79, -0.07);
-    const penBarrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0055, 0.0055, 0.145, 10),
-      new THREE.MeshStandardMaterial({ color: accent, roughness: 0.3, metalness: 0.35 })
-    );
-    const penTip = new THREE.Mesh(
-      new THREE.ConeGeometry(0.0055, 0.022, 10),
-      new THREE.MeshStandardMaterial({ color: '#cbd5e1', metalness: 0.8, roughness: 0.2 })
-    );
-    penTip.rotation.x = Math.PI;
-    penTip.position.y = -0.083;
-    penGroup.add(penBarrel, penTip);
-    penGroup.rotation.set(0.35, 0.2, -0.45);
-    penGroup.userData.writeMotion = {
-      baseX: penGroup.position.x,
-      baseZ: penGroup.position.z,
-      baseY: penGroup.position.y,
-    };
-    desk.add(penGroup);
-    animatedNodes.push(penGroup);
+    // Note: Writing pen is gripped directly in her right hand (handPropsRig.ts -> study_pen)
+    // and aimed live onto this notebook page, avoiding any disembodied floating desk pen!
 
     // Standing open textbook + pencil case + eraser + highlighter
     const textbookCover = new THREE.Mesh(

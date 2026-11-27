@@ -60,6 +60,7 @@ import {
 } from '../stage/hairStyleRig';
 import {
   syncProceduralGarmentToVrm,
+  syncSeatSpringBoneColliders,
   updateProceduralGarmentSway,
 } from '../stage/garmentRig';
 import { applyVrmAppearanceVariant } from '../stage/vrmMorphRig';
@@ -82,7 +83,7 @@ import {
   AutonomousRoamController,
   ROAM_BEHAVIOR_LABELS,
 } from '../stage/roamController';
-import { AvatarPoseController } from '../stage/poseController';
+import { AvatarPoseController, STUDIO_SEAT_HEIGHT } from '../stage/poseController';
 import {
   expSmooth,
   getDiningAnimationFrame,
@@ -1504,8 +1505,24 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             targetRoll += Math.sin(elapsed * 26) * 0.055 * remain;
           }
 
+          const isPhysicallySeated =
+            isSeatedStage ||
+            (roamStatus.behavior === 'sit_taskbar' &&
+              !roamStatus.isMoving &&
+              !roamStatus.isDragging);
           updateProceduralHairSway(avatarRootRef.current, elapsed);
-          updateProceduralGarmentSway(avatarRootRef.current, elapsed);
+          updateProceduralGarmentSway(avatarRootRef.current, elapsed, {
+            vrm,
+            dt,
+            isSeated: isPhysicallySeated,
+            seatSurfaceWorldY: avatarContainer.position.y + STUDIO_SEAT_HEIGHT,
+          });
+          syncSeatSpringBoneColliders(
+            vrm,
+            avatarContainer,
+            isPhysicallySeated,
+            STUDIO_SEAT_HEIGHT
+          );
           lifePropsRef.current?.followPosition(
             desktopRoamRef.current || roamStatus.behavior === 'sit_taskbar'
               ? avatarContainer.position
@@ -1540,6 +1557,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           smoothPitch = THREE.MathUtils.lerp(smoothPitch, targetPitch, headLerp);
           smoothRoll = THREE.MathUtils.lerp(smoothRoll, targetRoll, headLerp);
 
+          const isVrm0 = vrm.meta?.metaVersion === '0';
+          const forwardSign = isVrm0 ? 1 : -1;
+          const spineBone = vrm.humanoid?.getNormalizedBoneNode('spine');
+          const chestBone = vrm.humanoid?.getNormalizedBoneNode('chest');
+          const upperChestBone = vrm.humanoid?.getNormalizedBoneNode('upperChest');
           const neckBone = vrm.humanoid?.getNormalizedBoneNode('neck');
           const headBone = vrm.humanoid?.getNormalizedBoneNode('head');
 
@@ -1552,14 +1574,40 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             headBone.rotation.x = smoothPitch;
             headBone.rotation.z = smoothRoll;
           } else {
+            // Distribute downward/upward gaze pitch across the FULL upper kinetic chain:
+            // - chest / upperChest: ~28% of pitch (+ subtle lumbar spine flex when gazing down!)
+            // - neck: ~35%, safely clamped to [-0.32, 0.28] rad
+            // - head: ~37% with chin-crowding protection so jawline ALWAYS clears choker/collar!
+            const chestPitchShare = THREE.MathUtils.clamp(smoothPitch * 0.28, -0.14, 0.16);
+            if (!activeEmote && Math.abs(chestPitchShare) > 0.001) {
+              if (upperChestBone && chestBone) {
+                chestBone.rotation.x += forwardSign * chestPitchShare * 0.55;
+                upperChestBone.rotation.x += forwardSign * chestPitchShare * 0.45;
+              } else if (chestBone) {
+                chestBone.rotation.x += forwardSign * chestPitchShare;
+              }
+              if (spineBone && smoothPitch > 0.04) {
+                spineBone.rotation.x += forwardSign * Math.min(0.08, smoothPitch * 0.16);
+              }
+            }
+
+            const clampedNeckPitch = THREE.MathUtils.clamp(smoothPitch * 0.35, -0.32, 0.28);
+            // Chin-crowding guard: keep combined cervical downward tilt comfortably above choker/collar
+            const maxSafeHeadDown = Math.max(0.08, 0.42 - Math.max(0, clampedNeckPitch));
+            const clampedHeadPitch = THREE.MathUtils.clamp(
+              smoothPitch * 0.37,
+              -0.30,
+              maxSafeHeadDown
+            );
+
             if (neckBone) {
               neckBone.rotation.y = smoothYaw * 0.4;
-              neckBone.rotation.x = smoothPitch * 0.4;
+              neckBone.rotation.x = clampedNeckPitch;
               neckBone.rotation.z = smoothRoll * 0.35;
             }
             if (headBone) {
               headBone.rotation.y = smoothYaw * 0.6;
-              headBone.rotation.x = smoothPitch * 0.6;
+              headBone.rotation.x = clampedHeadPitch;
               headBone.rotation.z = smoothRoll * 0.65;
             }
           }

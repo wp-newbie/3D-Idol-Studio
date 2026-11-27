@@ -17,6 +17,8 @@ type PoseBoneName =
   | 'spine'
   | 'chest'
   | 'upperChest'
+  | 'leftShoulder'
+  | 'rightShoulder'
   | 'leftUpperArm'
   | 'rightUpperArm'
   | 'leftLowerArm'
@@ -35,6 +37,8 @@ const POSE_BONES: PoseBoneName[] = [
   'spine',
   'chest',
   'upperChest',
+  'leftShoulder',
+  'rightShoulder',
   'leftUpperArm',
   'rightUpperArm',
   'leftLowerArm',
@@ -286,6 +290,25 @@ export class AvatarPoseController {
     const kneeBendX = -forwardSign * (Math.PI * 0.48); // ~86° downward so calves hang vertically
     const footLevelX = forwardSign * 0.05; // keep soles parallel to floor
 
+    const isStudyingSeated =
+      !isSleeping &&
+      !activeDiningFrame &&
+      (activeHobbyKind === 'studying' || activeHobbyKind === 'journaling');
+    const seatedTableFlex = activeDiningFrame
+      ? 0.085 + activeDiningFrame.dipToPlate * 0.045 + activeDiningFrame.eatLift * 0.025
+      : isStudyingSeated
+      ? 0.115
+      : 0;
+    const clavicleFwd = Math.min(
+      0.08,
+      activeDiningFrame
+        ? 0.055 + activeDiningFrame.dipToPlate * 0.025
+        : isStudyingSeated
+        ? 0.068
+        : 0.022
+    );
+    const clavicleReliefZ = activeDiningFrame || isStudyingSeated ? 0.028 : 0.012;
+
     const targets: Record<PoseBoneName, { x: number; y: number; z: number }> = {
       hips: {
         x: 0,
@@ -293,24 +316,38 @@ export class AvatarPoseController {
         z: bodyLang.hipWeightShift * 0.45,
       },
       spine: {
-        // Subtle relaxed upright posture + emotion lean + activity follow-through
+        // Comfortable waist/lumbar forward flex during seated dining & studying so neck never cranes alone!
         x:
-          forwardSign * (0.06 + activityLeanX) +
+          forwardSign * (0.06 + activityLeanX + seatedTableFlex * 0.62) +
           bodyLang.spineLeanX * 0.75 +
           (isMusicPlaying ? musicBeat * 0.045 : 0),
         y: gentleSway * (isMusicPlaying ? 0.06 : 0.018) + activityTwistY * 0.6,
         z: isMusicPlaying ? Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
       },
       chest: {
-        // Gentle counter-curve + breathing sine wave
-        x: -forwardSign * (0.04 - activityLeanX * 0.45) + breath * 0.015 + bodyLang.spineLeanX * 0.35,
+        // Gentle upper-thoracic follow-through + breathing sine wave
+        x:
+          forwardSign * (-0.03 + activityLeanX * 0.45 + seatedTableFlex * 0.38) +
+          breath * 0.015 +
+          bodyLang.spineLeanX * 0.35,
         y: activityTwistY * 0.4,
         z: 0,
       },
       upperChest: {
-        x: breath * 0.01,
+        x: forwardSign * (seatedTableFlex * 0.24) + breath * 0.01,
         y: 0,
         z: 0,
+      },
+      // Clavicle / scapula forward protraction (clamped <= 0.08 rad) to prevent deltoid pinching
+      leftShoulder: {
+        x: 0,
+        y: -armDownSign * clavicleFwd,
+        z: -armDownSign * clavicleReliefZ,
+      },
+      rightShoulder: {
+        x: 0,
+        y: armDownSign * clavicleFwd,
+        z: armDownSign * clavicleReliefZ,
       },
       // Legs: 90° forward seated bend with knees together (modest anime posture)
       leftUpperLeg: {
@@ -343,36 +380,36 @@ export class AvatarPoseController {
         y: 0,
         z: 0,
       },
-      // Arms & hands resting naturally down on thighs/lap (eliminates stiff A-pose & floating elbows)
+      // Arms & hands resting naturally down on thighs/lap with ~18° outward elbow carrying angle (zero ribcage collapse!)
       leftUpperArm: {
-        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.2) + bodyLang.shoulderFidget * 0.4,
-        y: armDownSign * 0.18,
-        z: armDownSign * (1.32 + bodyLang.shoulderDroop * 0.12 + breath * 0.01),
+        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.16) + bodyLang.shoulderFidget * 0.32,
+        y: armDownSign * 0.12,
+        z: armDownSign * (1.16 + bodyLang.shoulderDroop * 0.1 + breath * 0.01),
       },
       rightUpperArm: {
-        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.2) - bodyLang.shoulderFidget * 0.4,
-        y: -armDownSign * 0.18,
-        z: -armDownSign * (1.32 + bodyLang.shoulderDroop * 0.12 - breath * 0.01),
+        x: forwardSign * (0.14 + bodyLang.shoulderDroop * 0.16) - bodyLang.shoulderFidget * 0.32,
+        y: -armDownSign * 0.12,
+        z: -armDownSign * (1.16 + bodyLang.shoulderDroop * 0.1 - breath * 0.01),
       },
       leftLowerArm: {
-        x: -forwardSign * 0.45,
-        y: armDownSign * 0.56,
-        z: armDownSign * 0.22,
+        x: -forwardSign * 0.42,
+        y: armDownSign * 0.52,
+        z: armDownSign * 0.16,
       },
       rightLowerArm: {
-        x: -forwardSign * 0.45,
-        y: -armDownSign * 0.56,
-        z: -armDownSign * 0.22,
+        x: -forwardSign * 0.42,
+        y: -armDownSign * 0.52,
+        z: -armDownSign * 0.16,
       },
       leftHand: {
-        x: -forwardSign * 0.16,
-        y: -armDownSign * 0.1,
-        z: armDownSign * 0.12,
+        x: -forwardSign * 0.14,
+        y: -armDownSign * 0.08,
+        z: armDownSign * 0.10,
       },
       rightHand: {
-        x: -forwardSign * 0.16,
-        y: armDownSign * 0.1,
-        z: -armDownSign * 0.12,
+        x: -forwardSign * 0.14,
+        y: armDownSign * 0.08,
+        z: -armDownSign * 0.10,
       },
     };
 
@@ -497,6 +534,40 @@ export class AvatarPoseController {
 
     if (activeHobbyKind === 'brushing_teeth' && !activeDiningFrame) {
       this.applyToothbrushFingerGrip(vrm, dt);
+      return;
+    }
+
+    if ((activeHobbyKind === 'studying' || activeHobbyKind === 'journaling') && !activeDiningFrame) {
+      // Natural tripod pen grip on right hand; gentle open-flat page-steadying fingers on left hand!
+      for (const f of FINGER_CURL_BONES) {
+        const node = humanoid.getNormalizedBoneNode(f.name);
+        if (!node) continue;
+        const sideSign = f.side === 'left' ? armDownSign : -armDownSign;
+        if (f.side === 'left') {
+          const flatCurl = f.weight * 0.22;
+          if (f.name.includes('Thumb')) {
+            node.rotation.y = sideSign * flatCurl;
+            node.rotation.z = sideSign * flatCurl * 0.2;
+          } else {
+            node.rotation.z = sideSign * flatCurl;
+          }
+          continue;
+        }
+        let penCurl = 0.72;
+        if (f.name.includes('Index')) {
+          penCurl = f.name.includes('Intermediate') ? 0.72 : f.name.includes('Proximal') ? 0.54 : 0.36;
+        } else if (f.name.includes('Middle')) {
+          penCurl = f.name.includes('Intermediate') ? 0.82 : f.name.includes('Proximal') ? 0.64 : 0.42;
+        } else if (f.name.includes('Ring') || f.name.includes('Little')) {
+          penCurl = f.name.includes('Intermediate') ? 1.08 : f.name.includes('Proximal') ? 0.92 : 0.64;
+        } else if (f.name.includes('Thumb')) {
+          penCurl = f.name.includes('Proximal') ? 0.62 : 0.40;
+          node.rotation.y = sideSign * penCurl;
+          node.rotation.z = sideSign * penCurl * 0.35;
+          continue;
+        }
+        node.rotation.z = sideSign * penCurl;
+      }
       return;
     }
 
@@ -645,6 +716,8 @@ export class AvatarPoseController {
         y: 0,
         z: 0,
       },
+      leftShoulder: { x: 0, y: 0, z: 0 },
+      rightShoulder: { x: 0, y: 0, z: 0 },
       leftUpperLeg: {
         x: forwardSign * 0.04,
         y: 0,

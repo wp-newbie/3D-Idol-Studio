@@ -1,6 +1,14 @@
 import * as THREE from 'three';
-import { MToonMaterial, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm';
+import {
+  MToonMaterial,
+  VRMSpringBoneCollider,
+  VRMSpringBoneColliderShapeCapsule,
+  type VRM,
+  type VRMHumanBoneName,
+  type VRMSpringBoneColliderGroup,
+} from '@pixiv/three-vrm';
 import type { GarmentStyleId } from '../types/studio';
+import { expSmooth } from './naturalArmPose';
 
 export const GARMENT_STYLE_ORDER: GarmentStyleId[] = [
   'default',
@@ -566,6 +574,125 @@ function createBoneSegmentTube(params: {
 }
 
 /**
+ * Creates a smooth tapered elliptical sleeve/glove/cuff aligned along the forearm longitudinal axis,
+ * matching the elbow-to-wrist anatomical cross-sectional gradient with +2-4mm radial clearance
+ * (eliminating boxy cylindrical cuff steps and wrist gaps!).
+ */
+function createTaperedEllipticalForearmTube(params: {
+  bone: THREE.Object3D;
+  childBone: THREE.Object3D | null;
+  fallbackDir: THREE.Vector3;
+  fallbackLen: number;
+  startFrac: number;
+  endFrac: number;
+  radiusStart: number;
+  radiusEnd: number;
+  ellipseScaleZ?: number;
+  mat: THREE.Material;
+  radialSegments?: number;
+  heightSegments?: number;
+  openEnded?: boolean;
+}): THREE.Mesh {
+  const {
+    childBone,
+    fallbackDir,
+    fallbackLen,
+    startFrac,
+    endFrac,
+    radiusStart,
+    radiusEnd,
+    ellipseScaleZ = 0.88,
+    mat,
+    radialSegments = 20,
+    heightSegments = 8,
+    openEnded = false,
+  } = params;
+
+  const segVec =
+    childBone && childBone.position.lengthSq() > 1e-5
+      ? childBone.position.clone()
+      : fallbackDir.clone().normalize().multiplyScalar(fallbackLen);
+
+  const totalLen = segVec.length();
+  const dir = segVec.clone().normalize();
+  const segLen = Math.max(0.02, totalLen * Math.max(0.05, endFrac - startFrac));
+  const midDist = totalLen * ((startFrac + endFrac) * 0.5);
+
+  const geo = new THREE.CylinderGeometry(
+    1,
+    1,
+    segLen,
+    radialSegments,
+    heightSegments,
+    openEnded
+  );
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    // u = 0 at proximal (elbow) end (y = -segLen/2), u = 1 at distal (wrist) end (y = +segLen/2)
+    const u = THREE.MathUtils.clamp((y + segLen * 0.5) / segLen, 0, 1);
+    // Natural forearm anatomical taper: subtle proximal fullness tapering smoothly into slim elliptical wrist
+    const smoothU = u * u * (3 - 2 * u);
+    const muscleEase = Math.sin(u * Math.PI) * 0.0016;
+    const r = THREE.MathUtils.lerp(radiusStart, radiusEnd, smoothU) + muscleEase;
+    // Slight soft bevel at the very edges so cuffs never look razor-stepped
+    const edgeBevel = u < 0.08 ? 0.96 + (u / 0.08) * 0.04 : u > 0.92 ? 0.97 + ((1 - u) / 0.08) * 0.03 : 1;
+    pos.setXYZ(i, x * r * edgeBevel, y, z * r * ellipseScaleZ * edgeBevel);
+  }
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(dir).multiplyScalar(midDist);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  return mesh;
+}
+
+interface DynamicSkirtDrapeData {
+  restPos: Float32Array;
+  height: number;
+  fwdSign: number;
+  seatedBlend: number;
+}
+
+function registerDynamicSkirtMesh(
+  mesh: THREE.Mesh,
+  height: number,
+  fwdSign: number
+): void {
+  const pos = mesh.geometry.attributes.position;
+  if (!pos) return;
+  mesh.userData.garmentSkirtSway = true;
+  mesh.userData.dynamicSkirtDrape = {
+    restPos: new Float32Array(pos.array as Float32Array),
+    height,
+    fwdSign,
+    seatedBlend: 0,
+  } satisfies DynamicSkirtDrapeData;
+}
+
+interface DynamicCollarRingData {
+  restPos: Float32Array;
+  fwdSign: number;
+  armClearance: number;
+}
+
+function registerDynamicCollarRing(
+  mesh: THREE.Mesh,
+  fwdSign: number,
+  armClearance = 0.044
+): void {
+  const pos = mesh.geometry.attributes.position;
+  if (!pos) return;
+  mesh.userData.dynamicCollarRing = {
+    restPos: new Float32Array(pos.array as Float32Array),
+    fwdSign,
+    armClearance,
+  } satisfies DynamicCollarRingData;
+}
+
+/**
  * Adds seamless, bright anime MToon-matched skin underlays for bare shoulders, collarbone/neck,
  * arms, and upper thighs so VRoid Studio models exported with "Delete transparent meshes"
  * never show hollow chests, invisible arms, or muddy grey tubes!
@@ -956,23 +1083,38 @@ function addArmSleeves(params: {
       if (lowG) {
         if (mode !== 'gloves') {
           const elbowCap = new THREE.Mesh(
-            new THREE.SphereGeometry(0.042 * looseFactor, 12, 10),
+            new THREE.SphereGeometry(0.039 * looseFactor, 12, 10),
             mat
           );
           lowG.add(elbowCap);
         }
-        const tube = createBoneSegmentTube({
-          bone: low,
-          childBone: hand,
-          fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
-          fallbackLen: 0.22,
-          startFrac: mode === 'gloves' ? 0.16 : -0.04,
-          endFrac: mode === 'kimono' ? 0.88 : 0.96,
-          radiusStart: (mode === 'gloves' ? 0.032 : 0.042) * looseFactor,
-          radiusEnd: (mode === 'kimono' ? 0.088 : 0.034) * looseFactor,
-          mat,
-          openEnded: mode === 'kimono',
-        });
+        const tube =
+          mode === 'kimono'
+            ? createBoneSegmentTube({
+                bone: low,
+                childBone: hand,
+                fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+                fallbackLen: 0.22,
+                startFrac: -0.04,
+                endFrac: 0.88,
+                radiusStart: 0.042 * looseFactor,
+                radiusEnd: 0.088 * looseFactor,
+                mat,
+                openEnded: true,
+              })
+            : createTaperedEllipticalForearmTube({
+                bone: low,
+                childBone: hand,
+                fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
+                fallbackLen: 0.22,
+                // Gloves hug the forearm smoothly with +3mm anatomical radial padding (zero chunky cylinder!)
+                startFrac: mode === 'gloves' ? 0.14 : -0.03,
+                endFrac: mode === 'gloves' ? 0.98 : 0.96,
+                radiusStart: (mode === 'gloves' ? 0.0275 : 0.039) * looseFactor,
+                radiusEnd: (mode === 'gloves' ? 0.0215 : 0.029) * looseFactor,
+                ellipseScaleZ: 0.88,
+                mat,
+              });
         lowG.add(tube);
 
         if (mode === 'kimono') {
@@ -982,15 +1124,17 @@ function addArmSleeves(params: {
         }
 
         if (cuffMat && mode !== 'kimono') {
-          const cuff = createBoneSegmentTube({
+          // Tapered elliptical cuff with +2.5mm subtle radial trim over the sleeve/glove (zero stepped shelf!)
+          const cuff = createTaperedEllipticalForearmTube({
             bone: low,
             childBone: hand,
             fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
             fallbackLen: 0.22,
-            startFrac: 0.84,
-            endFrac: 0.99,
-            radiusStart: 0.037 * looseFactor,
-            radiusEnd: 0.033 * looseFactor,
+            startFrac: mode === 'gloves' ? 0.12 : 0.85,
+            endFrac: mode === 'gloves' ? 0.24 : 0.99,
+            radiusStart: (mode === 'gloves' ? 0.0295 : 0.0315) * looseFactor,
+            radiusEnd: (mode === 'gloves' ? 0.0285 : 0.0285) * looseFactor,
+            ellipseScaleZ: 0.88,
             mat: cuffMat,
           });
           lowG.add(cuff);
@@ -1265,12 +1409,13 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         topMat
       );
       skirt.position.set(0, -0.22, 0);
-      skirt.userData.garmentSkirtSway = true;
+      registerDynamicSkirtMesh(skirt, 0.50, fwdSign);
 
       const hem = new THREE.Mesh(new THREE.TorusGeometry(0.298, 0.009, 10, 36), topAccentMat);
       hem.rotation.x = Math.PI / 2;
       hem.scale.set(1.06, 0.88, 1);
       hem.position.set(0, -0.47, 0);
+      hem.userData.dynamicSkirtHem = { baseY: -0.47, fwdSign, height: 0.50 };
       hipsGroup.add(skirt, hem);
     }
   } else if (garmentStyle === 'streetwear_jacket_shorts') {
@@ -1441,6 +1586,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         bottomMat
       );
       robeSkirt.position.set(0, -0.34, 0);
+      registerDynamicSkirtMesh(robeSkirt, 0.72, fwdSign);
       hipsGroup.add(robeSkirt);
     }
   } else if (garmentStyle === 'evening_gown') {
@@ -1465,11 +1611,12 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     addArmSleeves({ vrm, mat: accMat, cuffMat: goldMat, mode: 'gloves', looseFactor: 0.98 });
 
     if (chestGroup) {
-      // Off-shoulder draped satin shawl across upper arms & bustline
-      const shawl = new THREE.Mesh(new THREE.TorusGeometry(0.145, 0.020, 12, 32), topAccentMat);
+      // Dynamic off-shoulder satin shawl: sleek profile + real-time upper-arm conformity so it NEVER slices through biceps!
+      const shawl = new THREE.Mesh(new THREE.TorusGeometry(0.132, 0.013, 14, 40), topAccentMat);
       shawl.rotation.x = Math.PI / 2;
-      shawl.scale.set(1.16, 0.72, 1);
-      shawl.position.set(0, topNeckY - 0.005, 0);
+      shawl.scale.set(1.12, 0.74, 1);
+      shawl.position.set(0, topNeckY - 0.006, 0.004 * fwdSign);
+      registerDynamicCollarRing(shawl, fwdSign, 0.046);
 
       const corsage = new THREE.Mesh(new THREE.TorusGeometry(0.109, 0.013, 10, 28), goldMat);
       corsage.rotation.x = Math.PI / 2;
@@ -1490,7 +1637,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         bottomMat
       );
       outerGown.position.set(0, -0.38, 0);
-      outerGown.userData.garmentSkirtSway = true;
+      registerDynamicSkirtMesh(outerGown, 0.80, fwdSign);
 
       const peplum = new THREE.Mesh(
         createSculptedSkirtGeometry({
@@ -1503,6 +1650,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         topAccentMat
       );
       peplum.position.set(0, -0.09, 0);
+      registerDynamicSkirtMesh(peplum, 0.22, fwdSign);
       hipsGroup.add(outerGown, peplum);
     }
   } else if (garmentStyle === 'cozy_pajamas') {
@@ -1591,7 +1739,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         bottomMat
       );
       skirt.position.set(0, -0.145, 0);
-      skirt.userData.garmentSkirtSway = true;
+      registerDynamicSkirtMesh(skirt, 0.34, fwdSign);
       hipsGroup.add(skirt);
     }
   } else if (garmentStyle === 'trench_coat_pants') {
@@ -1642,6 +1790,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         topMat
       );
       coatTail.position.set(0, -0.22, 0);
+      registerDynamicSkirtMesh(coatTail, 0.50, fwdSign);
       hipsGroup.add(coatTail);
     }
   } else if (garmentStyle === 'bath_wrap') {
@@ -1697,11 +1846,13 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         towelMat
       );
       towelSkirt.position.set(0, -0.15, 0);
+      registerDynamicSkirtMesh(towelSkirt, 0.34, fwdSign);
 
       const bottomStripe = new THREE.Mesh(new THREE.TorusGeometry(0.166, 0.009, 10, 32), trimMat);
       bottomStripe.rotation.x = Math.PI / 2;
       bottomStripe.scale.set(1.06, 0.88, 1);
       bottomStripe.position.set(0, -0.315, 0);
+      bottomStripe.userData.dynamicSkirtHem = { baseY: -0.315, fwdSign, height: 0.34 };
       hipsGroup.add(towelSkirt, bottomStripe);
     }
   } else if (garmentStyle === 'beach_swimsuit') {
@@ -1774,24 +1925,275 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         pareoMat
       );
       pareo.position.set(0, -0.105, 0);
-      pareo.userData.garmentSkirtSway = true;
+      registerDynamicSkirtMesh(pareo, 0.25, fwdSign);
       hipsGroup.add(pareo);
     }
   }
 }
 
+export interface GarmentFrameUpdateOptions {
+  vrm?: VRM | null;
+  dt?: number;
+  isSeated?: boolean;
+  /** World-space Y height of chair/stool seat cushion top (default 0.45m) */
+  seatSurfaceWorldY?: number;
+}
+
+const _lArmStart = new THREE.Vector3();
+const _lArmEnd = new THREE.Vector3();
+const _rArmStart = new THREE.Vector3();
+const _rArmEnd = new THREE.Vector3();
+const _lSegA = new THREE.Vector3();
+const _lSegB = new THREE.Vector3();
+const _rSegA = new THREE.Vector3();
+const _rSegB = new THREE.Vector3();
+const _tmpInvMat = new THREE.Matrix4();
+const _tmpVert = new THREE.Vector3();
+const _tmpClosest = new THREE.Vector3();
+const _tmpDiff = new THREE.Vector3();
+const _tmpSeg = new THREE.Vector3();
+const _tmpWorldVert = new THREE.Vector3();
+
+function closestPointOnSegment(
+  p: THREE.Vector3,
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  out: THREE.Vector3
+): THREE.Vector3 {
+  _tmpSeg.subVectors(b, a);
+  const lenSq = _tmpSeg.lengthSq();
+  if (lenSq < 1e-8) return out.copy(a);
+  const t = THREE.MathUtils.clamp(_tmpDiff.subVectors(p, a).dot(_tmpSeg) / lenSq, 0, 1);
+  return out.copy(a).addScaledVector(_tmpSeg, t);
+}
+
 /**
- * Subtle organic fabric hem sway for procedural dresses & skirts during movement/breathing.
+ * Updates organic fabric hem sway, real-time off-shoulder collar ring conformity around moving biceps,
+ * and smooth seated skirt draping over thighs & chair seat contact plane (zero chair/seat clipping!).
  */
 export function updateProceduralGarmentSway(
   avatarRoot: THREE.Object3D | null,
-  elapsed: number
+  elapsed: number,
+  options?: GarmentFrameUpdateOptions
 ): void {
   if (!avatarRoot) return;
+  const vrm = options?.vrm ?? null;
+  const dt = options?.dt ?? 1 / 60;
+  const isSeated = options?.isSeated ?? false;
+  const seatSurfaceWorldY = options?.seatSurfaceWorldY ?? 0.45;
+  const blendAlpha = expSmooth(8.5, dt);
+
+  // Pre-fetch upper-arm world segments once per frame (zero per-frame heap allocations!)
+  let hasArmSegments = false;
+  if (vrm?.humanoid) {
+    const lu = vrm.humanoid.getRawBoneNode('leftUpperArm');
+    const ll = vrm.humanoid.getRawBoneNode('leftLowerArm');
+    const ru = vrm.humanoid.getRawBoneNode('rightUpperArm');
+    const rl = vrm.humanoid.getRawBoneNode('rightLowerArm');
+    if (lu && ll && ru && rl) {
+      lu.getWorldPosition(_lArmStart);
+      ll.getWorldPosition(_lArmEnd);
+      ru.getWorldPosition(_rArmStart);
+      rl.getWorldPosition(_rArmEnd);
+      hasArmSegments = true;
+    }
+  }
+
   avatarRoot.traverse((obj) => {
     if (obj.userData?.garmentSkirtSway) {
-      obj.rotation.z = Math.sin(elapsed * 1.65) * 0.022;
-      obj.rotation.x = Math.cos(elapsed * 1.25) * 0.014;
+      const swayAmp = isSeated ? 0.25 : 1.0;
+      obj.rotation.z = Math.sin(elapsed * 1.65) * 0.022 * swayAmp;
+      obj.rotation.x = Math.cos(elapsed * 1.25) * 0.014 * swayAmp;
+    }
+
+    // 1. Dynamic Off-Shoulder Collar Ring Conformity around moving upper arms
+    const collarData = obj.userData?.dynamicCollarRing as DynamicCollarRingData | undefined;
+    if (collarData && obj instanceof THREE.Mesh && hasArmSegments) {
+      const pos = obj.geometry.attributes.position as THREE.BufferAttribute;
+      const rest = collarData.restPos;
+      obj.updateWorldMatrix(true, false);
+      _tmpInvMat.copy(obj.matrixWorld).invert();
+
+      _lSegA.copy(_lArmStart).applyMatrix4(_tmpInvMat);
+      _lSegB.copy(_lArmEnd).applyMatrix4(_tmpInvMat);
+      _rSegA.copy(_rArmStart).applyMatrix4(_tmpInvMat);
+      _rSegB.copy(_rArmEnd).applyMatrix4(_tmpInvMat);
+
+      const clearR = collarData.armClearance;
+      for (let i = 0; i < pos.count; i++) {
+        const rx = rest[i * 3];
+        const ry = rest[i * 3 + 1];
+        const rz = rest[i * 3 + 2];
+        _tmpVert.set(rx, ry, rz);
+
+        // Push lateral/anterior collar vertices outward past left upper arm capsule
+        closestPointOnSegment(_tmpVert, _lSegA, _lSegB, _tmpClosest);
+        _tmpDiff.subVectors(_tmpVert, _tmpClosest);
+        let dist = _tmpDiff.length();
+        if (dist < clearR && dist > 1e-5) {
+          _tmpVert.addScaledVector(_tmpDiff, ((clearR - dist) * 1.08) / dist);
+        }
+
+        // Push lateral/anterior collar vertices outward past right upper arm capsule
+        closestPointOnSegment(_tmpVert, _rSegA, _rSegB, _tmpClosest);
+        _tmpDiff.subVectors(_tmpVert, _tmpClosest);
+        dist = _tmpDiff.length();
+        if (dist < clearR && dist > 1e-5) {
+          _tmpVert.addScaledVector(_tmpDiff, ((clearR - dist) * 1.08) / dist);
+        }
+
+        pos.setXYZ(i, _tmpVert.x, _tmpVert.y, _tmpVert.z);
+      }
+      pos.needsUpdate = true;
+      obj.geometry.computeVertexNormals();
+    }
+
+    // 2. Dynamic Seated Skirt Draping & Chair-Seat / Backrest Collision Avoidance
+    const skirtData = obj.userData?.dynamicSkirtDrape as DynamicSkirtDrapeData | undefined;
+    if (skirtData && obj instanceof THREE.Mesh) {
+      const targetSeated = isSeated ? 1 : 0;
+      const prevBlend = skirtData.seatedBlend;
+      skirtData.seatedBlend = THREE.MathUtils.lerp(prevBlend, targetSeated, blendAlpha);
+      if (skirtData.seatedBlend < 0.002 && prevBlend < 0.002) return;
+
+      const s = skirtData.seatedBlend;
+      const pos = obj.geometry.attributes.position as THREE.BufferAttribute;
+      const rest = skirtData.restPos;
+      const h = Math.max(0.1, skirtData.height);
+      const fwd = skirtData.fwdSign;
+
+      obj.updateWorldMatrix(true, false);
+      _tmpInvMat.copy(obj.matrixWorld).invert();
+      const seatFloorY = seatSurfaceWorldY + 0.014;
+
+      for (let i = 0; i < pos.count; i++) {
+        const rx = rest[i * 3];
+        const ry = rest[i * 3 + 1];
+        const rz = rest[i * 3 + 2];
+        // t = 0 at waistband top, t = 1 at bottom skirt hem
+        const t = THREE.MathUtils.clamp(0.5 - ry / h, 0, 1);
+        const tCurve = t * t;
+
+        const fwdDot = (rz * fwd) / Math.max(0.03, Math.hypot(rx, rz)); // +1 = front, -1 = back
+        const frontWeight = THREE.MathUtils.clamp((fwdDot + 0.35) / 1.35, 0, 1);
+        const backWeight = THREE.MathUtils.clamp((-fwdDot + 0.25) / 1.25, 0, 1);
+        const sideWeight = 1 - Math.abs(fwdDot);
+
+        let nx = rx;
+        let ny = ry;
+        let nz = rz;
+
+        // Front & lateral hem flares gracefully forward and slightly outward over seated thighs/lap!
+        const lapForward = Math.min(0.24, h * 0.42) * t * frontWeight * s;
+        const lapLift = Math.min(0.16, h * 0.28) * tCurve * frontWeight * s;
+        const sideFlare = (0.045 * sideWeight + 0.025 * frontWeight) * t * s;
+        nx += Math.sign(rx || 1) * sideFlare;
+        ny += lapLift;
+        nz += fwd * lapForward;
+
+        // Posterior skirt pulls softly forward out of the chair backrest & cushions cleanly onto the seat!
+        const backPullForward = Math.min(0.12, h * 0.22) * t * backWeight * s;
+        nz += fwd * backPullForward;
+
+        // Enforce world-space seat contact plane (y >= seatSurfaceY + 0.014) for posterior/lateral vertices
+        if (s > 0.01 && t > 0.12) {
+          _tmpWorldVert.set(nx, ny, nz).applyMatrix4(obj.matrixWorld);
+          // Posterior & mid-skirt rest flat on seat cushion; very front edge drapes gently over thigh knees
+          const minWorldY =
+            seatFloorY - frontWeight * Math.min(0.06, h * 0.14) * tCurve;
+          if (_tmpWorldVert.y < minWorldY) {
+            const liftDelta = (minWorldY - _tmpWorldVert.y) * s;
+            _tmpWorldVert.y += liftDelta;
+            // Spread displaced cloth slightly forward/outward like real draped fabric pooling on seat
+            _tmpWorldVert.z += 0.04 * liftDelta * (1 - backWeight * 0.5);
+            _tmpWorldVert.applyMatrix4(_tmpInvMat);
+            nx = _tmpWorldVert.x;
+            ny = _tmpWorldVert.y;
+            nz = _tmpWorldVert.z;
+          }
+        }
+
+        pos.setXYZ(i, nx, ny, nz);
+      }
+      pos.needsUpdate = true;
+      obj.geometry.computeVertexNormals();
+    }
+
+    // 3. Keep matching skirt hem trim rings smoothly aligned during seated draping
+    const hemData = obj.userData?.dynamicSkirtHem as
+      | { baseY: number; fwdSign: number; height: number }
+      | undefined;
+    if (hemData) {
+      const targetY = isSeated ? hemData.baseY + Math.min(0.20, hemData.height * 0.42) : hemData.baseY;
+      const targetZ = isSeated ? hemData.fwdSign * Math.min(0.15, hemData.height * 0.28) : 0;
+      obj.position.y = THREE.MathUtils.lerp(obj.position.y, targetY, blendAlpha);
+      obj.position.z = THREE.MathUtils.lerp(obj.position.z, targetZ, blendAlpha);
+      obj.visible = !isSeated || hemData.height <= 0.36;
     }
   });
+}
+
+const SEAT_COLLIDER_GROUP_NAME = '__zeta_seat_springbone_colliders__';
+
+/**
+ * Attaches dynamic `@pixiv/three-vrm` SpringBone capsule colliders for the chair seat cushion
+ * and backrest whenever the character is seated, so native VRM skirts and long hair rest cleanly
+ * on the chair surface instead of swinging/clipping through the stool or backrest.
+ */
+export function syncSeatSpringBoneColliders(
+  vrm: VRM | null,
+  avatarContainer: THREE.Object3D | null,
+  isSeated: boolean,
+  seatSurfaceLocalY = 0.45
+): void {
+  if (!vrm?.springBoneManager || !avatarContainer) return;
+  const manager = vrm.springBoneManager;
+
+  let holder = avatarContainer.getObjectByName(SEAT_COLLIDER_GROUP_NAME) as
+    | (THREE.Group & { userData: { colliderGroup?: VRMSpringBoneColliderGroup } })
+    | undefined;
+
+  if (!holder) {
+    holder = new THREE.Group();
+    holder.name = SEAT_COLLIDER_GROUP_NAME;
+
+    // 1. Horizontal capsule forming the chair/stool seat surface (top surface sits at seatSurfaceLocalY + 0.01)
+    const seatCapsule = new VRMSpringBoneCollider(
+      new VRMSpringBoneColliderShapeCapsule({
+        offset: new THREE.Vector3(-0.22, seatSurfaceLocalY - 0.135, -0.055),
+        tail: new THREE.Vector3(0.22, seatSurfaceLocalY - 0.135, -0.055),
+        radius: 0.145,
+      })
+    );
+    seatCapsule.name = 'ZetaSeatTopCollider';
+
+    // 2. Rear backrest capsule behind character (-Z) to keep long hair & rear skirt out of chair frame
+    const backCapsule = new VRMSpringBoneCollider(
+      new VRMSpringBoneColliderShapeCapsule({
+        offset: new THREE.Vector3(-0.20, seatSurfaceLocalY + 0.26, -0.34),
+        tail: new THREE.Vector3(0.20, seatSurfaceLocalY + 0.26, -0.34),
+        radius: 0.10,
+      })
+    );
+    backCapsule.name = 'ZetaSeatBackCollider';
+
+    holder.add(seatCapsule, backCapsule);
+    holder.userData.colliderGroup = {
+      name: SEAT_COLLIDER_GROUP_NAME,
+      colliders: [seatCapsule, backCapsule],
+    };
+    avatarContainer.add(holder);
+  }
+
+  const group = holder.userData.colliderGroup;
+  if (!group) return;
+
+  for (const joint of manager.joints) {
+    const idx = joint.colliderGroups.indexOf(group);
+    if (isSeated && idx === -1) {
+      joint.colliderGroups.push(group);
+    } else if (!isSeated && idx !== -1) {
+      joint.colliderGroups.splice(idx, 1);
+    }
+  }
 }

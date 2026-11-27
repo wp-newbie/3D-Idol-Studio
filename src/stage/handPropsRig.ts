@@ -143,19 +143,38 @@ function buildRightHandProp(
   }
 
   if (mode === 'studying' || mode === 'journaling') {
+    // Real 3D Ballpoint Pen gripped cleanly in her right hand — pivot sits at her finger tripod pinch,
+    // and updateActivityHandProps aims local +X directly onto the live writing spot on the open notebook!
+    g.userData.handRole = 'study_pen';
+    g.position.set(s * 0.045, -0.015, 0.014);
+
+    const slideGroup = new THREE.Group();
+    slideGroup.userData.penSlide = true;
+
+    // Pen barrel extends along +X from back butt (-0.075) to writing tip (+0.078)
     const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.006, 0.006, 0.15, 10),
-      new THREE.MeshStandardMaterial({ color: accentHex, roughness: 0.3, metalness: 0.3 })
+      new THREE.CylinderGeometry(0.0046, 0.0054, 0.132, 10),
+      new THREE.MeshStandardMaterial({ color: accentHex || '#3b82f6', roughness: 0.28, metalness: 0.35 })
     );
-    barrel.rotation.z = s * (Math.PI / 3);
-    barrel.position.set(s * 0.045, -0.02, 0.02);
+    barrel.rotation.z = -Math.PI / 2;
+    barrel.position.set(-0.008, 0, 0);
+
+    const gripBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0054, 0.0052, 0.032, 10),
+      new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.72 })
+    );
+    gripBand.rotation.z = -Math.PI / 2;
+    gripBand.position.set(0.038, 0, 0);
+
     const tip = new THREE.Mesh(
-      new THREE.ConeGeometry(0.006, 0.022, 10),
+      new THREE.ConeGeometry(0.0046, 0.022, 10),
       new THREE.MeshStandardMaterial({ color: '#cbd5e1', metalness: 0.85, roughness: 0.2 })
     );
-    tip.position.set(s * 0.11, -0.06, 0.02);
-    tip.rotation.z = s * (-Math.PI * 0.65);
-    g.add(barrel, tip);
+    tip.rotation.z = -Math.PI / 2;
+    tip.position.set(0.068, 0, 0);
+
+    slideGroup.add(barrel, gripBand, tip);
+    g.add(slideGroup);
     return g;
   }
 
@@ -528,7 +547,10 @@ export function updateActivityHandProps(
 ): void {
   const isDining = Boolean(lifeScene?.dining);
   const isBrushing = !isDining && lifeScene?.hobby?.hobbyKind === 'brushing_teeth';
-  if (!avatarRoot || (!isDining && !isBrushing)) return;
+  const isStudying =
+    !isDining &&
+    (lifeScene?.hobby?.hobbyKind === 'studying' || lifeScene?.hobby?.hobbyKind === 'journaling');
+  if (!avatarRoot || (!isDining && !isBrushing && !isStudying)) return;
   const df = isDining ? getDiningAnimationFrame(elapsed) : null;
 
   // Character-frame world transform (+X character left, +Y up, +Z forward)
@@ -554,6 +576,48 @@ export function updateActivityHandProps(
   _plateWorldPos.set(0, 0.76, 0.42).applyQuaternion(_charWorldQ).add(frameObj.position);
 
   avatarRoot.traverse((obj) => {
+    if (isStudying && obj.userData?.handRole === 'study_pen' && obj.parent) {
+      obj.parent.updateWorldMatrix(true, false);
+      obj.parent.getWorldQuaternion(_handWorldQ);
+      obj.updateWorldMatrix(true, false);
+      obj.getWorldPosition(_pinchPos);
+
+      // Aim pen tip directly onto the open lined notebook page (desk z=0.50, notebook at (-0.02, 0.75, -0.08) -> world z=0.42)
+      const writeX = -0.01 + Math.sin(elapsed * 3.8) * 0.048;
+      const writeZ = 0.42 + Math.cos(elapsed * 1.3) * 0.026;
+      const writeY = 0.752 + Math.abs(Math.sin(elapsed * 7.6)) * 0.004;
+      _aimTarget.set(writeX, writeY, writeZ).applyQuaternion(_charWorldQ).add(frameObj.position);
+
+      _aimDirX.copy(_aimTarget).sub(_pinchPos);
+      const distToPaper = _aimDirX.length();
+      if (distToPaper < 1e-4) {
+        _aimDirX.set(0.2, -0.85, 0.48).applyQuaternion(_charWorldQ).normalize();
+      } else {
+        _aimDirX.multiplyScalar(1 / distToPaper);
+      }
+      _aimDirZ.crossVectors(_aimDirX, _worldUp);
+      if (_aimDirZ.lengthSq() < 1e-5) {
+        _aimDirZ.set(0, 0, 1).applyQuaternion(_charWorldQ);
+      } else {
+        _aimDirZ.normalize();
+      }
+      _aimDirY.crossVectors(_aimDirZ, _aimDirX).normalize();
+      _aimBasisM.makeBasis(_aimDirX, _aimDirY, _aimDirZ);
+      _aimWorldQ.setFromRotationMatrix(_aimBasisM);
+
+      _localAlignQ.copy(_handWorldQ).invert().multiply(_aimWorldQ);
+      obj.quaternion.copy(_localAlignQ);
+
+      // Zero-overshoot clamping: pen tip touches cleanly ON TOP of the notebook paper without stabbing through the desk!
+      const penSlideOffset = Math.min(0.015, Math.max(-0.04, distToPaper - 0.079));
+      for (const child of obj.children) {
+        if (child.userData?.penSlide) {
+          child.position.x = penSlideOffset;
+        }
+      }
+      return;
+    }
+
     if (isBrushing && obj.userData?.handRole === 'toothbrush' && obj.parent) {
       obj.parent.updateWorldMatrix(true, false);
       obj.parent.getWorldQuaternion(_handWorldQ);

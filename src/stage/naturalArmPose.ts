@@ -849,40 +849,40 @@ export function applyDiningArms(
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const wristSign = isVrm0 ? 1 : -1;
 
-  // Keep BOTH hands neatly ABOVE the wooden dining tabletop (y = 0.72) at rest—never sinking under the table!
+  // Outward carrying angle (~18°–24° elbow flare) keeps elbows down & comfortably away from the ribcage,
+  // eliminating deltoid pinching while framing the tabletop/plate cleanly without clipping into cake/dishware!
   // Right arm (eating side, -X in character frame):
-  // Perched neatly above table -> reach smoothly to plate -> hold right hand cleanly to the RIGHT of her chin
-  // (~15cm away from mouth centerline, z ≈ +0.20) so her chopsticks angle naturally into her lips with ZERO overshoot!
-  const rUpX = lerp(lerp(-0.24, -0.22, f.dipToPlate), -0.36, f.eatLift);
-  const rUpY = lerp(lerp(-0.58, -0.54, f.dipToPlate), -0.68, f.eatLift);
-  const rUpZ = lerp(lerp(0.77, 0.81, f.dipToPlate), 0.64, f.eatLift);
+  const rUpX = lerp(lerp(-0.38, -0.34, f.dipToPlate), -0.40, f.eatLift);
+  const rUpY = lerp(lerp(-0.56, -0.52, f.dipToPlate), -0.64, f.eatLift);
+  const rUpZ = lerp(lerp(0.73, 0.78, f.dipToPlate), 0.65, f.eatLift);
 
-  const rLowX = lerp(lerp(0.22, 0.34, f.dipToPlate), 0.18, f.eatLift);
-  const rLowY = lerp(lerp(0.06, -0.08, f.dipToPlate), 0.94, f.eatLift);
-  const rLowZ = lerp(lerp(0.97, 0.93, f.dipToPlate), 0.28, f.eatLift);
+  // Frame the right edge of the plate cleanly above tabletop (y ≈ 0.76) -> dip to chopsticks -> lift to chin side
+  const rLowX = lerp(lerp(0.10, 0.24, f.dipToPlate), 0.20, f.eatLift);
+  const rLowY = lerp(lerp(0.14, 0.02, f.dipToPlate), 0.94, f.eatLift);
+  const rLowZ = lerp(lerp(0.98, 0.97, f.dipToPlate), 0.28, f.eatLift);
 
-  // Subtle natural right-wrist turn so palm faces inward/down and thumb+index align along the chopsticks
+  // Distributed wrist pronation/supination so palm angles naturally inward/down (never flat-clipping cake!)
   const rHandEuler: [number, number, number] = [
-    wristSign * (0.22 * f.dipToPlate + 0.28 * f.eatLift),
-    -wristSign * (0.18 * f.eatLift),
-    -wristSign * (0.10 * f.dipToPlate - 0.08 * f.eatLift),
+    wristSign * (0.14 + 0.16 * f.dipToPlate + 0.22 * f.eatLift),
+    -wristSign * (0.12 + 0.14 * f.eatLift),
+    -wristSign * (0.08 + 0.08 * f.dipToPlate - 0.06 * f.eatLift),
   ];
 
   // Left arm (drinking mug side, +X in character frame):
-  // Perched neatly above table -> reach directly to teacup (+0.22, 0.76, 0.40) -> lift smoothly in front of lips
-  const lUpX = lerp(lerp(0.22, 0.24, f.reachToMug), 0.16, f.drinkLift);
-  const lUpY = lerp(lerp(-0.58, -0.52, f.reachToMug), -0.32 - f.mugTilt * 0.03, f.drinkLift);
-  const lUpZ = lerp(lerp(0.78, 0.82, f.reachToMug), 0.93, f.drinkLift);
+  // Outward elbow flare -> frame left placemat/teacup -> raise smoothly in front of lips
+  const lUpX = lerp(lerp(0.38, 0.36, f.reachToMug), 0.24, f.drinkLift);
+  const lUpY = lerp(lerp(-0.56, -0.50, f.reachToMug), -0.32 - f.mugTilt * 0.03, f.drinkLift);
+  const lUpZ = lerp(lerp(0.74, 0.79, f.reachToMug), 0.91, f.drinkLift);
 
-  const lLowX = lerp(lerp(-0.24, 0.05, f.reachToMug), -0.52, f.drinkLift);
-  const lLowY = lerp(lerp(0.05, -0.04, f.reachToMug), 0.82 + f.mugTilt * 0.04, f.drinkLift);
-  const lLowZ = lerp(lerp(0.97, 0.99, f.reachToMug), 0.24, f.drinkLift);
+  const lLowX = lerp(lerp(-0.12, 0.04, f.reachToMug), -0.46, f.drinkLift);
+  const lLowY = lerp(lerp(0.14, 0.04, f.reachToMug), 0.82 + f.mugTilt * 0.04, f.drinkLift);
+  const lLowZ = lerp(lerp(0.98, 0.99, f.reachToMug), 0.30, f.drinkLift);
 
-  // Natural left-wrist orientation: palm faces inward around the teacup, thumb up, gentle sip tilt
+  // Natural left-wrist orientation: palm angled softly inward around teacup (no horizontal tabletop slicing)
   const lHandEuler: [number, number, number] = [
-    wristSign * (0.35 * f.reachToMug + 0.62 * f.drinkLift),
-    wristSign * (0.18 * f.drinkLift + 0.16 * f.mugTilt),
-    wristSign * (0.12 * f.drinkLift),
+    wristSign * (0.16 + 0.24 * f.reachToMug + 0.52 * f.drinkLift),
+    wristSign * (0.12 + 0.16 * f.drinkLift + 0.16 * f.mugTilt),
+    wristSign * (0.08 + 0.12 * f.drinkLift),
   ];
 
   applyDirectedArms(
@@ -907,6 +907,34 @@ export function applyDiningArms(
     vrm.scene.parent,
     t
   );
+
+  // Smooth palm-angle refinement when hands frame the table/plate (prevents planar clipping into dishware)
+  const restTableWeight = Math.max(0, 1 - Math.max(f.eatLift, f.drinkLift) * 1.4);
+  if (restTableWeight > 0.08) {
+    const frameObj = vrm.scene.parent || vrm.scene;
+    frameObj.updateWorldMatrix(true, false);
+    const frameQ = new THREE.Quaternion();
+    frameObj.getWorldQuaternion(frameQ);
+    const handT = t * restTableWeight;
+    orientHandInFrame({
+      hand: b.rh,
+      side: -1,
+      isVrm0,
+      fingerDir: [0.22, -0.18, 0.95],
+      palmDir: [0.62, -0.76, 0.18],
+      frameQ,
+      t: handT,
+    });
+    orientHandInFrame({
+      hand: b.lh,
+      side: 1,
+      isVrm0,
+      fingerDir: [-0.22, -0.18, 0.95],
+      palmDir: [-0.62, -0.76, 0.18],
+      frameQ,
+      t: handT,
+    });
+  }
 
   return f;
 }
@@ -1538,14 +1566,15 @@ export function applyHobbyActivityArms(
   let rLow: [number, number, number] = [0.25, -0.15, 0.95];
 
   if (hobbyKind === 'studying' || hobbyKind === 'journaling') {
-    // Right hand actively writes pen strokes across notebook paper; left hand holds paper steady
+    // BOTH elbows comfortably flared outward (~20°) and forearms elevated cleanly ABOVE the desk top (y = 0.74)
+    // so her right hand writes pen strokes directly onto the open notebook while her left hand steadies the page!
     const writeX = Math.sin(elapsed * 3.8) * 0.14;
-    const writeZ = Math.cos(elapsed * 1.3) * 0.08;
-    const writeBob = Math.abs(Math.sin(elapsed * 7.6)) * 0.05;
-    rUp = [-0.16 + writeX * 0.25, -0.72, 0.68 + writeZ * 0.2];
-    rLow = [0.34 + writeX, -0.26 + writeBob, 0.90 + writeZ];
-    lUp = [0.18, -0.76, 0.62];
-    lLow = [-0.42, -0.24, 0.87];
+    const writeZ = Math.cos(elapsed * 1.3) * 0.06;
+    const writeBob = Math.abs(Math.sin(elapsed * 7.6)) * 0.03;
+    rUp = [-0.36 + writeX * 0.14, -0.50, 0.78 + writeZ * 0.12];
+    rLow = [0.30 + writeX, 0.10 + writeBob, 0.94 + writeZ];
+    lUp = [0.36, -0.54, 0.76];
+    lLow = [-0.28, 0.08, 0.95];
   } else if (hobbyKind === 'brushing_teeth') {
     // Natural right-hand toothbrushing: elbow tucked comfortably forward-out, hand poised right beside
     // her mouth with gentle horizontal side-to-side brushing oscillation (synced with live mouth-aimed toothbrush!)
@@ -1696,7 +1725,33 @@ export function applyHobbyActivityArms(
     t
   );
 
-  if (hobbyKind === 'brushing_teeth' && b.rh) {
+  if ((hobbyKind === 'studying' || hobbyKind === 'journaling') && b.rh && b.lh) {
+    // Natural writing hand posture: right hand angled inward/down holding pen over notebook,
+    // left palm resting gently flat on the left notebook page!
+    const frameObj = vrm.scene.parent || vrm.scene;
+    frameObj.updateWorldMatrix(true, false);
+    const frameQ = new THREE.Quaternion();
+    frameObj.getWorldQuaternion(frameQ);
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    orientHandInFrame({
+      hand: b.rh,
+      side: -1,
+      isVrm0,
+      fingerDir: [0.38, -0.30, 0.88],
+      palmDir: [0.68, -0.70, 0.20],
+      frameQ,
+      t,
+    });
+    orientHandInFrame({
+      hand: b.lh,
+      side: 1,
+      isVrm0,
+      fingerDir: [-0.28, -0.14, 0.95],
+      palmDir: [-0.12, -0.96, 0.24],
+      frameQ,
+      t,
+    });
+  } else if (hobbyKind === 'brushing_teeth' && b.rh) {
     // Turn right palm naturally INWARD toward her mouth/face so fingers grip the toothbrush comfortably!
     const frameObj = vrm.scene.parent || vrm.scene;
     frameObj.updateWorldMatrix(true, false);
