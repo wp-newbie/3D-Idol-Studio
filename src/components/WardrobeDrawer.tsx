@@ -129,6 +129,7 @@ interface WardrobeDrawerProps {
   onToggleAutoSwitchVrmModels?: (next: boolean) => void;
   onSelectVrmModel?: (modelVaultId: string | null) => void;
   onAiPickVrmModel?: (prompt?: string) => Promise<void> | void;
+  onGenerateAiVrmType?: (prompt?: string) => Promise<void> | void;
   preferLocalAi?: boolean;
   onToggleProceduralAccessory?: (accessoryId: ProceduralAccessoryId) => void;
   onSelectGarmentStyle?: (garmentStyle: GarmentStyleId) => void;
@@ -183,6 +184,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onToggleAutoSwitchVrmModels,
   onSelectVrmModel,
   onAiPickVrmModel,
+  onGenerateAiVrmType,
   preferLocalAi = false,
   onToggleProceduralAccessory,
   onSelectGarmentStyle,
@@ -920,7 +922,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                     )}
                   </div>
 
-                  {/* AI VRM Model Type Switcher (Switch between Vault .VRM/.GLB models + Default Anime VRM) */}
+                  {/* AI VRM Generator & Model Switcher (AI-generate full VRM types OR switch Vault .VRM files!) */}
                   {(() => {
                     const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot.modelVaultId);
                     const activeVrm = vrmCandidates.find((v) => v.isActive) || vrmCandidates[0];
@@ -928,25 +930,46 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                       <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
                           <div className="text-[9.5px] font-semibold uppercase tracking-wider text-cyan-200/90">
-                            🧬 AI VRM Model Switcher ({vrmCandidates.length})
+                            🧬 AI VRM Generator &amp; Switcher
                           </div>
-                          {onAiPickVrmModel && (
-                            <button
-                              type="button"
-                              disabled={isGeneratingAiOutfit || vrmCandidates.length < 2}
-                              title={
-                                vrmCandidates.length < 2
-                                  ? 'Import another .vrm file below so she can switch between VRM types!'
-                                  : `Let ${persona.name} autonomously choose which VRM model type to wear`
-                              }
-                              onClick={() => void onAiPickVrmModel()}
-                              className="flex items-center gap-1 rounded-lg border border-cyan-400/40 bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:opacity-45"
-                            >
-                              <Sparkles className="h-3 w-3" />
-                              <span>Let {persona.name} Switch VRM</span>
-                            </button>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {onGenerateAiVrmType && (
+                              <button
+                                type="button"
+                                disabled={isGeneratingAiOutfit}
+                                title={`AI-generate a brand-new VRM type (proportions, eye color, hair style/dye, sculpted 3D outfit & accessories) using ${persona.name}'s local AI!`}
+                                onClick={() => void onGenerateAiVrmType(aiOutfitPrompt.trim() || undefined)}
+                                className="flex items-center gap-1 rounded-lg border border-fuchsia-400/45 bg-gradient-to-r from-cyan-500/30 to-fuchsia-500/35 px-2 py-0.5 text-[10px] font-bold text-white transition hover:brightness-115 disabled:opacity-45"
+                              >
+                                <Wand2 className="h-3 w-3" />
+                                <span>AI Generate VRM Type</span>
+                              </button>
+                            )}
+                            {onAiPickVrmModel && vrmCandidates.length >= 2 && (
+                              <button
+                                type="button"
+                                disabled={isGeneratingAiOutfit}
+                                title={`Let ${persona.name} autonomously choose between saved .VRM base files`}
+                                onClick={() => void onAiPickVrmModel()}
+                                className="flex items-center gap-1 rounded-lg border border-cyan-400/40 bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-100 transition hover:bg-cyan-500/35 disabled:opacity-45"
+                              >
+                                <Sparkles className="h-3 w-3" />
+                                <span>Swap Base VRM</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
+
+                        {activeSlot.vrmVariant && (
+                          <div className="flex flex-wrap items-center justify-between gap-1 rounded-lg border border-cyan-400/25 bg-cyan-950/25 px-2 py-1 text-[9.5px] text-cyan-100">
+                            <span>
+                              ✨ Active AI VRM: <strong>{activeSlot.vrmVariant.variantName}</strong>
+                            </span>
+                            <span className="font-mono text-[9px] text-cyan-200/80">
+                              Height {Math.round((activeSlot.vrmVariant.bodyScale || 1) * 100)}%
+                            </span>
+                          </div>
+                        )}
 
                         {onToggleAutoSwitchVrmModels && (
                           <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[10px] text-zinc-200">
@@ -985,11 +1008,9 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                             ))}
                           </div>
                         )}
-                        {vrmCandidates.length < 2 && (
-                          <div className="text-[9.5px] text-zinc-400">
-                            Active: <span className="text-cyan-200">{activeVrm?.label}</span> · Upload more <span className="font-mono text-zinc-300">.vrm</span> files below so she can freely swap VRM types!
-                          </div>
-                        )}
+                        <div className="text-[9.5px] text-zinc-400">
+                          Base VRM: <span className="text-cyan-200">{activeVrm?.label}</span> · Click <strong>AI Generate VRM Type</strong> anytime to morph proportions, eyes, hair &amp; sculpted 3D outfit!
+                        </div>
                       </div>
                     );
                   })()}

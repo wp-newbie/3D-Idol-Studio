@@ -357,6 +357,15 @@ export interface MaterialMod {
   textureFileName?: string;
 }
 
+export interface VrmAppearanceVariant {
+  variantName: string;
+  bodyScale: number;
+  headScale: number;
+  eyeColorHex?: string | null;
+  skinToneShift?: 'default' | 'fair_porcelain' | 'warm_peach' | 'sun_kissed';
+  reason?: string;
+}
+
 export interface OutfitSlot {
   id: string;
   name: string;
@@ -393,6 +402,8 @@ export interface OutfitSlot {
   };
   /** Short AI stylist summary for generated outfits */
   aiStyleNote?: string;
+  /** Optional AI-generated VRM appearance morphing (height/head proportions, eye iris color, skin warmth) */
+  vrmVariant?: VrmAppearanceVariant | null;
   createdAt: number;
 }
 

@@ -83,6 +83,7 @@ import { generateStageScenery, type StageSceneryGenParams } from './services/sta
 import {
   generateAiHairstyle,
   generateAiOutfit,
+  generateAiVrmVariant,
   generateTimeOccasionOutfit,
   listAvailableVrmModels,
   planAiVrmModelSwitch,
@@ -301,6 +302,7 @@ export const App: React.FC = () => {
       }
     ) => { switched: boolean; label: string }
   >(() => ({ switched: false, label: '' }));
+  const generateVrmRef = useRef<(promptHint?: string) => void>(() => {});
   const designTimeOccasionRef = useRef<
     (
       occasionOverride?: string,
@@ -1150,6 +1152,11 @@ export const App: React.FC = () => {
         }
 
         const parsed = parseDialogueResponse(reply.rawText, persona.mood);
+
+        // AI-triggered AI VRM Type Generation tag: [GENERATE_VRM: ...]
+        if (parsed.generateVrmAction) {
+          generateVrmRef.current(parsed.generateVrmAction);
+        }
 
         // AI-triggered VRM Model Type switch action tag: [SWITCH_VRM: ...]
         if (parsed.switchVrmAction) {
@@ -2228,6 +2235,83 @@ export const App: React.FC = () => {
     if (res.switched) {
       triggerOutfitReaction(res.label, `switched her 3D VRM avatar model to "${res.label}"`);
     }
+  };
+
+  const handleGenerateAiVrmType = async (promptHint?: string, silentReaction = false) => {
+    if (isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+
+      const generated = await generateAiVrmVariant({
+        prompt: promptHint,
+        persona: currentPersona,
+        detectedMeshes: detectedMeshesRef.current,
+        vaultModels: vaultModelsRef.current,
+        activeLifeScene: lifeSceneRef.current,
+      });
+
+      const now = Date.now();
+      const { outfitPayload, vrmVariant, baseModelVaultId } = generated;
+      updateActivePersona((p) => {
+        const curActive =
+          p.outfitSlots.find((s) => s.id === p.activeOutfitSlotId) || p.outfitSlots[0];
+        const newSlot: OutfitSlot = {
+          id: `slot-vrm-ai-${now}`,
+          name: `🧬 ${vrmVariant.variantName}`,
+          modelVaultId:
+            baseModelVaultId !== undefined ? baseModelVaultId : curActive?.modelVaultId ?? null,
+          meshVisibility: outfitPayload.meshVisibility,
+          materialMods: outfitPayload.materialMods,
+          yawOffset: curActive?.yawOffset ?? 0,
+          cyclingShorts: curActive?.cyclingShorts ?? true,
+          accessories: curActive?.accessories ? [...curActive.accessories] : [],
+          proceduralAccessories: outfitPayload.accessories,
+          accessoryColorHex: outfitPayload.accessoryColorHex,
+          hairStyle: outfitPayload.hairStyle,
+          hairColorHex: outfitPayload.hairColorHex,
+          hairHighlightHex: outfitPayload.hairHighlightHex,
+          garmentStyle: outfitPayload.garmentStyle,
+          garmentPalette: outfitPayload.garmentPalette,
+          aiStyleNote: vrmVariant.reason || outfitPayload.plan.styleNote,
+          vrmVariant,
+          createdAt: now,
+        };
+        return {
+          ...p,
+          outfitSlots: [...p.outfitSlots, newSlot],
+          activeOutfitSlotId: newSlot.id,
+          updatedAt: now,
+        };
+      });
+
+      const engineLabel = formatOutfitEngineLabel(generated.source, generated.modelUsed);
+      setAutonomousActionToast(
+        `🧬 AI Generated VRM: "${vrmVariant.variantName}" (${engineLabel})`
+      );
+      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+
+      if (!silentReaction) {
+        triggerOutfitReaction(
+          vrmVariant.variantName,
+          `transformed into a brand-new AI-generated VRM type "${vrmVariant.variantName}": ${vrmVariant.reason}`
+        );
+      }
+    } catch (err) {
+      console.error('[AI VRM] Generation failed:', err);
+      setAutonomousActionToast('⚠️ AI VRM generation failed — please try again.');
+      window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
+    }
+  };
+  generateVrmRef.current = (hint) => {
+    void handleGenerateAiVrmType(hint, true);
   };
 
   const handleAiPickVrmModel = async (promptHint?: string) => {
@@ -4752,6 +4836,7 @@ export const App: React.FC = () => {
               }
               onSelectVrmModel={handleSelectVrmModel}
               onAiPickVrmModel={(prompt) => void handleAiPickVrmModel(prompt)}
+              onGenerateAiVrmType={(prompt) => void handleGenerateAiVrmType(prompt)}
               preferLocalAi={Boolean(studio.settings.preferLocalAi)}
               onToggleProceduralAccessory={handleToggleProceduralAccessory}
               onSelectGarmentStyle={handleSelectGarmentStyle}

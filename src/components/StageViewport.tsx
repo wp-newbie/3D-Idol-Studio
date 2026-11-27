@@ -62,6 +62,7 @@ import {
   syncProceduralGarmentToVrm,
   updateProceduralGarmentSway,
 } from '../stage/garmentRig';
+import { applyVrmAppearanceVariant } from '../stage/vrmMorphRig';
 import {
   syncActivityHandPropsToVrm,
   updateActivityHandProps,
@@ -1940,6 +1941,12 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             accentHex: activeSlot.accessoryColorHex || persona.accentColor,
           });
 
+          applyVrmAppearanceVariant({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            variant: activeSlot.vrmVariant ?? null,
+          });
+
           syncProceduralHairStyleToVrm({
             vrm: currentVrmRef.current,
             avatarRoot,
@@ -2268,6 +2275,17 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     activeSlot.cyclingShorts,
     activeSlot.garmentStyle,
   ]);
+
+  // 3e. Apply live AI-generated VRM appearance morphing (body scale, head proportions, eye iris color, skin warmth)
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    applyVrmAppearanceVariant({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      variant: activeSlot.vrmVariant ?? null,
+    });
+  }, [activeSlot.vrmVariant, activeSlot.id, isLoadingModel]);
 
   // 3b. Sync LLM-generated / user-toggled procedural 3D bone-tracked accessories
   useEffect(() => {

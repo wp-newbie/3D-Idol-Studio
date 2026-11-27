@@ -10,6 +10,7 @@ import type {
   ProceduralAccessoryId,
   StudioSettings,
   VaultModelMeta,
+  VrmAppearanceVariant,
 } from '../types/studio';
 import { getCircadianContext, getStageClimate } from './aiBrainService';
 import { resolveEffectiveApiKey } from './apiKeyResolver';
@@ -1669,5 +1670,351 @@ Output ONLY the JSON object.`;
     targetLabel: fallbackCandidate.label,
     reason: `Switched my VRM type to ${fallbackCandidate.label} to match my ${persona.mood.toLowerCase()} mood!`,
     source: 'offline-stylist',
+  };
+}
+
+
+export interface GeneratedVrmVariantPayload {
+  vrmVariant: VrmAppearanceVariant;
+  outfitPayload: GeneratedOutfitPayload;
+  baseModelVaultId?: string | null; // undefined = keep current VRM base; null = default-anime.vrm; string = Vault ID
+  source: OutfitEngineSource;
+  modelUsed?: string;
+}
+
+const OFFLINE_VRM_ARCHETYPES: Array<{
+  keywords: RegExp;
+  variantName: string;
+  bodyScale: number;
+  headScale: number;
+  eyeColorHex: string;
+  skinToneShift: NonNullable<VrmAppearanceVariant['skinToneShift']>;
+  hairStyle: HairStyleId;
+  hairColorHex: string;
+  hairHighlightHex: string;
+  garmentStyle: GarmentStyleId;
+  topHex: string;
+  topAccentHex: string;
+  bottomHex: string;
+  bottomAccentHex: string;
+  accessoryHex: string;
+  accessories: ProceduralAccessoryId[];
+  reason: string;
+}> = [
+  {
+    keywords: /cyber|neon|future|tech|sci.?fi|hologram/i,
+    variantName: 'Cyber Neon Idol VRM',
+    bodyScale: 1.03,
+    headScale: 0.99,
+    eyeColorHex: '#22d3ee',
+    skinToneShift: 'fair_porcelain',
+    hairStyle: 'drill_twintails',
+    hairColorHex: '#38bdf8',
+    hairHighlightHex: '#e879f9',
+    garmentStyle: 'streetwear_jacket_shorts',
+    topHex: '#111827',
+    topAccentHex: '#22d3ee',
+    bottomHex: '#1e1b4b',
+    bottomAccentHex: '#f472b6',
+    accessoryHex: '#22d3ee',
+    accessories: ['cyber_visor', 'choker'],
+    reason: 'Generated a tall cyber-neon idol VRM with electric cyan eyes, twin drills & glowing visor!',
+  },
+  {
+    keywords: /fairy|petite|chibi|angel|pastel|princess|cute|sweet/i,
+    variantName: 'Petite Pastel Fairy VRM',
+    bodyScale: 0.92,
+    headScale: 1.06,
+    eyeColorHex: '#f472b6',
+    skinToneShift: 'warm_peach',
+    hairStyle: 'twin_buns',
+    hairColorHex: '#f9a8d4',
+    hairHighlightHex: '#fef08a',
+    garmentStyle: 'summer_sundress',
+    topHex: '#fdf2f8',
+    topAccentHex: '#f472b6',
+    bottomHex: '#fbcfe8',
+    bottomAccentHex: '#f472b6',
+    accessoryHex: '#fde047',
+    accessories: ['fairy_wings', 'halo'],
+    reason: 'Generated a petite pastel fairy VRM with sakura hair, rosy eyes, halo & fairy wings!',
+  },
+  {
+    keywords: /goth|vamp|dark|crimson|queen|night|royal|evening/i,
+    variantName: 'Crimson Gothic Queen VRM',
+    bodyScale: 1.06,
+    headScale: 0.98,
+    eyeColorHex: '#f43f5e',
+    skinToneShift: 'fair_porcelain',
+    hairStyle: 'long_wavy',
+    hairColorHex: '#1e1b2e',
+    hairHighlightHex: '#fb7185',
+    garmentStyle: 'evening_gown',
+    topHex: '#4c0519',
+    topAccentHex: '#fb7185',
+    bottomHex: '#18181b',
+    bottomAccentHex: '#be123c',
+    accessoryHex: '#fbbf24',
+    accessories: ['idol_crown', 'choker'],
+    reason: 'Generated a tall porcelain gothic queen VRM with ruby eyes, long midnight waves & crimson gown!',
+  },
+  {
+    keywords: /shrine|kimono|yukata|sakura|japanese|festival|onsen/i,
+    variantName: 'Sakura Shrine Maiden VRM',
+    bodyScale: 1.0,
+    headScale: 1.01,
+    eyeColorHex: '#a855f7',
+    skinToneShift: 'fair_porcelain',
+    hairStyle: 'side_braid',
+    hairColorHex: '#27273a',
+    hairHighlightHex: '#f472b6',
+    garmentStyle: 'kimono_yukata',
+    topHex: '#fff1f2',
+    topAccentHex: '#f43f5e',
+    bottomHex: '#be123c',
+    bottomAccentHex: '#fde047',
+    accessoryHex: '#f43f5e',
+    accessories: ['ribbon_bow'],
+    reason: 'Generated a classic Japanese shrine/festival VRM with violet eyes, side braid & sakura kimono!',
+  },
+  {
+    keywords: /beach|summer|sun|tropical|swim|gyaru|blonde/i,
+    variantName: 'Sun-Kissed Summer Idol VRM',
+    bodyScale: 1.01,
+    headScale: 1.0,
+    eyeColorHex: '#10b981',
+    skinToneShift: 'sun_kissed',
+    hairStyle: 'high_ponytail',
+    hairColorHex: '#f3d08a',
+    hairHighlightHex: '#fffbeb',
+    garmentStyle: 'beach_swimsuit',
+    topHex: '#06b6d4',
+    topAccentHex: '#ffffff',
+    bottomHex: '#67e8f9',
+    bottomAccentHex: '#f472b6',
+    accessoryHex: '#f472b6',
+    accessories: ['ribbon_bow'],
+    reason: 'Generated a sun-kissed blonde summer VRM with emerald eyes, high ponytail & resort swimsuit!',
+  },
+  {
+    keywords: /cozy|gamer|neko|cat|hoodie|casual|lofi/i,
+    variantName: 'Lavender Neko Gamer VRM',
+    bodyScale: 0.96,
+    headScale: 1.03,
+    eyeColorHex: '#c084fc',
+    skinToneShift: 'warm_peach',
+    hairStyle: 'bob_cut',
+    hairColorHex: '#c4b5fd',
+    hairHighlightHex: '#f5d0fe',
+    garmentStyle: 'cozy_hoodie_pants',
+    topHex: '#ede9fe',
+    topAccentHex: '#8b5cf6',
+    bottomHex: '#1e1b4b',
+    bottomAccentHex: '#c4b5fd',
+    accessoryHex: '#a855f7',
+    accessories: ['cat_ears'],
+    reason: 'Generated a cute lavender neko-gamer VRM with bob hair, amethyst eyes, cat ears & oversized hoodie!',
+  },
+];
+
+/**
+ * Generates a complete AI-transformed 3D VRM Avatar Type via local LM Studio (Gemma / Qwen / Both!):
+ * morphs height & head proportions, recolors Eye Iris anime color, adjusts skin warmth, swaps 3D hairstyle + hair dye,
+ * equips a sculpted 3D garment silhouette + 3D accessories, and optionally swaps base `.vrm` if multiple exist!
+ * Works seamlessly even when the user only has 1 `.vrm` file in their Vault!
+ */
+export async function generateAiVrmVariant(params: {
+  prompt?: string;
+  persona: Persona;
+  detectedMeshes: MeshDescriptor[];
+  vaultModels: VaultModelMeta[];
+  activeLifeScene?: ActiveLifeScene | null;
+}): Promise<GeneratedVrmVariantPayload> {
+  const { prompt = '', persona, detectedMeshes, vaultModels, activeLifeScene = null } = params;
+  const circadian = getCircadianContext();
+  const activeSlot =
+    persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId) ||
+    persona.outfitSlots[0];
+  const prevVariantName = activeSlot?.vrmVariant?.variantName || '';
+
+  const pickFallbackArchetype = () => {
+    const combined = `${prompt} ${activeLifeScene?.destination?.placeName || ''} ${activeLifeScene?.hobby?.hobbyName || ''}`.trim();
+    if (combined) {
+      const matched = OFFLINE_VRM_ARCHETYPES.find((a) => a.keywords.test(combined));
+      if (matched) return matched;
+    }
+    const pool = OFFLINE_VRM_ARCHETYPES.filter((a) => a.variantName !== prevVariantName);
+    return pool[Math.floor(Math.random() * pool.length)] || OFFLINE_VRM_ARCHETYPES[0];
+  };
+
+  const fb = pickFallbackArchetype();
+  const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot?.modelVaultId);
+
+  const systemPrompt = `You are a 3D Anime VRM Avatar Generator designing a brand-new VRM character type / full transformation for yourself!
+You can transform body proportions (petite vs tall), anime eye iris color, skin warmth, 3D hairstyle & hair dye/highlights, sculpted 3D clothing silhouette, and 3D accessories.
+Return ONLY valid raw JSON (no markdown fences, no commentary):
+{
+  "variantName": "2-4 word VRM type title (e.g. 'Silver Ice Fairy VRM', 'Cyber Neon Idol VRM', 'Crimson Vampire Queen VRM')",
+  "bodyScale": 0.98,
+  "headScale": 1.02,
+  "eyeColorHex": "#RRGGBB",
+  "skinToneShift": "default|fair_porcelain|warm_peach|sun_kissed",
+  "hairStyle": "high_ponytail|twin_tails|twin_buns|side_braid|long_wavy|drill_twintails|bob_cut|ahoge_clips",
+  "hairColorHex": "#RRGGBB",
+  "hairHighlightHex": "#RRGGBB",
+  "garmentStyle": "cozy_hoodie_pants|summer_sundress|streetwear_jacket_shorts|sporty_tee_leggings|kimono_yukata|evening_gown|cozy_pajamas|school_blazer|trench_coat_pants|beach_swimsuit",
+  "topHex": "#RRGGBB",
+  "topAccentHex": "#RRGGBB",
+  "bottomHex": "#RRGGBB",
+  "bottomAccentHex": "#RRGGBB",
+  "accessoryHex": "#RRGGBB",
+  "accessories": ["cat_ears"|"halo"|"ribbon_bow"|"cyber_visor"|"choker"|"fairy_wings"|"idol_crown"],
+  "reason": "One short exciting sentence describing this brand-new AI-generated VRM transformation!"
+}
+Rules:
+- bodyScale must be between 0.88 (petite/cute) and 1.08 (tall runway idol).
+- headScale must be between 0.96 and 1.08.
+- Choose vibrant anime eyeColorHex, hairColorHex, hairHighlightHex, and cohesive outfit colors that look dramatically fresh and distinct!
+- Only use "beach_swimsuit" when the request or scene is beach/summer/swim related.`;
+
+  const userText = `Character: ${persona.name} (${persona.title})
+Mood: ${persona.mood}, Time: ${circadian.clockText} (${circadian.phaseLabel})
+${prevVariantName ? `Previous VRM Type: ${prevVariantName} (invent a visibly DIFFERENT VRM type!)` : ''}
+${activeLifeScene?.destination?.placeName ? `Live Scene: ${activeLifeScene.destination.placeName}` : ''}
+Request: ${prompt.trim() || 'Invent an exciting brand-new VRM avatar transformation with new eye color, hair style & dye, proportions, and sculpted 3D outfit!'}
+Output ONLY the JSON object.`;
+
+  let variantName = fb.variantName;
+  let bodyScale = fb.bodyScale;
+  let headScale = fb.headScale;
+  let eyeColorHex: string | null = fb.eyeColorHex;
+  let skinToneShift: NonNullable<VrmAppearanceVariant['skinToneShift']> = fb.skinToneShift;
+  let hairStyle: HairStyleId = fb.hairStyle;
+  let hairColorHex: string | null = fb.hairColorHex;
+  let hairHighlightHex: string | null = fb.hairHighlightHex;
+  let garmentStyle: GarmentStyleId = fb.garmentStyle;
+  let topHex = fb.topHex;
+  let topAccentHex = fb.topAccentHex;
+  let bottomHex = fb.bottomHex;
+  let bottomAccentHex = fb.bottomAccentHex;
+  let accessoryHex = fb.accessoryHex;
+  let accessories: ProceduralAccessoryId[] = fb.accessories;
+  let reason = fb.reason;
+  let source: OutfitEngineSource = 'offline-stylist';
+  let modelUsed: string | undefined;
+
+  const localResult = await queryLocalLlmForOutfit({
+    systemPrompt,
+    userText,
+    taskKind: 'wardrobe',
+    mood: persona.mood,
+  });
+
+  if (localResult?.text) {
+    const match = /\{[\s\S]*\}/.exec(localResult.text);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        if (typeof parsed.variantName === 'string' && parsed.variantName.trim()) {
+          variantName = parsed.variantName.trim().slice(0, 40);
+        }
+        if (typeof parsed.bodyScale === 'number' && Number.isFinite(parsed.bodyScale)) {
+          bodyScale = Math.min(1.08, Math.max(0.88, parsed.bodyScale));
+        }
+        if (typeof parsed.headScale === 'number' && Number.isFinite(parsed.headScale)) {
+          headScale = Math.min(1.08, Math.max(0.96, parsed.headScale));
+        }
+        eyeColorHex = normalizeHex(parsed.eyeColorHex, fb.eyeColorHex);
+        const rawSkin = String(parsed.skinToneShift || '').trim().toLowerCase();
+        if (
+          rawSkin === 'default' ||
+          rawSkin === 'fair_porcelain' ||
+          rawSkin === 'warm_peach' ||
+          rawSkin === 'sun_kissed'
+        ) {
+          skinToneShift = rawSkin;
+        }
+        hairStyle = normalizeHairStyle(parsed.hairStyle, fb.hairStyle);
+        if (hairStyle === 'default') hairStyle = fb.hairStyle;
+        hairColorHex = normalizeHex(parsed.hairColorHex, fb.hairColorHex);
+        hairHighlightHex = normalizeHex(parsed.hairHighlightHex, fb.hairHighlightHex);
+        garmentStyle = normalizeGarmentStyle(parsed.garmentStyle, `${variantName} ${prompt}`, fb.garmentStyle);
+        if (garmentStyle === 'default' || garmentStyle === 'bath_wrap') {
+          garmentStyle = fb.garmentStyle;
+        }
+        if (
+          garmentStyle === 'beach_swimsuit' &&
+          !/beach|swim|summer|tropical|pool/i.test(`${prompt} ${activeLifeScene?.destination?.placeName || ''}`)
+        ) {
+          garmentStyle = 'summer_sundress';
+        }
+        topHex = normalizeHex(parsed.topHex, fb.topHex);
+        topAccentHex = normalizeHex(parsed.topAccentHex, fb.topAccentHex);
+        bottomHex = normalizeHex(parsed.bottomHex, fb.bottomHex);
+        bottomAccentHex = normalizeHex(parsed.bottomAccentHex, fb.bottomAccentHex);
+        accessoryHex = normalizeHex(parsed.accessoryHex, fb.accessoryHex);
+        if (Array.isArray(parsed.accessories)) {
+          const validAcc = parsed.accessories
+            .map((a) => String(a || '').trim().toLowerCase())
+            .filter((a): a is ProceduralAccessoryId =>
+              ['cat_ears', 'halo', 'ribbon_bow', 'cyber_visor', 'choker', 'fairy_wings', 'idol_crown'].includes(a)
+            )
+            .slice(0, 2);
+          if (validAcc.length > 0) accessories = validAcc;
+        }
+        if (typeof parsed.reason === 'string' && parsed.reason.trim()) {
+          reason = parsed.reason.trim().slice(0, 140);
+        }
+        source = 'local-llm';
+        modelUsed = localResult.modelUsed;
+      } catch {
+        // Use clean archetype fallback
+      }
+    }
+  }
+
+  const outfitPlan: AiOutfitPlan = {
+    outfitName: variantName,
+    styleNote: reason,
+    occasionLabel: 'AI Generated VRM',
+    garmentStyle,
+    topHex,
+    topAccentHex,
+    topPattern: 'none',
+    bottomHex,
+    bottomAccentHex,
+    bottomPattern: 'none',
+    footwearHex: bottomHex,
+    accessoryHex,
+    hairStyle,
+    hairTintHex: hairColorHex,
+    hairHighlightHex,
+    accessories,
+    source,
+    modelUsed,
+  };
+
+  const outfitPayload = await materializeOutfitPlan(outfitPlan, detectedMeshes);
+
+  // If user explicitly mentioned switching base VRM too and another base exists, keep current base unless requested
+  let baseModelVaultId: string | null | undefined = undefined;
+  if (vrmCandidates.length > 1 && /\b(base|other vrm|default vrm|swap vrm)\b/i.test(prompt)) {
+    const alt = vrmCandidates.find((c) => !c.isActive);
+    if (alt) baseModelVaultId = alt.id;
+  }
+
+  return {
+    vrmVariant: {
+      variantName,
+      bodyScale,
+      headScale,
+      eyeColorHex,
+      skinToneShift,
+      reason,
+    },
+    outfitPayload,
+    baseModelVaultId,
+    source,
+    modelUsed,
   };
 }
