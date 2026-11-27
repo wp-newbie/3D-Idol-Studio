@@ -85,6 +85,7 @@ import {
   generateAiOutfit,
   generateAiVrmVariant,
   generateTimeOccasionOutfit,
+  getVrmMoodTimeDayContext,
   listAvailableVrmModels,
   planAiVrmModelSwitch,
   type GeneratedOutfitPayload,
@@ -302,7 +303,11 @@ export const App: React.FC = () => {
       }
     ) => { switched: boolean; label: string }
   >(() => ({ switched: false, label: '' }));
-  const generateVrmRef = useRef<(promptHint?: string) => void>(() => {});
+  const generateVrmRef = useRef<
+    (promptHint?: string, options?: { silentReaction?: boolean; reuseSlotId?: string }) => void
+  >(() => {});
+  const lastAutoVrmAtRef = useRef<number>(0);
+  const lastAutoVrmKeyRef = useRef<string>('');
   const designTimeOccasionRef = useRef<
     (
       occasionOverride?: string,
@@ -2237,7 +2242,10 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleGenerateAiVrmType = async (promptHint?: string, silentReaction = false) => {
+  const handleGenerateAiVrmType = async (
+    promptHint?: string,
+    options?: { silentReaction?: boolean; reuseSlotId?: string }
+  ) => {
     if (isGeneratingAiOutfitRef.current) return;
     isGeneratingAiOutfitRef.current = true;
     setIsGeneratingAiOutfit(true);
@@ -2256,12 +2264,13 @@ export const App: React.FC = () => {
       });
 
       const now = Date.now();
-      const { outfitPayload, vrmVariant, baseModelVaultId } = generated;
+      const { outfitPayload, vrmVariant, baseModelVaultId, innerThought, contextLabel } = generated;
+      const reuseId = options?.reuseSlotId;
       updateActivePersona((p) => {
         const curActive =
           p.outfitSlots.find((s) => s.id === p.activeOutfitSlotId) || p.outfitSlots[0];
-        const newSlot: OutfitSlot = {
-          id: `slot-vrm-ai-${now}`,
+        const nextSlotData: OutfitSlot = {
+          id: reuseId || `slot-vrm-ai-${now}`,
           name: `🧬 ${vrmVariant.variantName}`,
           modelVaultId:
             baseModelVaultId !== undefined ? baseModelVaultId : curActive?.modelVaultId ?? null,
@@ -2281,24 +2290,32 @@ export const App: React.FC = () => {
           vrmVariant,
           createdAt: now,
         };
+        const exists = reuseId ? p.outfitSlots.some((s) => s.id === reuseId) : false;
+        const nextSlots = exists
+          ? p.outfitSlots.map((s) => (s.id === reuseId ? nextSlotData : s))
+          : [...p.outfitSlots, nextSlotData];
         return {
           ...p,
-          outfitSlots: [...p.outfitSlots, newSlot],
-          activeOutfitSlotId: newSlot.id,
+          brain: {
+            ...p.brain,
+            innerThought,
+          },
+          outfitSlots: nextSlots,
+          activeOutfitSlotId: nextSlotData.id,
           updatedAt: now,
         };
       });
 
       const engineLabel = formatOutfitEngineLabel(generated.source, generated.modelUsed);
       setAutonomousActionToast(
-        `🧬 AI Generated VRM: "${vrmVariant.variantName}" (${engineLabel})`
+        `🧠🧬 ${currentPersona.name} generated VRM (${contextLabel}): "${vrmVariant.variantName}" (${engineLabel})`
       );
-      window.setTimeout(() => setAutonomousActionToast(null), 5000);
+      window.setTimeout(() => setAutonomousActionToast(null), 5400);
 
-      if (!silentReaction) {
+      if (!options?.silentReaction) {
         triggerOutfitReaction(
           vrmVariant.variantName,
-          `transformed into a brand-new AI-generated VRM type "${vrmVariant.variantName}": ${vrmVariant.reason}`
+          `thought about ${contextLabel} and generated a brand-new VRM type "${vrmVariant.variantName}": ${vrmVariant.reason}`
         );
       }
     } catch (err) {
@@ -2310,8 +2327,8 @@ export const App: React.FC = () => {
       setIsGeneratingAiOutfit(false);
     }
   };
-  generateVrmRef.current = (hint) => {
-    void handleGenerateAiVrmType(hint, true);
+  generateVrmRef.current = (hint, opts) => {
+    void handleGenerateAiVrmType(hint, opts ?? { silentReaction: true });
   };
 
   const handleAiPickVrmModel = async (promptHint?: string) => {
@@ -3676,6 +3693,90 @@ export const App: React.FC = () => {
       window.clearInterval(interval);
     };
   }, [hydrated, studio.activePersonaId, studio.settings.autoDressByTimeOccasion, detectedMeshes.length]);
+
+  // Autonomous Mood + Time + Day VRM Thinking & Generation Loop:
+  // Character genuinely reflects on today's day of week, real-world time phase, and her live mood,
+  // records her inner thought, and autonomously generates a fresh VRM type when the vibe shifts!
+  useEffect(() => {
+    if (!hydrated) return;
+    if (studio.settings.autoSwitchVrmModels === false) return;
+    if (detectedMeshes.length === 0) return;
+
+    const evaluateMoodTimeDayVrm = () => {
+      if (isGeneratingAiOutfitRef.current || isLifeBusyRef.current) return;
+      if (isGenerating || isSpeaking || isUserTyping) return;
+      const currentStudio = studioRef.current;
+      if (currentStudio.settings.autoSwitchVrmModels === false) return;
+      if (currentStudio.settings.doNotDisturb) return;
+
+      const persona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      if (!persona || persona.brain?.isSleeping) return;
+
+      // Never interrupt scene-locked bath/beach/school/onsen attire mid-activity!
+      const curScene = lifeSceneRef.current;
+      if (
+        curScene.hobby?.hobbyKind === 'showering' ||
+        curScene.hobby?.hobbyKind === 'towel_dry' ||
+        curScene.hobby?.hobbyKind === 'brushing_teeth' ||
+        curScene.hobby?.hobbyKind === 'studying' ||
+        curScene.destination?.destinationKind === 'tropical_beach' ||
+        curScene.destination?.destinationKind === 'mountain_onsen'
+      ) {
+        return;
+      }
+
+      const now = new Date();
+      const nowMs = now.getTime();
+      // Gentle 3.5-minute cooldown between autonomous VRM transformations so mood shifts never spam
+      if (lastAutoVrmAtRef.current > 0 && nowMs - lastAutoVrmAtRef.current < 210_000) return;
+
+      const ctx = getVrmMoodTimeDayContext(persona, now);
+      const localYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+        2,
+        '0'
+      )}-${String(now.getDate()).padStart(2, '0')}`;
+      const vrmKey = `${persona.id}:${localYmd}:${ctx.phase}:${persona.mood}`;
+      if (lastAutoVrmKeyRef.current === vrmKey) return;
+
+      const storageKey = `studio_auto_vrm_mtd_${persona.id}`;
+      try {
+        if (window.localStorage.getItem(storageKey) === vrmKey) {
+          lastAutoVrmKeyRef.current = vrmKey;
+          return;
+        }
+        window.localStorage.setItem(storageKey, vrmKey);
+      } catch {
+        // Ignore storage errors
+      }
+
+      lastAutoVrmKeyRef.current = vrmKey;
+      lastAutoVrmAtRef.current = nowMs;
+
+      generateVrmRef.current(undefined, {
+        reuseSlotId: `slot-vrm-auto-${persona.id}-${ctx.dayShort.toLowerCase()}-${ctx.phase}`,
+        silentReaction: !currentStudio.settings.autoReactOnOutfitChange,
+      });
+    };
+
+    const moodSettleTimer = window.setTimeout(evaluateMoodTimeDayVrm, 16_000);
+    const interval = window.setInterval(evaluateMoodTimeDayVrm, 75_000);
+    return () => {
+      window.clearTimeout(moodSettleTimer);
+      window.clearInterval(interval);
+    };
+  }, [
+    hydrated,
+    activePersona.id,
+    activePersona.mood,
+    studio.settings.autoSwitchVrmModels,
+    studio.settings.doNotDisturb,
+    detectedMeshes.length,
+    isGenerating,
+    isSpeaking,
+    isUserTyping,
+  ]);
 
   const handleImportModelFile = async (file: File, customSlotName?: string) => {
     try {

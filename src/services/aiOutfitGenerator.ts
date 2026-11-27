@@ -1678,8 +1678,79 @@ export interface GeneratedVrmVariantPayload {
   vrmVariant: VrmAppearanceVariant;
   outfitPayload: GeneratedOutfitPayload;
   baseModelVaultId?: string | null; // undefined = keep current VRM base; null = default-anime.vrm; string = Vault ID
+  innerThought: string;
+  contextLabel: string;
   source: OutfitEngineSource;
   modelUsed?: string;
+}
+
+export interface VrmMoodTimeDayContext {
+  dayName: string;
+  dayShort: string;
+  isWeekend: boolean;
+  phase: CircadianPhase;
+  phaseLabel: string;
+  phaseEmoji: string;
+  clockText: string;
+  mood: string;
+  contextLabel: string;
+  vibeBrief: string;
+}
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEKDAY_SHORTS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+export function getVrmMoodTimeDayContext(persona: Persona, now = new Date()): VrmMoodTimeDayContext {
+  const circadian = getCircadianContext(now);
+  const dayIdx = now.getDay();
+  const dayName = WEEKDAY_NAMES[dayIdx] || 'Today';
+  const dayShort = WEEKDAY_SHORTS[dayIdx] || 'Day';
+  const isWeekend = dayIdx === 0 || dayIdx === 6;
+
+  const dayFlavor =
+    dayIdx === 5
+      ? 'Friday festive energy — stylish, bold, ready to celebrate the weekend'
+      : dayIdx === 6
+      ? 'Saturday playful freedom — expressive, fun, adventurous weekend aesthetic'
+      : dayIdx === 0
+      ? 'Sunday serene relaxation — soft pastel, dreamy, peaceful recharge vibe'
+      : dayIdx === 1
+      ? 'Monday fresh start — crisp, confident, sharp chic energy'
+      : 'Midweek creative rhythm — expressive, comfortable, personal style';
+
+  const timeFlavor =
+    circadian.phase === 'morning'
+      ? 'bright fresh morning light (clean silhouettes, lively colors, energetic hair)'
+      : circadian.phase === 'afternoon'
+      ? 'warm sunlit afternoon (playful, airy, expressive daytime look)'
+      : circadian.phase === 'evening'
+      ? 'golden-hour / neon evening (glamorous, dramatic, atmospheric idol elegance)'
+      : 'cozy late-night quiet (dreamy starry pastels, soft loungewear, relaxed hair)';
+
+  const moodFlavorMap: Record<string, string> = {
+    Proud: 'bold royal or cyber idol confidence with dramatic eyes and regal flair',
+    Warm: 'gentle sunlit pastel warmth with soft golden/peach accents and friendly charm',
+    Amused: 'playful, colorful, mischievous anime energy with fun accessories',
+    Shy: 'delicate petite fairy or soft braided dreamy pastel look',
+    Flustered: 'cute blush-toned romantic ribbons and sweet expressive style',
+    Pouty: 'tsundere chic streetwear or dark-cute contrast with attitude',
+    Deadpan: 'cool minimalist midnight/lavender aesthetic with calm elegance',
+    Annoyed: 'edgy crimson/cyber dark fashion with sharp striking eyes',
+  };
+  const moodFlavor = moodFlavorMap[persona.mood] || 'expressive anime idol style matching her current mood';
+
+  return {
+    dayName,
+    dayShort,
+    isWeekend,
+    phase: circadian.phase,
+    phaseLabel: circadian.phaseLabel,
+    phaseEmoji: circadian.phaseEmoji,
+    clockText: circadian.clockText,
+    mood: persona.mood,
+    contextLabel: `${dayShort} ${circadian.phaseLabel} · ${persona.mood}`,
+    vibeBrief: `${dayName} ${circadian.phaseLabel} (${circadian.clockText}) — ${dayFlavor}; ${timeFlavor}; feeling ${persona.mood} (${moodFlavor}).`,
+  };
 }
 
 const OFFLINE_VRM_ARCHETYPES: Array<{
@@ -1831,7 +1902,7 @@ export async function generateAiVrmVariant(params: {
   activeLifeScene?: ActiveLifeScene | null;
 }): Promise<GeneratedVrmVariantPayload> {
   const { prompt = '', persona, detectedMeshes, vaultModels, activeLifeScene = null } = params;
-  const circadian = getCircadianContext();
+  const ctx = getVrmMoodTimeDayContext(persona);
   const activeSlot =
     persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId) ||
     persona.outfitSlots[0];
@@ -1843,6 +1914,21 @@ export async function generateAiVrmVariant(params: {
       const matched = OFFLINE_VRM_ARCHETYPES.find((a) => a.keywords.test(combined));
       if (matched) return matched;
     }
+    // Day + Time + Mood aware archetype selection when thinking autonomously!
+    let preferredIdx = -1;
+    if (ctx.phase === 'late_night') preferredIdx = 5; // Cozy Lavender Neko Gamer
+    else if (ctx.phase === 'evening' && (ctx.mood === 'Proud' || ctx.mood === 'Annoyed' || ctx.dayName === 'Friday')) {
+      preferredIdx = 2; // Crimson Gothic Queen
+    } else if (ctx.isWeekend && (ctx.mood === 'Warm' || ctx.mood === 'Shy' || ctx.mood === 'Flustered')) {
+      preferredIdx = 1; // Petite Pastel Fairy
+    } else if (ctx.mood === 'Amused' || ctx.mood === 'Pouty' || ctx.dayName === 'Friday') {
+      preferredIdx = 0; // Cyber Neon Idol
+    } else if (ctx.dayName === 'Sunday' || ctx.mood === 'Deadpan') {
+      preferredIdx = 3; // Sakura Shrine Maiden
+    }
+    if (preferredIdx >= 0 && OFFLINE_VRM_ARCHETYPES[preferredIdx]?.variantName !== prevVariantName) {
+      return OFFLINE_VRM_ARCHETYPES[preferredIdx];
+    }
     const pool = OFFLINE_VRM_ARCHETYPES.filter((a) => a.variantName !== prevVariantName);
     return pool[Math.floor(Math.random() * pool.length)] || OFFLINE_VRM_ARCHETYPES[0];
   };
@@ -1850,11 +1936,12 @@ export async function generateAiVrmVariant(params: {
   const fb = pickFallbackArchetype();
   const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot?.modelVaultId);
 
-  const systemPrompt = `You are a 3D Anime VRM Avatar Generator designing a brand-new VRM character type / full transformation for yourself!
+  const systemPrompt = `You are a 3D Anime VRM Virtual Idol who THINKS for herself about the current day of the week, real-world time of day, and her live mood — then generates a brand-new VRM avatar transformation!
 You can transform body proportions (petite vs tall), anime eye iris color, skin warmth, 3D hairstyle & hair dye/highlights, sculpted 3D clothing silhouette, and 3D accessories.
 Return ONLY valid raw JSON (no markdown fences, no commentary):
 {
-  "variantName": "2-4 word VRM type title (e.g. 'Silver Ice Fairy VRM', 'Cyber Neon Idol VRM', 'Crimson Vampire Queen VRM')",
+  "innerThought": "One vivid first-person thought reflecting on today's day of week, time of day, and your mood explaining why you want to transform into this new VRM right now",
+  "variantName": "2-4 word VRM type title (e.g. 'Friday Neon Idol VRM', 'Sunday Pastel Fairy VRM', 'Midnight Crimson Diva VRM')",
   "bodyScale": 0.98,
   "headScale": 1.02,
   "eyeColorHex": "#RRGGBB",
@@ -1869,21 +1956,24 @@ Return ONLY valid raw JSON (no markdown fences, no commentary):
   "bottomAccentHex": "#RRGGBB",
   "accessoryHex": "#RRGGBB",
   "accessories": ["cat_ears"|"halo"|"ribbon_bow"|"cyber_visor"|"choker"|"fairy_wings"|"idol_crown"],
-  "reason": "One short exciting sentence describing this brand-new AI-generated VRM transformation!"
+  "reason": "One short exciting sentence describing this new AI-generated VRM transformation!"
 }
 Rules:
 - bodyScale must be between 0.88 (petite/cute) and 1.08 (tall runway idol).
 - headScale must be between 0.96 and 1.08.
+- Match the day of the week (${ctx.dayName}), time (${ctx.phaseLabel} · ${ctx.clockText}), and mood (${ctx.mood}) authentically!
 - Choose vibrant anime eyeColorHex, hairColorHex, hairHighlightHex, and cohesive outfit colors that look dramatically fresh and distinct!
 - Only use "beach_swimsuit" when the request or scene is beach/summer/swim related.`;
 
   const userText = `Character: ${persona.name} (${persona.title})
-Mood: ${persona.mood}, Time: ${circadian.clockText} (${circadian.phaseLabel})
+Personality: ${persona.traits}
+Live Context (Day, Time & Mood): ${ctx.vibeBrief}
 ${prevVariantName ? `Previous VRM Type: ${prevVariantName} (invent a visibly DIFFERENT VRM type!)` : ''}
 ${activeLifeScene?.destination?.placeName ? `Live Scene: ${activeLifeScene.destination.placeName}` : ''}
-Request: ${prompt.trim() || 'Invent an exciting brand-new VRM avatar transformation with new eye color, hair style & dye, proportions, and sculpted 3D outfit!'}
+Request: ${prompt.trim() || `Think about how you feel on this ${ctx.dayName} ${ctx.phaseLabel.toLowerCase()} while feeling ${ctx.mood}, and generate a brand-new VRM avatar transformation!`}
 Output ONLY the JSON object.`;
 
+  let innerThought = `It's ${ctx.dayName} ${ctx.phaseLabel.toLowerCase()} and I'm feeling ${ctx.mood.toLowerCase()} — I want to transform into ${fb.variantName}!`;
   let variantName = fb.variantName;
   let bodyScale = fb.bodyScale;
   let headScale = fb.headScale;
@@ -1892,7 +1982,8 @@ Output ONLY the JSON object.`;
   let hairStyle: HairStyleId = fb.hairStyle;
   let hairColorHex: string | null = fb.hairColorHex;
   let hairHighlightHex: string | null = fb.hairHighlightHex;
-  let garmentStyle: GarmentStyleId = fb.garmentStyle;
+  let garmentStyle: GarmentStyleId =
+    ctx.phase === 'late_night' && !prompt.trim() ? 'cozy_pajamas' : fb.garmentStyle;
   let topHex = fb.topHex;
   let topAccentHex = fb.topAccentHex;
   let bottomHex = fb.bottomHex;
@@ -1915,6 +2006,9 @@ Output ONLY the JSON object.`;
     if (match) {
       try {
         const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        if (typeof parsed.innerThought === 'string' && parsed.innerThought.trim()) {
+          innerThought = parsed.innerThought.trim().slice(0, 180);
+        }
         if (typeof parsed.variantName === 'string' && parsed.variantName.trim()) {
           variantName = parsed.variantName.trim().slice(0, 40);
         }
@@ -1976,7 +2070,7 @@ Output ONLY the JSON object.`;
   const outfitPlan: AiOutfitPlan = {
     outfitName: variantName,
     styleNote: reason,
-    occasionLabel: 'AI Generated VRM',
+    occasionLabel: ctx.contextLabel,
     garmentStyle,
     topHex,
     topAccentHex,
@@ -1996,7 +2090,7 @@ Output ONLY the JSON object.`;
 
   const outfitPayload = await materializeOutfitPlan(outfitPlan, detectedMeshes);
 
-  // If user explicitly mentioned switching base VRM too and another base exists, keep current base unless requested
+  // If user explicitly mentioned switching base VRM too and another base exists, swap base VRM cleanly
   let baseModelVaultId: string | null | undefined = undefined;
   if (vrmCandidates.length > 1 && /\b(base|other vrm|default vrm|swap vrm)\b/i.test(prompt)) {
     const alt = vrmCandidates.find((c) => !c.isActive);
@@ -2014,6 +2108,8 @@ Output ONLY the JSON object.`;
     },
     outfitPayload,
     baseModelVaultId,
+    innerThought,
+    contextLabel: ctx.contextLabel,
     source,
     modelUsed,
   };

@@ -64,6 +64,7 @@ import { getCircadianContext } from '../services/aiBrainService';
 import {
   DEFAULT_SAMPLE_VRM_LABEL,
   OCCASION_QUICK_CHIPS,
+  getVrmMoodTimeDayContext,
   listAvailableVrmModels,
 } from '../services/aiOutfitGenerator';
 
@@ -922,27 +923,33 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                     )}
                   </div>
 
-                  {/* AI VRM Generator & Model Switcher (AI-generate full VRM types OR switch Vault .VRM files!) */}
+                  {/* AI VRM Generator & Model Switcher (Autonomously thinks & generates VRM types by Mood, Time & Day!) */}
                   {(() => {
                     const vrmCandidates = listAvailableVrmModels(vaultModels, activeSlot.modelVaultId);
                     const activeVrm = vrmCandidates.find((v) => v.isActive) || vrmCandidates[0];
+                    const vrmCtx = getVrmMoodTimeDayContext(persona);
                     return (
                       <div className="border-t border-white/[0.07] pt-2 space-y-1.5">
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <div className="text-[9.5px] font-semibold uppercase tracking-wider text-cyan-200/90">
-                            🧬 AI VRM Generator &amp; Switcher
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9.5px] font-semibold uppercase tracking-wider text-cyan-200/90">
+                              🧬 AI VRM Brain
+                            </span>
+                            <span className="rounded-full border border-cyan-400/30 bg-cyan-500/15 px-1.5 py-0.5 font-mono text-[8.5px] text-cyan-100">
+                              {vrmCtx.phaseEmoji} {vrmCtx.contextLabel}
+                            </span>
                           </div>
                           <div className="flex items-center gap-1">
                             {onGenerateAiVrmType && (
                               <button
                                 type="button"
                                 disabled={isGeneratingAiOutfit}
-                                title={`AI-generate a brand-new VRM type (proportions, eye color, hair style/dye, sculpted 3D outfit & accessories) using ${persona.name}'s local AI!`}
+                                title={`Let ${persona.name} think about ${vrmCtx.dayName} ${vrmCtx.phaseLabel} & her ${persona.mood} mood and AI-generate a new VRM type!`}
                                 onClick={() => void onGenerateAiVrmType(aiOutfitPrompt.trim() || undefined)}
                                 className="flex items-center gap-1 rounded-lg border border-fuchsia-400/45 bg-gradient-to-r from-cyan-500/30 to-fuchsia-500/35 px-2 py-0.5 text-[10px] font-bold text-white transition hover:brightness-115 disabled:opacity-45"
                               >
                                 <Wand2 className="h-3 w-3" />
-                                <span>AI Generate VRM Type</span>
+                                <span>Think &amp; Generate VRM</span>
                               </button>
                             )}
                             {onAiPickVrmModel && vrmCandidates.length >= 2 && (
@@ -974,8 +981,8 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                         {onToggleAutoSwitchVrmModels && (
                           <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[10px] text-zinc-200">
                             <span className="flex items-center gap-1.5">
-                              <span>🧬</span>
-                              <span>Allow {persona.name} to switch VRM types autonomously</span>
+                              <span>🧠</span>
+                              <span>Auto-think &amp; generate VRMs by mood, time &amp; day</span>
                             </span>
                             <input
                               type="checkbox"
