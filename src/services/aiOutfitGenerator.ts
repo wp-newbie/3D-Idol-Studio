@@ -1968,6 +1968,7 @@ Rules:
 - bodyScale must be between 0.88 (petite/cute) and 1.08 (tall runway idol).
 - headScale must be between 0.96 and 1.08.
 - Match the day of the week (${ctx.dayName}), time (${ctx.phaseLabel} · ${ctx.clockText}), and mood (${ctx.mood}) authentically!
+- Preserve a full, continuous watertight humanoid body skin mesh beneath any initial or swapped outfit — NEVER bake occlusion culling or strip under-garment polygons into the base VRM asset!
 - Choose vibrant anime eyeColorHex, hairColorHex, hairHighlightHex, and cohesive outfit colors that look dramatically fresh and distinct!
 - Only use "beach_swimsuit" when the request or scene is beach/summer/swim related.`;
 

@@ -1406,6 +1406,9 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
               <p className="mt-0.5 text-[11px] text-zinc-400">
                 Supports .VRM, .GLB, .XWEAR, and VRoid Studio Custom Items (.vroidcustomitem).
               </p>
+              <div className="mt-2 rounded-xl border border-amber-400/25 bg-amber-950/20 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-100/90">
+                <strong>VRoid Export Tip:</strong> Uncheck <em>&ldquo;Delete transparent meshes&rdquo;</em> (衣服の下の透明なメッシュを削除する) and keep <em>&ldquo;Reduce polygons&rdquo;</em> (ポリゴン削減) off on the base body mesh for seamless 3D clothing swaps. Pre-culled legacy VRMs automatically fall back to native material/texture recoloring.
+              </div>
 
               <input
                 type="text"

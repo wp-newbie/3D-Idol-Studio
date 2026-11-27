@@ -59,6 +59,7 @@ import {
   updateProceduralHairSway,
 } from '../stage/hairStyleRig';
 import {
+  inspectVrmBodySkinCulling,
   syncProceduralGarmentToVrm,
   syncSeatSpringBoneColliders,
   updateProceduralGarmentSway,
@@ -2005,16 +2006,33 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             activeSlot.garmentStyle === 'trench_coat_pants' ||
             activeSlot.garmentStyle === 'streetwear_jacket_shorts';
 
+          const loadedCulling = currentVrmRef.current
+            ? inspectVrmBodySkinCulling(currentVrmRef.current, modelRoot)
+            : null;
+          const wantsProceduralGarment = Boolean(
+            activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
+          );
+          const preserveForPreCulled = Boolean(wantsProceduralGarment && loadedCulling?.isPreCulled);
+
           applyOutfitModsToScene({
             root: modelRoot,
             meshVisibility: activeSlot.meshVisibility,
             materialMods: activeSlot.materialMods,
             isImportedModel: true,
             textureCache: textureCacheRef.current,
-            cyclingShorts: fullCoverageGarment ? false : activeSlot.cyclingShorts ?? true,
-            hideNativeGarment: Boolean(
-              activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
-            ),
+            cyclingShorts: fullCoverageGarment && !preserveForPreCulled ? false : activeSlot.cyclingShorts ?? true,
+            hideNativeGarment: wantsProceduralGarment && !preserveForPreCulled,
+            preserveNativeClothingForPreCulled: preserveForPreCulled,
+            fallbackRecolorPalette: preserveForPreCulled
+              ? {
+                  topHex: activeSlot.garmentPalette?.topHex,
+                  bottomHex: activeSlot.garmentPalette?.bottomHex,
+                  accessoryHex:
+                    activeSlot.garmentPalette?.accessoryHex || activeSlot.accessoryColorHex,
+                  topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
+                  bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+                }
+              : null,
           });
 
           syncProceduralAccessoriesToVrm({
@@ -2346,16 +2364,33 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       activeSlot.garmentStyle === 'trench_coat_pants' ||
       activeSlot.garmentStyle === 'streetwear_jacket_shorts';
 
+    const culling = currentVrmRef.current
+      ? inspectVrmBodySkinCulling(currentVrmRef.current, avatarRoot)
+      : null;
+    const wantsProceduralGarment = Boolean(
+      activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
+    );
+    const preserveForPreCulled = Boolean(wantsProceduralGarment && culling?.isPreCulled);
+
     applyOutfitModsToScene({
       root: avatarRoot,
       meshVisibility: activeSlot.meshVisibility,
       materialMods: activeSlot.materialMods,
       isImportedModel: true,
       textureCache: textureCacheRef.current,
-      cyclingShorts: fullCoverageGarment ? false : activeSlot.cyclingShorts ?? true,
-      hideNativeGarment: Boolean(
-        activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
-      ),
+      cyclingShorts: fullCoverageGarment && !preserveForPreCulled ? false : activeSlot.cyclingShorts ?? true,
+      hideNativeGarment: wantsProceduralGarment && !preserveForPreCulled,
+      preserveNativeClothingForPreCulled: preserveForPreCulled,
+      fallbackRecolorPalette: preserveForPreCulled
+        ? {
+            topHex: activeSlot.garmentPalette?.topHex,
+            bottomHex: activeSlot.garmentPalette?.bottomHex,
+            accessoryHex:
+              activeSlot.garmentPalette?.accessoryHex || activeSlot.accessoryColorHex,
+            topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
+            bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+          }
+        : null,
     });
 
     onMeshesDetectedRef.current(
@@ -2367,6 +2402,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     activeSlot.materialMods,
     activeSlot.cyclingShorts,
     activeSlot.garmentStyle,
+    activeSlot.garmentPalette,
+    activeSlot.accessoryColorHex,
     isLoadingModel,
   ]);
 

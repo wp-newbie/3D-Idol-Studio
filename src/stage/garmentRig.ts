@@ -1146,6 +1146,159 @@ function inspectVrmBodySkinCoverage(
   };
 }
 
+export interface VrmBodyCullingReport {
+  isPreCulled: boolean;
+  hasCulledTorso: boolean;
+  hasCulledThighs: boolean;
+  hasCulledArms: boolean;
+}
+
+/**
+ * Runtime Pre-Culled Model Detector:
+ * Inspects the VRM's native `Body_SKIN` SkinnedMesh for VRoid "Delete transparent meshes" cutouts
+ * around the thighs/pelvis or lower/upper torso. When missing/culled body polygons are detected,
+ * the runtime preserves native clothing and falls back to clean material/texture recoloring instead
+ * of stripping clothes and exposing a hollow body cavity!
+ */
+export function inspectVrmBodySkinCulling(
+  vrm: VRM | null,
+  avatarRoot: THREE.Object3D | null
+): VrmBodyCullingReport {
+  if (!vrm?.humanoid || !avatarRoot) {
+    return {
+      isPreCulled: false,
+      hasCulledTorso: false,
+      hasCulledThighs: false,
+      hasCulledArms: false,
+    };
+  }
+
+  let hasAnyBodySkinMesh = false;
+  let torsoUpperMask = 0;
+  let torsoLowerMask = 0;
+  let torsoMinF = 1;
+  let torsoMaxF = 0;
+  let torsoTris = 0;
+  let pelvisTris = 0;
+  let thighTris = 0;
+  let thighMinF = 1;
+  let thighMaxF = 0;
+  let armTris = 0;
+  let armMinF = 1;
+  let armMaxF = 0;
+
+  avatarRoot.traverse((obj) => {
+    if (!(obj instanceof THREE.SkinnedMesh) || obj.userData?.[GARMENT_TAG]) return;
+    const geo = obj.geometry;
+    const pos = geo.attributes.position;
+    const skinIdx = geo.attributes.skinIndex;
+    const skinW = geo.attributes.skinWeight;
+    if (!pos || !skinIdx || !skinW) return;
+
+    const lm = getBindPoseLandmarks(vrm, obj);
+    if (!lm) return;
+    const regions = classifySkeletonBoneRegions(vrm, obj.skeleton);
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const groups =
+      geo.groups && geo.groups.length > 0
+        ? geo.groups
+        : [{ start: 0, count: geo.index ? geo.index.count : pos.count, materialIndex: 0 }];
+    const idxAttr = geo.index;
+
+    const getDom = (vi: number) => {
+      let bestW = -1;
+      let bestR = REGION_IGNORE;
+      for (let k = 0; k < 4; k++) {
+        const w = skinW.getComponent(vi, k);
+        if (w > bestW) {
+          bestW = w;
+          bestR = regions[Math.round(skinIdx.getComponent(vi, k))] ?? REGION_IGNORE;
+        }
+      }
+      return bestR;
+    };
+
+    const yTorsoSpan = Math.max(0.14, lm.neck.y - lm.hips.y);
+
+    for (const grp of groups) {
+      const mat = mats[grp.materialIndex ?? 0];
+      const matName = `${obj.name || ''} ${mat?.name || ''}`;
+      if (!SKIN_MAT_REGEX.test(matName) || /face/i.test(matName)) continue;
+      hasAnyBodySkinMesh = true;
+
+      const end = grp.start + grp.count;
+      for (let tri = grp.start; tri + 2 < end; tri += 3) {
+        const i0 = idxAttr ? idxAttr.getX(tri) : tri;
+        const r = getDom(i0);
+        const x = pos.getX(i0);
+        const y = pos.getY(i0);
+        const z = pos.getZ(i0);
+
+        if (r === REGION_TORSO || r === REGION_PELVIS) {
+          const tf = (y - lm.hips.y) / yTorsoSpan;
+          if (tf >= -0.10 && tf <= 0.96) {
+            torsoTris++;
+            if (r === REGION_PELVIS) pelvisTris++;
+            if (tf < torsoMinF) torsoMinF = tf;
+            if (tf > torsoMaxF) torsoMaxF = tf;
+            const sec =
+              Math.floor(((Math.atan2(x - lm.hips.x, z - lm.hips.z) + Math.PI) / (Math.PI * 2)) * 8) & 7;
+            if (tf >= 0.42) torsoUpperMask |= 1 << sec;
+            else torsoLowerMask |= 1 << sec;
+          }
+        } else if (r === REGION_LEG_L_UP || r === REGION_LEG_R_UP) {
+          const f =
+            r === REGION_LEG_L_UP
+              ? projectFracAlongSegment(x, y, z, lm.lUpLeg, lm.lLowLeg)
+              : projectFracAlongSegment(x, y, z, lm.rUpLeg, lm.rLowLeg);
+          thighTris++;
+          if (f < thighMinF) thighMinF = f;
+          if (f > thighMaxF) thighMaxF = f;
+        } else if (r === REGION_ARM_L_UP || r === REGION_ARM_R_UP) {
+          const f =
+            r === REGION_ARM_L_UP
+              ? projectFracAlongSegment(x, y, z, lm.lUpArm, lm.lLowArm)
+              : projectFracAlongSegment(x, y, z, lm.rUpArm, lm.rLowArm);
+          armTris++;
+          if (f < armMinF) armMinF = f;
+          if (f > armMaxF) armMaxF = f;
+        }
+      }
+    }
+  });
+
+  if (!hasAnyBodySkinMesh) {
+    // Non-standard / primitive VRM without Body_SKIN material naming — keep normal procedural flow
+    return {
+      isPreCulled: false,
+      hasCulledTorso: false,
+      hasCulledThighs: false,
+      hasCulledArms: false,
+    };
+  }
+
+  const pop8 = (m: number) => {
+    let n = 0;
+    for (let b = 0; b < 8; b++) if (m & (1 << b)) n++;
+    return n;
+  };
+  const hasCulledTorso =
+    torsoTris < 120 ||
+    pop8(torsoUpperMask) < 6 ||
+    pop8(torsoLowerMask) < 6 ||
+    torsoMaxF - torsoMinF < 0.62;
+  const hasCulledThighs =
+    pelvisTris < 40 || thighTris < 60 || thighMaxF - thighMinF < 0.50 || thighMinF > 0.30;
+  const hasCulledArms = armTris < 50 || armMaxF - armMinF < 0.50 || armMinF > 0.32;
+
+  return {
+    isPreCulled: hasCulledTorso || hasCulledThighs,
+    hasCulledTorso,
+    hasCulledThighs,
+    hasCulledArms,
+  };
+}
+
 /**
  * Clones REAL sculpted triangles directly from the VRM's own `SkinnedMesh` body/torso topology,
  * extrudes them smoothly outward along position-welded vertex normals (`inflate` meters),
@@ -1595,6 +1748,22 @@ function buildBodyClonedSkinnedGarment(params: {
       return [x + dx * df, y + dy * df, z + dz * df];
     };
 
+    // Resolve skeleton joint indices for smooth linear-falloff knee & elbow weighting
+    const boneIdxOf = (name: VRMHumanBoneName): number => {
+      const node = vrm.humanoid?.getRawBoneNode(name);
+      return node ? src.skeleton.bones.indexOf(node as THREE.Bone) : -1;
+    };
+    const idxLUpLeg = boneIdxOf('leftUpperLeg');
+    const idxLLowLeg = boneIdxOf('leftLowerLeg');
+    const idxRUpLeg = boneIdxOf('rightUpperLeg');
+    const idxRLowLeg = boneIdxOf('rightLowerLeg');
+    const idxLUpArm = boneIdxOf('leftUpperArm');
+    const idxLLowArm = boneIdxOf('leftLowerArm');
+    const idxRUpArm = boneIdxOf('rightUpperArm');
+    const idxRLowArm = boneIdxOf('rightLowerArm');
+    const kneeBandHalf = 0.032 * unitScale;
+    const elbowBandHalf = 0.026 * unitScale;
+
     for (let ni = 0; ni < vCount; ni++) {
       const oi = uniqueVerts[ni];
       let vx = posAttr.getX(oi);
@@ -1681,6 +1850,65 @@ function buildBodyClonedSkinnedGarment(params: {
       for (let c = 0; c < 4; c++) {
         newSkinIdx[ni * 4 + c] = Math.round(skinIdxAttr.getComponent(oi, c));
         newSkinW[ni * 4 + c] = skinWAttr.getComponent(oi, c);
+      }
+
+      // Linear-falloff joint weight blending across knee & elbow interfaces:
+      // W_lower = clamp((y_joint - y + h/2) / h, 0, 1), W_upper = 1 - W_lower
+      const applyJointBlend = (upperIdx: number, lowerIdx: number, wLowerTarget: number) => {
+        if (upperIdx < 0 || lowerIdx < 0) return;
+        const wLower = THREE.MathUtils.clamp(wLowerTarget, 0, 1);
+        const wUpper = 1 - wLower;
+        // Blend smoothly (55% original anatomical weights + 45% linear joint falloff) to eliminate hard seams
+        const origUpper =
+          (newSkinIdx[ni * 4] === upperIdx ? newSkinW[ni * 4] : 0) +
+          (newSkinIdx[ni * 4 + 1] === upperIdx ? newSkinW[ni * 4 + 1] : 0) +
+          (newSkinIdx[ni * 4 + 2] === upperIdx ? newSkinW[ni * 4 + 2] : 0) +
+          (newSkinIdx[ni * 4 + 3] === upperIdx ? newSkinW[ni * 4 + 3] : 0);
+        const origLower =
+          (newSkinIdx[ni * 4] === lowerIdx ? newSkinW[ni * 4] : 0) +
+          (newSkinIdx[ni * 4 + 1] === lowerIdx ? newSkinW[ni * 4 + 1] : 0) +
+          (newSkinIdx[ni * 4 + 2] === lowerIdx ? newSkinW[ni * 4 + 2] : 0) +
+          (newSkinIdx[ni * 4 + 3] === lowerIdx ? newSkinW[ni * 4 + 3] : 0);
+        if (origUpper + origLower > 0.75) {
+          const sumOrig = origUpper + origLower;
+          const blendedUpper = THREE.MathUtils.lerp(origUpper / sumOrig, wUpper, 0.45);
+          const blendedLower = THREE.MathUtils.lerp(origLower / sumOrig, wLower, 0.45);
+          const normSum = Math.max(1e-5, blendedUpper + blendedLower);
+          newSkinIdx[ni * 4] = upperIdx;
+          newSkinW[ni * 4] = blendedUpper / normSum;
+          newSkinIdx[ni * 4 + 1] = lowerIdx;
+          newSkinW[ni * 4 + 1] = blendedLower / normSum;
+          newSkinIdx[ni * 4 + 2] = 0;
+          newSkinW[ni * 4 + 2] = 0;
+          newSkinIdx[ni * 4 + 3] = 0;
+          newSkinW[ni * 4 + 3] = 0;
+        }
+      };
+
+      if ((domR === REGION_LEG_L_UP || domR === REGION_LEG_L_LOW) && Math.abs(vy - lm.lLowLeg.y) <= kneeBandHalf) {
+        const wLower = THREE.MathUtils.clamp((lm.lLowLeg.y + kneeBandHalf - vy) / (kneeBandHalf * 2), 0, 1);
+        applyJointBlend(idxLUpLeg, idxLLowLeg, wLower);
+      } else if ((domR === REGION_LEG_R_UP || domR === REGION_LEG_R_LOW) && Math.abs(vy - lm.rLowLeg.y) <= kneeBandHalf) {
+        const wLower = THREE.MathUtils.clamp((lm.rLowLeg.y + kneeBandHalf - vy) / (kneeBandHalf * 2), 0, 1);
+        applyJointBlend(idxRUpLeg, idxRLowLeg, wLower);
+      } else if (domR === REGION_ARM_L_UP || domR === REGION_ARM_L_LOW) {
+        const dElbow = Math.hypot(vx - lm.lLowArm.x, vy - lm.lLowArm.y, vz - lm.lLowArm.z);
+        if (dElbow <= elbowBandHalf * 1.4) {
+          const fUp = projectFracAlongSegment(vx, vy, vz, lm.lUpArm, lm.lLowArm);
+          const fLow = projectFracAlongSegment(vx, vy, vz, lm.lLowArm, lm.lHand);
+          const distSigned = fLow > 0 ? fLow * lm.lLowArm.distanceTo(lm.lHand) : (fUp - 1) * lm.lUpArm.distanceTo(lm.lLowArm);
+          const wLower = THREE.MathUtils.clamp((distSigned + elbowBandHalf) / (elbowBandHalf * 2), 0, 1);
+          applyJointBlend(idxLUpArm, idxLLowArm, wLower);
+        }
+      } else if (domR === REGION_ARM_R_UP || domR === REGION_ARM_R_LOW) {
+        const dElbow = Math.hypot(vx - lm.rLowArm.x, vy - lm.rLowArm.y, vz - lm.rLowArm.z);
+        if (dElbow <= elbowBandHalf * 1.4) {
+          const fUp = projectFracAlongSegment(vx, vy, vz, lm.rUpArm, lm.rLowArm);
+          const fLow = projectFracAlongSegment(vx, vy, vz, lm.rLowArm, lm.rHand);
+          const distSigned = fLow > 0 ? fLow * lm.rLowArm.distanceTo(lm.rHand) : (fUp - 1) * lm.rUpArm.distanceTo(lm.rLowArm);
+          const wLower = THREE.MathUtils.clamp((distSigned + elbowBandHalf) / (elbowBandHalf * 2), 0, 1);
+          applyJointBlend(idxRUpArm, idxRLowArm, wLower);
+        }
       }
     }
 
@@ -1976,12 +2204,12 @@ function addLegPants(params: {
   } = params;
 
   // Primary path: True body-fitted SkinnedMesh pants/leggings/shorts cloned directly from the VRM's real
-  // sculpted hips, thighs, knees, and calves (ZERO cylinders, ZERO knee balls, ZERO skin clipping!)
+  // sculpted hips, thighs, knees, and calves with slim +2.8mm..+4.0mm normal extrusion!
   const inflate = shortsOnly
-    ? 0.009
-    : looseFactor <= 0.98
-    ? 0.007
-    : THREE.MathUtils.clamp(0.0085 + (looseFactor - 1.0) * 0.032, 0.008, 0.015);
+    ? 0.0040
+    : looseFactor <= 1.0
+    ? 0.0032
+    : THREE.MathUtils.clamp(0.0034 + (looseFactor - 1.0) * 0.008, 0.0032, 0.0045);
   const pantsCov = { isSolid: false, hasPelvisCoverage: false };
   const clonedTris = buildBodyClonedSkinnedGarment({
     vrm,
@@ -2054,16 +2282,18 @@ function addLegPants(params: {
     const ft = h.getRawBoneNode(s.foot);
 
     const upGroup = attachGroup(up, `GarmentLegUp_${s.upper}`);
+    const kneeRadius = 0.060 * looseFactor;
     if (upGroup && up) {
+      // Bridge knee joint seamlessly: extend upper leg slightly past knee (`endFrac = 1.08`)
       const tube = createBoneSegmentTube({
         bone: up,
         childBone: low,
         fallbackDir: new THREE.Vector3(0, -1, 0),
         fallbackLen: 0.38,
         startFrac: -0.02,
-        endFrac: shortsOnly ? 0.44 : 1.03,
-        radiusStart: 0.082 * looseFactor,
-        radiusEnd: (shortsOnly ? 0.072 : 0.064) * looseFactor,
+        endFrac: shortsOnly ? 0.46 : 1.08,
+        radiusStart: 0.080 * looseFactor,
+        radiusEnd: shortsOnly ? 0.070 * looseFactor : kneeRadius,
         mat,
       });
       upGroup.add(tube);
@@ -2072,6 +2302,12 @@ function addLegPants(params: {
     if (!shortsOnly && low) {
       const lowGroup = attachGroup(low, `GarmentLegLow_${s.lower}`);
       if (lowGroup) {
+        const kneeBridgeCap = new THREE.Mesh(
+          new THREE.SphereGeometry(kneeRadius * 0.98, 14, 12),
+          mat
+        );
+        lowGroup.add(kneeBridgeCap);
+
         const segVec =
           ft && ft.position.lengthSq() > 1e-5
             ? ft.position.clone()
@@ -2085,14 +2321,15 @@ function addLegPants(params: {
         bZ.crossVectors(bX, bY).normalize();
         legBasisMat.makeBasis(bX, bY, bZ);
 
-        const startF = -0.02;
+        // Bridge knee joint seamlessly: extend lower leg upward into knee (`startF = -0.06`) with matching radius!
+        const startF = -0.06;
         const endF = endFracLower;
         const segLen = Math.max(0.05, totalLen * (endF - startF));
         const midDist = totalLen * ((startF + endF) * 0.5);
 
         const shinGeo = new THREE.CylinderGeometry(
-          0.048 * looseFactor,
-          0.064 * looseFactor,
+          0.046 * looseFactor,
+          kneeRadius,
           segLen,
           20,
           10,
@@ -2177,7 +2414,8 @@ function addArmSleeves(params: {
     if (mode !== 'gloves' && up) {
       const upG = attachGroup(up, `GarmentArmUp_${s.upper}`);
       if (upG) {
-        const endFrac = mode === 'cap' ? 0.24 : mode === 'short' ? 0.48 : 1.03;
+        // Bridge elbow seamlessly: extend upper sleeve slightly past elbow (`endFrac = 1.08`)
+        const endFrac = mode === 'cap' ? 0.24 : mode === 'short' ? 0.48 : 1.08;
         const tube =
           mode === 'kimono'
             ? createBoneSegmentTube({
@@ -2260,8 +2498,8 @@ function addArmSleeves(params: {
                 childBone: hand,
                 fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
                 fallbackLen: lowLen,
-                // Slim bone-aligned tapered sleeve/glove with clean +3mm anatomical radial clearance!
-                startFrac: mode === 'gloves' ? 0.06 : -0.03,
+                // Bridge elbow seamlessly (`startFrac = -0.06`) with smoothly matched elbow radius!
+                startFrac: mode === 'gloves' ? 0.06 : -0.06,
                 endFrac: mode === 'gloves' ? 0.98 : 0.96,
                 radiusStart: mode === 'gloves' ? Math.min(0.0275, rElbow * 0.86) : rElbow,
                 radiusEnd: mode === 'gloves' ? Math.min(0.0215, rWrist * 0.86) : rWrist,
@@ -2320,8 +2558,10 @@ function addSculptedTorso(params: {
   skinnedInflate?: number;
   /** Set true when real skinned pants/shorts already cover the pelvis (prevents bloated diaper shell!) */
   pelvisCoveredByPants?: boolean;
-  /** Set true for closed outerwear (coats, blazers, hoodies, pajamas) to clone smooth Body_SKIN only and guarantee continuous spine->hips coverage */
+  /** Set true for closed structured outerwear (coats, blazers) to guarantee continuous spine->hips coverage */
   closedOuterwear?: boolean;
+  /** Set true on relaxed full-body outfits (pajamas, tee, hoodie) to prefer slim +2.5mm..+4.0mm SkinnedMesh cloning over rigid lathe shells */
+  preferSkinnedBody?: boolean;
 }): {
   chestGroup: THREE.Group | null;
   spineGroup: THREE.Group | null;
@@ -2341,14 +2581,15 @@ function addSculptedTorso(params: {
     topMat,
     hipsMat,
     scaleX = 1.0,
-    scaleZ = 1.0,
+    scaleZ = 0.88,
     necklineHeightFrac = 0.84,
-    bustBoost = 0.020,
+    bustBoost = 0.012,
     fwdSign,
     skinnedZone = 'torso_sleeveless',
-    skinnedInflate = 0.015,
+    skinnedInflate = 0.0036,
     pelvisCoveredByPants = false,
     closedOuterwear = false,
+    preferSkinnedBody = false,
   } = params;
 
   const hipsGroup = attachGroup(metrics.hips, 'GarmentHips');
@@ -2361,40 +2602,49 @@ function addSculptedTorso(params: {
   const yWaistInChest = -metrics.yChestFromSpine * 0.58;
   const yBustInChest = yTop * 0.48;
 
-  // Measured garment clearance (+0.014m to +0.018m skin clearance)
-  const clr = THREE.MathUtils.clamp(skinnedInflate, 0.014, 0.018);
-  const rHips = (metrics.hipsHalfW + clr) * scaleX;
-  const rSpine = (metrics.spineHalfW + clr) * scaleX;
-  const rChest = (metrics.chestHalfW + clr) * scaleX;
-  const rUpper = (metrics.upperChestHalfW + clr * 0.92) * scaleX;
-  const zRatioTorso = THREE.MathUtils.clamp(
-    ((metrics.chestHalfD + clr) / Math.max(0.06, rChest)) * scaleZ,
-    0.72,
-    0.96
-  );
+  // Slim uniform normal extrusion (+2.5mm to +4.0mm) for SkinnedMesh cloning; +14..18mm clearance for structured outerwear shells
+  const cloneInflate = preferSkinnedBody
+    ? THREE.MathUtils.clamp(skinnedInflate, 0.0025, 0.0040)
+    : THREE.MathUtils.clamp(skinnedInflate, 0.0032, 0.016);
+  const latheClr = preferSkinnedBody ? 0.0055 : THREE.MathUtils.clamp(skinnedInflate, 0.012, 0.017);
 
-  // Primary path: Clone smooth Body_SKIN torso first (for closed outerwear, NEVER clone a base VRM's
-  // open-front crop-top jacket with baggy jagged sleeves — use smooth Body_SKIN + continuous measured bodice!)
+  // Non-bloated anime torso contour:
+  // - Waist explicitly tapered at ySpine: waistRadius <= chestRadius * 0.78
+  // - Depth scaleZ capped to 0.85..0.90 (never bulging like a cylinder or pregnant belly!)
+  // - Bust boost capped <= 0.012 on relaxed clothing
+  const rChest = (metrics.chestHalfW + latheClr) * scaleX;
+  const rSpine = Math.min((metrics.spineHalfW + latheClr * 0.85) * scaleX, rChest * 0.78);
+  const rHips = (metrics.hipsHalfW + latheClr) * scaleX;
+  const rUpper = (metrics.upperChestHalfW + latheClr * 0.88) * scaleX;
+  const effectiveScaleZ = THREE.MathUtils.clamp(scaleZ, 0.85, 0.90);
+  const zRatioTorso = THREE.MathUtils.clamp(
+    ((metrics.chestHalfD + latheClr) / Math.max(0.06, rChest)) * effectiveScaleZ,
+    0.66,
+    0.84
+  );
+  const safeBustBoost = preferSkinnedBody ? Math.min(bustBoost, 0.012) : Math.min(bustBoost, 0.022);
+
+  // Primary path: Prefer cloning native Body_SKIN SkinnedMesh vertices with slim +2.5mm..+4.0mm normal extrusion!
   const torsoCoverage = { isSolid: false };
-  const clonedZone = closedOuterwear ? 'torso_sleeveless' : skinnedZone;
+  const clonedZone = closedOuterwear && !preferSkinnedBody ? 'torso_sleeveless' : skinnedZone;
   let clonedTorsoTris = buildBodyClonedSkinnedGarment({
     vrm,
     avatarRoot,
     mat: topMat,
     zone: clonedZone,
-    inflate: clr,
+    inflate: cloneInflate,
     topNeckFrac: necklineHeightFrac,
     uvScale: 1.7,
     skinOnly: true,
     outCoverage: torsoCoverage,
   });
-  if (!closedOuterwear && clonedTorsoTris < 80) {
+  if (!closedOuterwear && !preferSkinnedBody && clonedTorsoTris < 80) {
     clonedTorsoTris = buildBodyClonedSkinnedGarment({
       vrm,
       avatarRoot,
       mat: topMat,
       zone: clonedZone,
-      inflate: clr,
+      inflate: cloneInflate,
       topNeckFrac: necklineHeightFrac,
       uvScale: 1.7,
       skinOnly: false,
@@ -2402,68 +2652,69 @@ function addSculptedTorso(params: {
     });
   }
   const usedSkinnedTorso = clonedTorsoTris >= 80 && torsoCoverage.isSolid;
+  const needsRigidLathe = !usedSkinnedTorso || (closedOuterwear && !preferSkinnedBody);
 
-  // Build dynamically measured continuous spine->chest->upperChest contoured shell whenever the VRM's
-  // Body_SKIN torso has transparent-mesh cutouts OR for closed outerwear spanning continuously over spine!
-  if ((!usedSkinnedTorso || closedOuterwear) && chestGroup) {
-    const linerScale = usedSkinnedTorso ? 0.97 : 1.0;
+  // Only add contoured lathe shell when SkinnedMesh torso is incomplete OR for structured tailored coats/blazers
+  if (needsRigidLathe && chestGroup) {
+    const linerScale = usedSkinnedTorso ? 0.96 : 1.0;
     const bodiceGeo = createContouredTorsoLathe({
       profile: [
-        [rHips * 0.98 * linerScale, yBottomInChest],
+        [rHips * 0.96 * linerScale, yBottomInChest],
         [rSpine * linerScale, yWaistInChest],
-        [THREE.MathUtils.lerp(rSpine, rChest, 0.65) * linerScale, 0.0],
+        [THREE.MathUtils.lerp(rSpine, rChest, 0.62) * linerScale, 0.0],
         [rChest * linerScale, yBustInChest],
         [rUpper * linerScale, yTop * 0.82],
-        [(necklineHeightFrac > 0.78 ? rUpper * 0.88 : rUpper * 0.96) * linerScale, yTop],
+        [(necklineHeightFrac > 0.78 ? rUpper * 0.88 : rUpper * 0.95) * linerScale, yTop],
         [(necklineHeightFrac > 0.78 ? rUpper * 0.66 : rUpper * 0.84) * linerScale, yTop + 0.006],
       ],
       scaleX: 1.0,
       scaleZ: zRatioTorso,
       bustCenterY: yBustInChest,
-      bustBoost: usedSkinnedTorso ? bustBoost * 0.45 : bustBoost,
-      frontBellyBoost: 0.003,
+      bustBoost: usedSkinnedTorso ? safeBustBoost * 0.4 : safeBustBoost,
+      frontBellyBoost: preferSkinnedBody ? 0 : 0.002,
       rearGluteY: yBottomInChest,
-      rearGluteBoost: 0.006,
+      rearGluteBoost: preferSkinnedBody ? 0.002 : 0.005,
       fwdSign,
       segments: 30,
     });
     chestGroup.add(new THREE.Mesh(bodiceGeo, topMat));
   }
 
-  // Continuous waist/hips overlap bridge on `spine`/`hips` so bending or raising arms NEVER opens a bare midriff gap!
-  if ((!usedSkinnedTorso || closedOuterwear) && !pelvisCoveredByPants && hipsGroup) {
-    const linerScale = usedSkinnedTorso ? 0.96 : 1.0;
-    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.58;
+  // Continuous waist/hips overlap bridge ONLY when pelvis isn't already covered by skinned pants/body
+  if (needsRigidLathe && !pelvisCoveredByPants && hipsGroup) {
+    const linerScale = usedSkinnedTorso ? 0.95 : 1.0;
+    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.55;
     const zRatioHips = THREE.MathUtils.clamp(
-      ((metrics.hipsHalfD + clr) / Math.max(0.06, rHips)) * scaleZ,
-      0.74,
-      0.98
+      ((metrics.hipsHalfD + latheClr) / Math.max(0.06, rHips)) * effectiveScaleZ,
+      0.70,
+      0.88
     );
     const pelvisGeo = createContouredTorsoLathe({
       profile: [
         [rHips * 0.62 * linerScale, -0.088],
         [rHips * 0.94 * linerScale, -0.055],
-        [rHips * 1.02 * linerScale, -0.012],
-        [THREE.MathUtils.lerp(rHips, rSpine, 0.5) * linerScale, metrics.ySpineFromHips * 0.55],
+        [rHips * 1.0 * linerScale, -0.012],
+        [THREE.MathUtils.lerp(rHips, rSpine, 0.55) * linerScale, metrics.ySpineFromHips * 0.55],
         [rSpine * linerScale, metrics.ySpineFromHips * 1.02],
-        [THREE.MathUtils.lerp(rSpine, rChest, 0.45) * linerScale, hipTopY],
+        [THREE.MathUtils.lerp(rSpine, rChest, 0.42) * linerScale, hipTopY],
       ],
       scaleX: 1.0,
       scaleZ: zRatioHips,
       bustBoost: 0,
-      frontBellyBoost: 0.003,
+      frontBellyBoost: 0,
       rearGluteY: -0.02,
-      rearGluteBoost: 0.008,
+      rearGluteBoost: 0.005,
       fwdSign,
       segments: 30,
     });
     hipsGroup.add(new THREE.Mesh(pelvisGeo, hipsMat || topMat));
   }
 
-  const chestSurfaceFrontZ = Math.max(metrics.chestFrontZ + clr, rChest * zRatioTorso);
-  const waistSurfaceHalfW = rSpine;
-  const waistSurfaceHalfD = Math.max(metrics.spineHalfD + clr, rSpine * zRatioTorso);
-  const waistSurfaceFrontZ = Math.max(metrics.spineFrontZ + clr, waistSurfaceHalfD);
+  const surfClr = usedSkinnedTorso && !needsRigidLathe ? cloneInflate : latheClr;
+  const chestSurfaceFrontZ = Math.max(metrics.chestFrontZ + surfClr, rChest * zRatioTorso);
+  const waistSurfaceHalfW = usedSkinnedTorso && !needsRigidLathe ? metrics.spineHalfW + cloneInflate : rSpine;
+  const waistSurfaceHalfD = Math.max(metrics.spineHalfD + surfClr, waistSurfaceHalfW * zRatioTorso);
+  const waistSurfaceFrontZ = Math.max(metrics.spineFrontZ + surfClr, waistSurfaceHalfD);
 
   return {
     chestGroup,
@@ -2475,7 +2726,7 @@ function addSculptedTorso(params: {
     waistSurfaceHalfW,
     waistSurfaceHalfD,
     waistSurfaceFrontZ,
-    usedSkinnedTorso: closedOuterwear ? false : usedSkinnedTorso,
+    usedSkinnedTorso: closedOuterwear && !preferSkinnedBody ? false : usedSkinnedTorso,
   };
 }
 
@@ -2511,6 +2762,17 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
 
   clearExistingGarments(avatarRoot);
   if (!vrm?.humanoid || garmentStyle === 'default') return;
+
+  // Automatic runtime fallback for pre-culled legacy VRM models (exported with VRoid "Delete transparent meshes"):
+  // Preserve native clothing & rely on clean material/texture recoloring in clothingModder.ts instead of exposing a hollow cavity!
+  const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
+  if (culling.isPreCulled) {
+    console.info(
+      '[GarmentRig] Pre-culled body skin detected (torso/thighs missing) — preserving native clothing mesh with material/texture recoloring fallback.',
+      culling
+    );
+    return;
+  }
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const fwdSign = isVrm0 ? -1 : 1;
@@ -2562,23 +2824,26 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       chestSurfaceFrontZ,
       waistSurfaceHalfW,
       waistSurfaceHalfD,
+      usedSkinnedTorso,
     } = addSculptedTorso({
       vrm,
       avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.04,
-      scaleZ: 1.04,
+      scaleX: 1.02,
+      scaleZ: 0.88,
       necklineHeightFrac: 0.88,
-      bustBoost: 0.014,
+      bustBoost: 0.010,
       fwdSign,
       skinnedZone: 'torso_long_sleeve',
-      skinnedInflate: 0.017,
+      skinnedInflate: 0.0038,
       pelvisCoveredByPants: usedSkinnedPants,
-      closedOuterwear: true,
+      preferSkinnedBody: true,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.08 });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.06 });
+    }
 
     if (chestGroup) {
       const trimZ = chestSurfaceFrontZ + 0.004;
@@ -2810,16 +3075,18 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       topMat,
       hipsMat: bottomMat,
       scaleX: 1.0,
-      scaleZ: 0.98,
+      scaleZ: 0.86,
       necklineHeightFrac: 0.85,
-      bustBoost: 0.018,
+      bustBoost: 0.010,
       fwdSign,
       skinnedZone: 'torso_short_sleeve',
-      skinnedInflate: 0.014,
+      skinnedInflate: 0.0032,
       pelvisCoveredByPants: usedSkinnedLeggings,
-      closedOuterwear: true,
+      preferSkinnedBody: true,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'short', looseFactor: 1.0 });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'short', looseFactor: 1.0 });
+    }
 
     if (chestGroup && !usedSkinnedTorso) {
       const collar = new THREE.Mesh(new THREE.TorusGeometry(metrics.upperChestHalfW * 0.68, 0.007, 10, 24), topAccentMat);
@@ -2996,23 +3263,25 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       looseFactor: 1.06,
       fwdSign,
     });
-    const { chestGroup, topNeckY, chestSurfaceFrontZ } = addSculptedTorso({
+    const { chestGroup, topNeckY, chestSurfaceFrontZ, usedSkinnedTorso } = addSculptedTorso({
       vrm,
       avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.03,
-      scaleZ: 1.03,
+      scaleX: 1.01,
+      scaleZ: 0.87,
       necklineHeightFrac: 0.85,
-      bustBoost: 0.015,
+      bustBoost: 0.010,
       fwdSign,
       skinnedZone: 'torso_long_sleeve',
-      skinnedInflate: 0.016,
+      skinnedInflate: 0.0035,
       pelvisCoveredByPants: usedSkinnedPants,
-      closedOuterwear: true,
+      preferSkinnedBody: true,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.05 });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.04 });
+    }
 
     if (chestGroup) {
       const trimZ = chestSurfaceFrontZ + 0.004;

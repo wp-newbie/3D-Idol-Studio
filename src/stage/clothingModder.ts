@@ -527,6 +527,15 @@ export function applyOutfitModsToScene(params: {
   textureCache: Map<string, THREE.Texture>;
   cyclingShorts?: boolean;
   hideNativeGarment?: boolean;
+  /** When true (pre-culled legacy VRM with missing under-cloth skin), preserve native clothes & recolor them cleanly! */
+  preserveNativeClothingForPreCulled?: boolean;
+  fallbackRecolorPalette?: {
+    topHex?: string;
+    bottomHex?: string;
+    accessoryHex?: string;
+    topTextureDataUrl?: string | null;
+    bottomTextureDataUrl?: string | null;
+  } | null;
   onTextureLoaded?: () => void;
 }): void {
   const {
@@ -537,6 +546,8 @@ export function applyOutfitModsToScene(params: {
     textureCache,
     cyclingShorts = true,
     hideNativeGarment = false,
+    preserveNativeClothingForPreCulled = false,
+    fallbackRecolorPalette = null,
     onTextureLoaded,
   } = params;
   const loader = new THREE.TextureLoader();
@@ -583,9 +594,11 @@ export function applyOutfitModsToScene(params: {
       (m) => m && (isCoreSkinOrFaceMaterial(m.name) || isBodySkinMaterial(m.name))
     );
 
-    // 1. Visibility toggle (NEVER hide a merged Body mesh that contains skin via obj.visible!)
+    // 1. Visibility toggle (NEVER hide a merged Body mesh with skin, nor hide native clothing on pre-culled VRMs!)
     const origVisible = snapshotOriginalVisible(obj);
-    if (name in meshVisibility) {
+    if (preserveNativeClothingForPreCulled) {
+      obj.visible = origVisible;
+    } else if (name in meshVisibility) {
       obj.visible = hasSkinMat && meshVisibility[name] === false ? origVisible : meshVisibility[name];
     } else if (obj.visible !== origVisible) {
       obj.visible = origVisible;
@@ -604,7 +617,7 @@ export function applyOutfitModsToScene(params: {
 
       // Per-material hiding works on BOTH separate clothing meshes AND merged VRoid multi-material Body meshes!
       // Keep skin/face/head/eye/brow/lash/mouth/teeth/hair ALWAYS visible; hide all conflicting native clothing,
-      // underwear, footwear, and outfit-bound accessories when a procedural 3D silhouette is active.
+      // underwear, footwear, and outfit-bound accessories when a procedural 3D silhouette is active (unless pre-culled).
       const matTargetName = `${mat.name || ''} ${mats.length === 1 && !hasSkinMat ? name : ''}`;
       const isProtectedCoreOrHair =
         isSkinOrFace ||
@@ -619,11 +632,27 @@ export function applyOutfitModsToScene(params: {
           matCategory === 'Accessories' ||
           NATIVE_OUTFIT_HIDE_REGEX.test(matTargetName));
 
-      if (hideNativeGarment && isNativeOutfitSlot) {
+      if (hideNativeGarment && !preserveNativeClothingForPreCulled && isNativeOutfitSlot) {
         mat.visible = false;
         continue;
       } else if (!mat.visible) {
         mat.visible = true;
+      }
+
+      // On pre-culled legacy VRMs, fall back to clean material/texture recoloring over native clothing!
+      let effectiveMod: MaterialMod | undefined = mod;
+      if (preserveNativeClothingForPreCulled && !isProtectedCoreOrHair && fallbackRecolorPalette) {
+        if (matCategory === 'Tops' && (fallbackRecolorPalette.topTextureDataUrl || fallbackRecolorPalette.topHex)) {
+          effectiveMod = fallbackRecolorPalette.topTextureDataUrl
+            ? { textureDataUrl: fallbackRecolorPalette.topTextureDataUrl }
+            : { colorHex: fallbackRecolorPalette.topHex };
+        } else if (matCategory === 'Bottoms' && (fallbackRecolorPalette.bottomTextureDataUrl || fallbackRecolorPalette.bottomHex)) {
+          effectiveMod = fallbackRecolorPalette.bottomTextureDataUrl
+            ? { textureDataUrl: fallbackRecolorPalette.bottomTextureDataUrl }
+            : { colorHex: fallbackRecolorPalette.bottomHex };
+        } else if (matCategory === 'Accessories' && fallbackRecolorPalette.accessoryHex) {
+          effectiveMod = { colorHex: fallbackRecolorPalette.accessoryHex };
+        }
       }
       const anyMat = mat as unknown as {
         color?: THREE.Color;
@@ -638,7 +667,7 @@ export function applyOutfitModsToScene(params: {
 
       // NEVER apply outfit recoloring or clothing textures to core skin, face, eyes, brows, lashes,
       // mouth, teeth, or hair slots on multi-material body meshes (preserves VRM skin/eye/hair integrity!)
-      const isProtectedHairSlot = matCategory === 'Hair' && (mats.length > 1 || hasSkinMat || Boolean(mod?.textureDataUrl || mod?.textureVaultId));
+      const isProtectedHairSlot = matCategory === 'Hair' && (mats.length > 1 || hasSkinMat || Boolean(effectiveMod?.textureDataUrl || effectiveMod?.textureVaultId));
       if (isSkinOrFace || isProtectedHairSlot) {
         const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
         if (isSkinMat && cyclingShorts && snap.map) {
@@ -667,8 +696,8 @@ export function applyOutfitModsToScene(params: {
         continue;
       }
 
-      if (mod?.colorHex) {
-        const tint = new THREE.Color(mod.colorHex);
+      if (effectiveMod?.colorHex) {
+        const tint = new THREE.Color(effectiveMod.colorHex);
         if (anyMat.color) anyMat.color.copy(tint);
         if (anyMat.uniforms?.litFactor?.value) {
           anyMat.uniforms.litFactor.value.copy(tint);
@@ -688,24 +717,24 @@ export function applyOutfitModsToScene(params: {
       }
 
       // Custom .PNG Texture Overlay (from IndexedDB textureVaultId or inline dataUrl)
-      if (mod?.textureDataUrl) {
+      if (effectiveMod?.textureDataUrl) {
         applyTextureUrl(
-          mod.textureVaultId || mod.textureDataUrl,
-          mod.textureDataUrl,
+          effectiveMod.textureVaultId || effectiveMod.textureDataUrl,
+          effectiveMod.textureDataUrl,
           anyMat,
-          Boolean(mod.colorHex)
+          Boolean(effectiveMod.colorHex)
         );
-      } else if (mod?.textureVaultId) {
-        const vaultId = mod.textureVaultId;
+      } else if (effectiveMod?.textureVaultId) {
+        const vaultId = effectiveMod.textureVaultId;
         const cached = textureCache.get(vaultId);
         if (cached) {
           anyMat.map = cached;
-          if (!mod.colorHex && anyMat.color) anyMat.color.set('#ffffff');
+          if (!effectiveMod.colorHex && anyMat.color) anyMat.color.set('#ffffff');
           anyMat.needsUpdate = true;
         } else {
           void getTextureFromVault(vaultId).then((rec) => {
             if (rec?.dataUrl) {
-              applyTextureUrl(vaultId, rec.dataUrl, anyMat, Boolean(mod.colorHex));
+              applyTextureUrl(vaultId, rec.dataUrl, anyMat, Boolean(effectiveMod?.colorHex));
             }
           });
         }
