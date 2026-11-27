@@ -197,9 +197,14 @@ export function orientHandInFrame(params: {
   hand.updateWorldMatrix(false, false);
 }
 
+const _clampUp = new THREE.Vector3();
+const _clampLow = new THREE.Vector3();
+const _clampPerp = new THREE.Vector3();
+
 /**
  * Solves arbitrary arm poses from explicit character-frame directions (+X left, +Y up, +Z forward),
- * guaranteeing identical front-facing posture on both VRM 0.x (after rotateVRM0) and VRM 1.0.
+ * guaranteeing identical front-facing posture on both VRM 0.x (after rotateVRM0) and VRM 1.0,
+ * with elbow flexion clamping so forearms never hyperextend or fold awkwardly into biceps.
  */
 export function applyDirectedArms(
   specs: DirectedArmSpec[],
@@ -215,11 +220,21 @@ export function applyDirectedArms(
   const frameQ = _frameQ.clone();
 
   for (const spec of specs) {
-    _desired.set(spec.upperDir[0], spec.upperDir[1], spec.upperDir[2]).normalize();
-    swingToward(spec.upper, spec.lower, _desired, frameQ, t);
+    _clampUp.set(spec.upperDir[0], spec.upperDir[1], spec.upperDir[2]).normalize();
+    swingToward(spec.upper, spec.lower, _clampUp, frameQ, t);
 
-    _desired.set(spec.lowerDir[0], spec.lowerDir[1], spec.lowerDir[2]).normalize();
-    swingToward(spec.lower, spec.hand, _desired, frameQ, t);
+    _clampLow.set(spec.lowerDir[0], spec.lowerDir[1], spec.lowerDir[2]).normalize();
+    // Guard against near-180° foldback (dot < -0.78 -> >141° elbow fold) which causes shortest-arc twist snaps!
+    const elbowDot = _clampUp.dot(_clampLow);
+    if (elbowDot < -0.78) {
+      _clampPerp.copy(_clampLow).addScaledVector(_clampUp, -elbowDot);
+      if (_clampPerp.lengthSq() < 1e-5) {
+        _clampPerp.set(0, 0, 1); // Stable forward pole fallback
+      }
+      _clampPerp.normalize();
+      _clampLow.copy(_clampUp).multiplyScalar(-0.78).addScaledVector(_clampPerp, Math.sqrt(1 - 0.78 * 0.78)).normalize();
+    }
+    swingToward(spec.lower, spec.hand, _clampLow, frameQ, t);
 
     if (spec.handEuler) {
       _handEulerTmp.set(spec.handEuler[0], spec.handEuler[1], spec.handEuler[2], 'XYZ');
@@ -1724,13 +1739,14 @@ export function applyHobbyActivityArms(
     rUp = [-0.26, THREE.MathUtils.lerp(-0.68, -0.18, aim), THREE.MathUtils.lerp(0.68, 0.94, aim)];
     rLow = [0.52, THREE.MathUtils.lerp(0.10, 0.74, aim), THREE.MathUtils.lerp(0.84, 0.42, aim)];
   } else if (hobbyKind === 'gym_weights') {
-    // Alternating athletic dumbbell bicep curls!
-    const curlL = 0.5 - 0.5 * Math.cos(elapsed * 2.8);
-    const curlR = 0.5 - 0.5 * Math.cos(elapsed * 2.8 + Math.PI);
-    lUp = [0.22, -0.92, 0.28];
-    lLow = [-0.08, THREE.MathUtils.lerp(-0.42, 0.86, curlL), THREE.MathUtils.lerp(0.88, 0.42, curlL)];
-    rUp = [-0.22, -0.92, 0.28];
-    rLow = [0.08, THREE.MathUtils.lerp(-0.42, 0.86, curlR), THREE.MathUtils.lerp(0.88, 0.42, curlR)];
+    // Stable athletic alternating dumbbell bicep curls with ~18° outward elbow carrying angle
+    // (elbows stay anchored at sides, zero deltoid pinching or wrist over-folding!)
+    const curlL = 0.5 - 0.5 * Math.cos(elapsed * 2.6);
+    const curlR = 0.5 - 0.5 * Math.cos(elapsed * 2.6 + Math.PI);
+    lUp = [0.30, -0.92, 0.24];
+    lLow = [-0.04, THREE.MathUtils.lerp(-0.34, 0.78, curlL), THREE.MathUtils.lerp(0.93, 0.62, curlL)];
+    rUp = [-0.30, -0.92, 0.24];
+    rLow = [0.04, THREE.MathUtils.lerp(-0.34, 0.78, curlR), THREE.MathUtils.lerp(0.93, 0.62, curlR)];
   } else if (hobbyKind === 'gym_treadmill') {
     // Energetic cardio runner pumping arms in rhythm with treadmill stride!
     const pump = Math.sin(elapsed * 6.8);
@@ -1811,6 +1827,33 @@ export function applyHobbyActivityArms(
       isVrm0,
       fingerDir: [-0.28, -0.14, 0.95],
       palmDir: [-0.12, -0.96, 0.24],
+      frameQ,
+      t,
+    });
+  } else if (hobbyKind === 'gym_weights' && b.lh && b.rh) {
+    // Natural supinated bicep-curl wrist orientation (smoothly rotates from neutral hammer grip at bottom to palm-up at peak curl!)
+    const frameObj = vrm.scene.parent || vrm.scene;
+    frameObj.updateWorldMatrix(true, false);
+    const frameQ = new THREE.Quaternion();
+    frameObj.getWorldQuaternion(frameQ);
+    const isVrm0 = vrm.meta?.metaVersion === '0';
+    const curlL = 0.5 - 0.5 * Math.cos(elapsed * 2.6);
+    const curlR = 0.5 - 0.5 * Math.cos(elapsed * 2.6 + Math.PI);
+    orientHandInFrame({
+      hand: b.lh,
+      side: 1,
+      isVrm0,
+      fingerDir: [-0.04, THREE.MathUtils.lerp(-0.34, 0.78, curlL), THREE.MathUtils.lerp(0.93, 0.62, curlL)],
+      palmDir: [THREE.MathUtils.lerp(-0.78, -0.18, curlL), THREE.MathUtils.lerp(0.56, 0.72, curlL), THREE.MathUtils.lerp(0.24, -0.66, curlL)],
+      frameQ,
+      t,
+    });
+    orientHandInFrame({
+      hand: b.rh,
+      side: -1,
+      isVrm0,
+      fingerDir: [0.04, THREE.MathUtils.lerp(-0.34, 0.78, curlR), THREE.MathUtils.lerp(0.93, 0.62, curlR)],
+      palmDir: [THREE.MathUtils.lerp(0.78, 0.18, curlR), THREE.MathUtils.lerp(0.56, 0.72, curlR), THREE.MathUtils.lerp(0.24, -0.66, curlR)],
       frameQ,
       t,
     });

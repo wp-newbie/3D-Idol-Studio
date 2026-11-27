@@ -1,4 +1,4 @@
-import { VRMUtils, type VRM } from '@pixiv/three-vrm';
+import { VRMUtils, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm';
 
 /**
  * Canonical normalized-bone axis signs for `@pixiv/three-vrm` v3 across VRM 0.x and VRM 1.0.
@@ -63,5 +63,49 @@ export function normalizeVrmOrientation(vrm: VRM): void {
   } else {
     vrm.scene.rotation.set(0, 0, 0);
   }
+  enforceCanonicalBoneScales(vrm);
   vrm.scene.updateMatrixWorld(true);
+}
+
+const SCALE_GUARDED_BONES: VRMHumanBoneName[] = [
+  'hips',
+  'spine',
+  'chest',
+  'upperChest',
+  'neck',
+  'leftShoulder',
+  'rightShoulder',
+  'leftUpperArm',
+  'rightUpperArm',
+  'leftLowerArm',
+  'rightLowerArm',
+  'leftHand',
+  'rightHand',
+  'leftUpperLeg',
+  'rightUpperLeg',
+  'leftLowerLeg',
+  'rightLowerLeg',
+  'leftFoot',
+  'rightFoot',
+];
+
+/**
+ * Guarantees no non-uniform or unintended `bone.scale` distortion ever persists on torso, leg, or arm
+ * bones (head scale is intentionally excluded so `vrmMorphRig` can adjust head proportion cleanly).
+ */
+export function enforceCanonicalBoneScales(vrm: VRM | null): void {
+  const h = vrm?.humanoid;
+  if (!h) return;
+  for (const name of SCALE_GUARDED_BONES) {
+    const raw = h.getRawBoneNode(name);
+    if (raw && (Math.abs(raw.scale.x - 1) > 1e-3 || Math.abs(raw.scale.y - 1) > 1e-3 || Math.abs(raw.scale.z - 1) > 1e-3)) {
+      console.warn(`[VrmCoords] Resetting unintended raw bone scale on "${name}":`, raw.scale.toArray());
+      raw.scale.set(1, 1, 1);
+    }
+    const norm = h.getNormalizedBoneNode(name);
+    if (norm && (Math.abs(norm.scale.x - 1) > 1e-3 || Math.abs(norm.scale.y - 1) > 1e-3 || Math.abs(norm.scale.z - 1) > 1e-3)) {
+      console.warn(`[VrmCoords] Resetting unintended normalized bone scale on "${name}":`, norm.scale.toArray());
+      norm.scale.set(1, 1, 1);
+    }
+  }
 }

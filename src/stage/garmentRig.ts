@@ -1033,11 +1033,14 @@ function buildBodyClonedSkinnedGarment(params: {
     const yAnkle = Math.max(lm.lFoot.y, lm.rFoot.y);
     const yKnee = (lm.lLowLeg.y + lm.rLowLeg.y) * 0.5;
     const yHipJoint = (lm.lUpLeg.y + lm.rUpLeg.y) * 0.5;
-    const yWaistTop = lm.hips.y + Math.max(0.06, (lm.chest.y - lm.hips.y) * 0.45);
+    // Scale-invariant bind factor (~1.0 for standard 1.55–1.65m VRMs; adapts automatically to cm or chibi rigs!)
+    const unitScale = THREE.MathUtils.clamp((lm.neck.y - yAnkle) / 1.32, 0.45, 2.5);
+    const scaledInflate = inflate * unitScale;
+    const yWaistTop = lm.hips.y + Math.max(0.06 * unitScale, (lm.chest.y - lm.hips.y) * 0.45);
     const yShortHem = yKnee + (yHipJoint - yKnee) * 0.46;
     const yNeckLimit = lm.chest.y + (lm.neck.y - lm.chest.y) * topNeckFrac;
-    const yTorsoBottom = lm.hips.y - 0.025;
-    const ySwimBottom = yHipJoint - 0.055;
+    const yTorsoBottom = lm.hips.y - 0.025 * unitScale;
+    const ySwimBottom = yHipJoint - 0.055 * unitScale;
 
     const getDominantRegion = (vi: number) => {
       let bestW = -1;
@@ -1116,7 +1119,7 @@ function buildBodyClonedSkinnedGarment(params: {
             domR === REGION_LEG_R_UP ||
             domR === REGION_LEG_R_LOW;
           if (isLegOrPelvis && cy <= yWaistTop) {
-            const minY = zone === 'shorts' ? yShortHem : yAnkle + 0.028;
+            const minY = zone === 'shorts' ? yShortHem : yAnkle + 0.028 * unitScale;
             if (cy >= minY) {
               // Exclude any stray flared/wide cloth vertices far from hip/leg bones
               const d2 =
@@ -1129,7 +1132,7 @@ function buildBodyClonedSkinnedGarment(params: {
                   : domR === REGION_LEG_R_UP
                   ? distSqToSegment(cx, cy, cz, lm.rUpLeg, lm.rLowLeg)
                   : distSqToSegment(cx, cy, cz, lm.rLowLeg, lm.rFoot);
-              const maxR = domR === REGION_PELVIS ? 0.20 : 0.145;
+              const maxR = (domR === REGION_PELVIS ? 0.20 : 0.145) * unitScale;
               if (d2 <= maxR * maxR) keep = true;
             }
           }
@@ -1141,7 +1144,7 @@ function buildBodyClonedSkinnedGarment(params: {
             domR === REGION_LEG_R_UP;
           if (isTorsoOrPelvis && cy >= ySwimBottom && cy <= yNeckLimit) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
-            if (rad <= 0.21) keep = true;
+            if (rad <= 0.21 * unitScale) keep = true;
           }
         } else if (zone === 'gloves') {
           if (domR === REGION_ARM_L_LOW) {
@@ -1163,7 +1166,7 @@ function buildBodyClonedSkinnedGarment(params: {
           // torso_sleeveless / torso_short_sleeve / torso_long_sleeve
           if ((domR === REGION_TORSO || domR === REGION_PELVIS) && cy >= yTorsoBottom && cy <= yNeckLimit) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
-            if (rad <= 0.24) keep = true;
+            if (rad <= 0.24 * unitScale) keep = true;
           } else if (zone === 'torso_short_sleeve') {
             if (domR === REGION_ARM_L_UP) {
               if (projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= 0.44) keep = true;
@@ -1245,9 +1248,13 @@ function buildBodyClonedSkinnedGarment(params: {
       nz /= nLen;
 
       // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes through!
-      const ox = vx + nx * inflate;
-      const oy = vy + ny * inflate;
-      const oz = vz + nz * inflate;
+      // Tops get +2.5mm extra ease over the waist overlap band so shirts cleanly layer over pant waistbands.
+      const waistEase =
+        isTorsoZone && vy < yWaistTop + 0.02 * unitScale ? 0.0025 * unitScale : 0;
+      const vertInflate = scaledInflate + waistEase;
+      const ox = vx + nx * vertInflate;
+      const oy = vy + ny * vertInflate;
+      const oz = vz + nz * vertInflate;
 
       newPos[ni * 3] = ox;
       newPos[ni * 3 + 1] = oy;
@@ -1293,10 +1300,16 @@ function buildBodyClonedSkinnedGarment(params: {
     subGeo.setIndex(new THREE.BufferAttribute(newIndices, 1));
     subGeo.computeVertexNormals();
 
+    // Depth polygonOffset prevents z-fighting against underlying base VRM body skin at any camera distance
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = isTorsoZone ? -2 : -1;
+    mat.polygonOffsetUnits = isTorsoZone ? -2 : -1;
+
     const skinned = new THREE.SkinnedMesh(subGeo, mat);
     skinned.name = `GarmentSkinned_${zone}`;
     skinned.userData[GARMENT_TAG] = true;
     skinned.frustumCulled = false;
+    skinned.renderOrder = isTorsoZone ? 3 : 2;
     skinned.bind(src.skeleton, src.bindMatrix);
     src.parent.add(skinned);
 

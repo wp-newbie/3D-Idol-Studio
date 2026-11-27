@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { VRM } from '@pixiv/three-vrm';
 import type { VrmAppearanceVariant } from '../types/studio';
+import { enforceCanonicalBoneScales } from './vrmCoords';
 
 interface EyeSkinOrigSnap {
   colorHex: string | null;
@@ -66,6 +67,7 @@ export function applyVrmAppearanceVariant(params: {
     const headScale = variant ? THREE.MathUtils.clamp(variant.headScale ?? 1.0, 0.94, 1.12) : 1.0;
     headBone.scale.setScalar(headScale);
   }
+  enforceCanonicalBoneScales(vrm);
 
   // 2. Live Eye Iris recoloring & subtle Skin Tone warmth (non-destructive via WeakMap snapshots)
   const targetEyeHex = variant?.eyeColorHex || null;
