@@ -1332,6 +1332,7 @@ function buildBodyClonedSkinnedGarment(params: {
     outCoverage,
   } = params;
 
+  const fwdSign = vrm.meta?.metaVersion === '0' ? -1 : 1;
   let totalClonedTris = 0;
   let pelvisTris = 0;
   let pelvisMaxYFrac = 0;
@@ -1385,6 +1386,8 @@ function buildBodyClonedSkinnedGarment(params: {
     const yWaistTop = lm.hips.y + Math.max(0.088 * unitScale, (lm.chest.y - lm.hips.y) * 0.62);
     const yShortHem = yKnee + (yHipJoint - yKnee) * 0.46;
     const yNeckLimit = lm.chest.y + (lm.neck.y - lm.chest.y) * topNeckFrac;
+    // On the posterior / nape side, ensure tops rise higher to meet the skull base so the upper back is completely covered
+    const yNapeLimit = lm.chest.y + (lm.neck.y - lm.chest.y) * Math.max(0.96, topNeckFrac);
     // Extend torso bodice cleanly down into the hip/pelvis band so dresses & tops NEVER leave a bare waist gap!
     const yTorsoBottom = yHipJoint - 0.055 * unitScale;
     const ySwimBottom = yHipJoint - 0.055 * unitScale;
@@ -1637,10 +1640,12 @@ function buildBodyClonedSkinnedGarment(params: {
           }
         } else {
           // torso_sleeveless / torso_short_sleeve / torso_long_sleeve
+          const effectiveNeckY =
+            cz * fwdSign < lm.chest.z * fwdSign ? yNapeLimit : yNeckLimit;
           if (
             (domR === REGION_TORSO || domR === REGION_PELVIS) &&
             cy >= yTorsoBottom - 0.014 * unitScale &&
-            cy <= yNeckLimit + 0.014 * unitScale
+            cy <= effectiveNeckY + 0.014 * unitScale
           ) {
             const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
             if (rad <= 0.24 * unitScale) keep = true;
@@ -1663,9 +1668,9 @@ function buildBodyClonedSkinnedGarment(params: {
             if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
               keep = true;
             } else if (domR === REGION_ARM_L_LOW) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.95) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.98) keep = true;
             } else if (domR === REGION_ARM_R_LOW) {
-              if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.95) keep = true;
+              if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.98) keep = true;
             }
           }
         }
@@ -1801,7 +1806,9 @@ function buildBodyClonedSkinnedGarment(params: {
           domR === REGION_IGNORE
         ) {
           // Clamp ALL torso, pelvis, hip-border leg, and nape-border neck vertices onto straight tailored hems!
-          vy = THREE.MathUtils.clamp(vy, yTorsoBottom, yNeckLimit);
+          const effectiveNeckY =
+            vz * fwdSign < lm.chest.z * fwdSign ? yNapeLimit : yNeckLimit;
+          vy = THREE.MathUtils.clamp(vy, yTorsoBottom, effectiveNeckY);
         } else if (zone === 'torso_short_sleeve') {
           if (domR === REGION_ARM_L_UP) {
             [vx, vy, vz] = snapAlongSegment(vx, vy, vz, lm.lUpArm, lm.lLowArm, -0.25, 0.45);
@@ -3299,8 +3306,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.04 });
     }
 
-    // Only attach rigid chest pocket/buttons on non-skinned fallback torsos so seated forward lean
-    // NEVER detaches a rigid box flap out of the skinned pajama shirt!
+    // Never attach rigid 3D box flaps or floating tabs that detach during seated/forward postures
     if (chestGroup && !usedSkinnedTorso) {
       const trimZ = chestSurfaceFrontZ + 0.004;
       for (let i = 0; i < 3; i++) {
@@ -3308,9 +3314,6 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         btn.position.set(0, topNeckY - 0.045 - i * 0.052, trimZ * fwdSign);
         chestGroup.add(btn);
       }
-      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.046, 0.006), topAccentMat);
-      pocket.position.set(metrics.chestHalfW * 0.44, topNeckY * 0.42, trimZ * fwdSign);
-      chestGroup.add(pocket);
     }
   } else if (garmentStyle === 'school_blazer') {
     addExposedSkinUnderlay({

@@ -84,17 +84,21 @@ function buildAccessoryGroup(
       metalness: 0.5,
     });
 
-    // Headband arc sized cleanly outside anime head/hair envelope (zero ear/side-hair clipping!)
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.126, 0.0075, 10, 32, Math.PI * 0.84), bandMat);
-    band.position.set(0, 0.118, 0.006 * fwdSign);
-    band.rotation.z = Math.PI * 0.08;
+    // Sleek headband nestled cleanly along the top-back crown of the head (behind bangs/forehead)
+    // with radius closely fitting the skull so it NEVER slices horizontally through front bangs!
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.108, 0.0055, 10, 32, Math.PI * 0.72), bandMat);
+    band.position.set(0, 0.185, -0.018 * fwdSign);
+    band.rotation.x = 0.22 * fwdSign;
+    band.rotation.z = Math.PI * 0.14;
     group.add(band);
 
     for (const side of [-1, 1]) {
       const earPivot = new THREE.Group();
-      earPivot.position.set(side * 0.094, 0.218, 0.01 * fwdSign);
+      // Natural ear positioning on top of skull/crown behind frontal bangs
+      earPivot.position.set(side * 0.088, 0.208, -0.012 * fwdSign);
       earPivot.rotation.z = -side * 0.28;
       earPivot.rotation.y = side * 0.12 * fwdSign;
+      earPivot.rotation.x = 0.08 * fwdSign;
 
       const outerEar = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.088, 4), outerMat);
       outerEar.scale.set(1.0, 1.0, 0.48);
