@@ -1010,23 +1010,23 @@ export function getAnatomicalStretchFrame(
 
   switch (routine) {
     case 'overhead_sky_reach': {
-      // 8.4s cycle: deep inhale reaching tall -> gentle alternating ribcage elongation -> silky exhale
+      // 8.4s cycle: tall graceful vertical reach -> gentle alternating ribcage elongation -> silky exhale (never bending backwards!)
       const w = stretchHoldWave(elapsed / 8.4);
       const ribSway = Math.sin(elapsed * 1.15) * w;
       return {
         ...base,
         hipsY: 0.022 * w,
         hipsZ: -ribSway * 0.04,
-        spineLeanX: -0.08 * w,
+        spineLeanX: -0.04 * w,
         spineBendZ: ribSway * 0.07,
         spineTwistY: ribSway * 0.05,
-        chestArchX: -0.14 * w,
+        chestArchX: -0.07 * w,
         chestBendZ: ribSway * 0.08,
         leftUpperLegZ: -0.055,
         rightUpperLegZ: -0.055,
         leftLowerLegX: -0.02 * (1 - w),
         rightLowerLegX: -0.02 * (1 - w),
-        headPitch: -0.18 * w,
+        headPitch: -0.14 * w,
         headYaw: ribSway * 0.06,
         headRoll: ribSway * 0.09,
         relaxedEyes: 0.65 * w,
@@ -1087,25 +1087,25 @@ export function getAnatomicalStretchFrame(
     }
 
     case 'forward_hamstring_fold': {
-      // 9.4s graceful hip-hinge fold with soft anatomical micro-bent knees, then rolling tall
+      // 9.4s graceful forward hip-hinge fold with soft anatomical micro-bent knees, then rolling tall
       const w = stretchHoldWave(elapsed / 9.4);
-      const sway = Math.sin(elapsed * 1.35) * 0.045 * w;
+      const sway = Math.sin(elapsed * 1.35) * 0.04 * w;
       return {
         ...base,
-        hipsY: -0.055 * w,
+        hipsY: -0.045 * w,
         hipsZ: sway * 0.5,
-        spineLeanX: 0.56 * w,
+        spineLeanX: 0.36 * w,
         spineBendZ: sway,
         spineTwistY: sway * 0.7,
-        chestArchX: 0.32 * w - 0.06 * (1 - w),
+        chestArchX: 0.22 * w - 0.04 * (1 - w),
         chestBendZ: sway * 0.6,
-        leftUpperLegX: -0.08 * w,
-        rightUpperLegX: -0.08 * w,
+        leftUpperLegX: -0.06 * w,
+        rightUpperLegX: -0.06 * w,
         leftUpperLegZ: -0.075,
         rightUpperLegZ: -0.075,
-        leftLowerLegX: -0.18 * w - 0.03,
-        rightLowerLegX: -0.18 * w - 0.03,
-        headPitch: 0.34 * w - 0.06 * (1 - w),
+        leftLowerLegX: -0.16 * w - 0.03,
+        rightLowerLegX: -0.16 * w - 0.03,
+        headPitch: 0.22 * w - 0.04 * (1 - w),
         headYaw: sway * 0.8,
         headRoll: sway * 0.6,
         relaxedEyes: 0.45 * w,

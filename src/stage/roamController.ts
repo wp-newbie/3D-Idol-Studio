@@ -38,6 +38,7 @@ type TrackedBone =
   | 'hips'
   | 'spine'
   | 'chest'
+  | 'upperChest'
   | 'leftUpperArm'
   | 'rightUpperArm'
   | 'leftLowerArm'
@@ -53,6 +54,7 @@ const TRACKED_BONES: TrackedBone[] = [
   'hips',
   'spine',
   'chest',
+  'upperChest',
   'leftUpperArm',
   'rightUpperArm',
   'leftLowerArm',
@@ -436,7 +438,10 @@ export class AutonomousRoamController {
       );
     }
 
-    // Only actively seated in a chair once she has FINISHED walking to her spot (never walk while sitting!)
+    // Only actively seated in a chair once she has FINISHED walking to her spot (never walk while sitting, and stand up cleanly to stretch!)
+    if (activeHobbyKind === 'stretching' && this.behavior === 'sit_taskbar') {
+      this.behavior = 'idle';
+    }
     const isSeatedInChair =
       this.behavior === 'sit_taskbar' && !isMoving && !this.isDragging;
     const reportedBehavior: RoamBehavior =
@@ -497,6 +502,11 @@ export class AutonomousRoamController {
         },
         chest: {
           x: breath * 0.015 + bodyLang.spineLeanX * 0.22,
+          y: 0,
+          z: 0,
+        },
+        upperChest: {
+          x: breath * 0.01,
           y: 0,
           z: 0,
         },
@@ -625,12 +635,13 @@ export class AutonomousRoamController {
         targets.hips.z += Math.sin(elapsed * 1.6) * 0.035;
       } else if (this.behavior === 'stretch_look') {
         const stretch = 0.5 - 0.5 * Math.cos(elapsed * 0.98);
-        const forwardSign = isVrm0 ? 1 : -1;
-        targets.chest.x = -forwardSign * 0.08 * stretch;
+        const torsoForwardSign = isVrm0 ? -1 : 1;
+        targets.chest.x = -torsoForwardSign * 0.06 * stretch;
         targets.spine.y = Math.sin(elapsed * 0.85) * 0.14;
       } else if (this.behavior === 'peek') {
         const leanDir = this.currentX < 0 ? -1 : 1;
-        targets.spine.x = 0.09;
+        const torsoForwardSign = isVrm0 ? -1 : 1;
+        targets.spine.x = torsoForwardSign * 0.08;
         targets.spine.z = leanDir * 0.16;
       }
 
@@ -640,29 +651,36 @@ export class AutonomousRoamController {
       if (useStandingHobby && activeHobbyKind) {
         const stretchRoutine = activeStretchRoutine || 'overhead_sky_reach';
         const hf = getHobbyActivityFrame(activeHobbyKind, elapsed, stretchRoutine);
-        const forwardSign = isVrm0 ? 1 : -1;
+        const legForwardSign = isVrm0 ? 1 : -1;
+        // Right-hand rule: upward-pointing spine/chest/upperChest bend FORWARD with the OPPOSITE X sign of downward-pointing legs!
+        const torsoForwardSign = isVrm0 ? -1 : 1;
         targets.spine.y = hf.spineTwistY * 0.65;
-        targets.spine.x += forwardSign * hf.spineLeanX;
+        targets.spine.x += torsoForwardSign * hf.spineLeanX;
         targets.chest.y = hf.spineTwistY * 0.35;
-        targets.chest.x += forwardSign * hf.spineLeanX * 0.45;
+        targets.chest.x += torsoForwardSign * hf.spineLeanX * 0.45;
 
         if (activeHobbyKind === 'stretching') {
-          // Full-body smooth flexible anatomical stretching across hips, spine, chest, legs & knees!
+          // Full-body smooth flexible anatomical stretching across hips, spine, chest, upperChest, legs & knees!
           const sf = getAnatomicalStretchFrame(stretchRoutine, elapsed);
+          const safeSpineX = THREE.MathUtils.clamp(sf.spineLeanX, -0.09, 0.38);
+          const safeChestX = THREE.MathUtils.clamp(sf.chestArchX, -0.09, 0.24);
           targets.hips.y = sf.spineTwistY * 0.22;
           targets.hips.z = sf.hipsZ;
-          targets.spine.x = forwardSign * sf.spineLeanX;
+          targets.spine.x = torsoForwardSign * safeSpineX;
           targets.spine.z = sf.spineBendZ;
           targets.spine.y = sf.spineTwistY * 0.6;
-          targets.chest.x = forwardSign * sf.chestArchX;
-          targets.chest.z = sf.chestBendZ;
+          targets.chest.x = torsoForwardSign * safeChestX * 0.65;
+          targets.chest.z = sf.chestBendZ * 0.65;
           targets.chest.y = sf.spineTwistY * 0.4;
-          targets.leftUpperLeg.x = forwardSign * sf.leftUpperLegX;
+          targets.upperChest.x = torsoForwardSign * safeChestX * 0.35;
+          targets.upperChest.z = sf.chestBendZ * 0.35;
+          targets.upperChest.y = 0;
+          targets.leftUpperLeg.x = legForwardSign * sf.leftUpperLegX;
           targets.leftUpperLeg.z = armSign * sf.leftUpperLegZ;
-          targets.rightUpperLeg.x = forwardSign * sf.rightUpperLegX;
+          targets.rightUpperLeg.x = legForwardSign * sf.rightUpperLegX;
           targets.rightUpperLeg.z = -armSign * sf.rightUpperLegZ;
-          targets.leftLowerLeg.x = forwardSign * sf.leftLowerLegX;
-          targets.rightLowerLeg.x = forwardSign * sf.rightLowerLegX;
+          targets.leftLowerLeg.x = legForwardSign * sf.leftLowerLegX;
+          targets.rightLowerLeg.x = legForwardSign * sf.rightLowerLegX;
         } else if (activeHobbyKind === 'gym_treadmill') {
           // Rhythmic cardio jogging leg stride on the 3D treadmill!
           const jogPhase = elapsed * 6.8;
@@ -670,10 +688,10 @@ export class AutonomousRoamController {
           const kneeL = Math.max(0, -Math.cos(jogPhase)) * 0.56;
           const kneeR = Math.max(0, Math.cos(jogPhase)) * 0.56;
           targets.hips.y = Math.abs(Math.sin(jogPhase)) * 0.04;
-          targets.leftUpperLeg.x = forwardSign * stride;
-          targets.rightUpperLeg.x = -forwardSign * stride;
-          targets.leftLowerLeg.x = -forwardSign * kneeL;
-          targets.rightLowerLeg.x = -forwardSign * kneeR;
+          targets.leftUpperLeg.x = legForwardSign * stride;
+          targets.rightUpperLeg.x = -legForwardSign * stride;
+          targets.leftLowerLeg.x = -legForwardSign * kneeL;
+          targets.rightLowerLeg.x = -legForwardSign * kneeR;
         } else if (
           activeHobbyKind === 'gym_weights' ||
           activeHobbyKind === 'sports_basketball' ||

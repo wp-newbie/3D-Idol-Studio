@@ -1558,7 +1558,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           smoothRoll = THREE.MathUtils.lerp(smoothRoll, targetRoll, headLerp);
 
           const isVrm0 = vrm.meta?.metaVersion === '0';
-          const forwardSign = isVrm0 ? 1 : -1;
+          // Right-hand rule: upward-pointing torso bones (spine, chest, upperChest) bend FORWARD with -X on VRM 0.x and +X on VRM 1.0!
+          const torsoForwardSign = isVrm0 ? -1 : 1;
           const spineBone = vrm.humanoid?.getNormalizedBoneNode('spine');
           const chestBone = vrm.humanoid?.getNormalizedBoneNode('chest');
           const upperChestBone = vrm.humanoid?.getNormalizedBoneNode('upperChest');
@@ -1578,16 +1579,34 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             // - chest / upperChest: ~28% of pitch (+ subtle lumbar spine flex when gazing down!)
             // - neck: ~35%, safely clamped to [-0.32, 0.28] rad
             // - head: ~37% with chin-crowding protection so jawline ALWAYS clears choker/collar!
-            const chestPitchShare = THREE.MathUtils.clamp(smoothPitch * 0.28, -0.14, 0.16);
-            if (!activeEmote && Math.abs(chestPitchShare) > 0.001) {
+            // Both poseController & roamController overwrite spine/chest/upperChest every frame (zero accumulation!)
+            // and hard anatomical clamps guarantee the upper body can NEVER bend backwards unexpectedly.
+            const chestPitchShare = THREE.MathUtils.clamp(smoothPitch * 0.28, -0.12, 0.14);
+            if (!activeEmote && !activeReaction && Math.abs(chestPitchShare) > 0.001) {
               if (upperChestBone && chestBone) {
-                chestBone.rotation.x += forwardSign * chestPitchShare * 0.55;
-                upperChestBone.rotation.x += forwardSign * chestPitchShare * 0.45;
+                chestBone.rotation.x = THREE.MathUtils.clamp(
+                  chestBone.rotation.x + torsoForwardSign * chestPitchShare * 0.55,
+                  -0.36,
+                  0.36
+                );
+                upperChestBone.rotation.x = THREE.MathUtils.clamp(
+                  upperChestBone.rotation.x + torsoForwardSign * chestPitchShare * 0.45,
+                  -0.28,
+                  0.28
+                );
               } else if (chestBone) {
-                chestBone.rotation.x += forwardSign * chestPitchShare;
+                chestBone.rotation.x = THREE.MathUtils.clamp(
+                  chestBone.rotation.x + torsoForwardSign * chestPitchShare,
+                  -0.36,
+                  0.36
+                );
               }
               if (spineBone && smoothPitch > 0.04) {
-                spineBone.rotation.x += forwardSign * Math.min(0.08, smoothPitch * 0.16);
+                spineBone.rotation.x = THREE.MathUtils.clamp(
+                  spineBone.rotation.x + torsoForwardSign * Math.min(0.08, smoothPitch * 0.16),
+                  -0.44,
+                  0.44
+                );
               }
             }
 

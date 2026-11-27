@@ -256,6 +256,8 @@ export class AvatarPoseController {
     //   * Bending knee downward back to -Y is NEGATIVE X rotation (-Math.PI * 0.48)
     //   * Lowering left arm (-X -> -Y) is POSITIVE Z rotation (+1.18)
     const forwardSign = isVrm0 ? 1 : -1;
+    // Right-hand rule: upward-pointing spine/chest/upperChest bend FORWARD with opposite X sign of downward-pointing legs!
+    const torsoForwardSign = isVrm0 ? -1 : 1;
     const armDownSign = isVrm0 ? 1 : -1;
 
     const breath = Math.sin(elapsed * Math.max(1.4, bodyLang.breathingRate || 2.0));
@@ -318,23 +320,23 @@ export class AvatarPoseController {
       spine: {
         // Comfortable waist/lumbar forward flex during seated dining & studying so neck never cranes alone!
         x:
-          forwardSign * (0.06 + activityLeanX + seatedTableFlex * 0.62) +
-          bodyLang.spineLeanX * 0.75 +
-          (isMusicPlaying ? musicBeat * 0.045 : 0),
+          torsoForwardSign * (0.05 + activityLeanX + seatedTableFlex * 0.62) +
+          torsoForwardSign * (bodyLang.spineLeanX * 0.55) +
+          (isMusicPlaying ? torsoForwardSign * musicBeat * 0.04 : 0),
         y: gentleSway * (isMusicPlaying ? 0.06 : 0.018) + activityTwistY * 0.6,
         z: isMusicPlaying ? Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
       },
       chest: {
         // Gentle upper-thoracic follow-through + breathing sine wave
         x:
-          forwardSign * (-0.03 + activityLeanX * 0.45 + seatedTableFlex * 0.38) +
-          breath * 0.015 +
-          bodyLang.spineLeanX * 0.35,
+          torsoForwardSign * (-0.02 + activityLeanX * 0.42 + seatedTableFlex * 0.38) +
+          breath * 0.012 +
+          torsoForwardSign * (bodyLang.spineLeanX * 0.25),
         y: activityTwistY * 0.4,
         z: 0,
       },
       upperChest: {
-        x: forwardSign * (seatedTableFlex * 0.24) + breath * 0.01,
+        x: torsoForwardSign * (seatedTableFlex * 0.24) + breath * 0.008,
         y: 0,
         z: 0,
       },
@@ -684,6 +686,8 @@ export class AvatarPoseController {
 
     const isVrm0 = vrm.meta?.metaVersion === '0';
     const forwardSign = isVrm0 ? 1 : -1;
+    // Right-hand rule: upward-pointing spine/chest/upperChest bend FORWARD with opposite X sign of downward-pointing legs!
+    const torsoForwardSign = isVrm0 ? -1 : 1;
     const armDownSign = isVrm0 ? 1 : -1;
 
     // Slow peaceful breathing: ~0.8 Hz
@@ -702,12 +706,12 @@ export class AvatarPoseController {
     const targets: Record<PoseBoneName, { x: number; y: number; z: number }> = {
       hips: { x: 0, y: 0, z: 0 },
       spine: {
-        x: forwardSign * (0.02 + breath * 0.015),
+        x: torsoForwardSign * (0.02 + breath * 0.015),
         y: 0,
         z: 0,
       },
       chest: {
-        x: -forwardSign * (0.03 + breath * 0.028),
+        x: -torsoForwardSign * (0.03 + breath * 0.028),
         y: 0,
         z: 0,
       },
