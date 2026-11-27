@@ -692,22 +692,638 @@ function registerDynamicCollarRing(
   } satisfies DynamicCollarRingData;
 }
 
+const REGION_IGNORE = 0;
+const REGION_PELVIS = 1;
+const REGION_TORSO = 2;
+const REGION_LEG_L_UP = 3;
+const REGION_LEG_L_LOW = 4;
+const REGION_LEG_R_UP = 5;
+const REGION_LEG_R_LOW = 6;
+const REGION_ARM_L_UP = 7;
+const REGION_ARM_L_LOW = 8;
+const REGION_ARM_R_UP = 9;
+const REGION_ARM_R_LOW = 10;
+const REGION_HAND = 11;
+
+type SkinnedGarmentZone =
+  | 'pants'
+  | 'shorts'
+  | 'swimsuit'
+  | 'torso_sleeveless'
+  | 'torso_short_sleeve'
+  | 'torso_long_sleeve'
+  | 'sleeves_full'
+  | 'gloves';
+
+interface BodySkinCoverage {
+  hasCollarboneSkin: boolean;
+  hasUpperArmSkin: boolean;
+  hasForearmSkin: boolean;
+  hasUpperThighSkin: boolean;
+}
+
+const EXCLUDE_NON_BODY_MAT_REGEX =
+  /hair|face|eye|iris|sclera|cornea|brow|lash|mouth|teeth|tooth|tongue|blush|shoe|boot|heel|sandal|loafer|sneaker|footwear|sock|stocking|tights|accessory|ribbon|bow|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|scarf|hat|beret|headset|earring|glasses|wing|halo|bag|belt/i;
+const SKIRT_OR_LOOSE_BOTTOM_REGEX = /skirt|pleat|dress|gown|onepiece|one_piece|coat|trench|cloak|cape/i;
+const SKIN_MAT_REGEX = /body.*skin|skin.*body|_skin\b|^body$/i;
+const TOPS_MAT_REGEX = /top|shirt|blouse|sweater|hoodie|tee|blazer|jacket|inner|cloth|outfit|bodice|uniform|sailor/i;
+const EXCLUDE_BONE_REGEX = /hair|skirt|ribbon|cape|tail|tie|ear|wing/i;
+
+function classifySkeletonBoneRegions(
+  vrm: VRM,
+  skeleton: THREE.Skeleton
+): Uint8Array {
+  const h = vrm.humanoid;
+  const boneMap = new Map<THREE.Object3D, number>();
+  const reg = (name: VRMHumanBoneName, region: number) => {
+    const n = h?.getRawBoneNode(name);
+    if (n) boneMap.set(n, region);
+  };
+
+  reg('hips', REGION_PELVIS);
+  reg('spine', REGION_TORSO);
+  reg('chest', REGION_TORSO);
+  reg('upperChest', REGION_TORSO);
+  reg('leftShoulder', REGION_TORSO);
+  reg('rightShoulder', REGION_TORSO);
+  reg('neck', REGION_IGNORE);
+  reg('head', REGION_IGNORE);
+  reg('leftUpperLeg', REGION_LEG_L_UP);
+  reg('leftLowerLeg', REGION_LEG_L_LOW);
+  reg('leftFoot', REGION_LEG_L_LOW);
+  reg('leftToes', REGION_IGNORE);
+  reg('rightUpperLeg', REGION_LEG_R_UP);
+  reg('rightLowerLeg', REGION_LEG_R_LOW);
+  reg('rightFoot', REGION_LEG_R_LOW);
+  reg('rightToes', REGION_IGNORE);
+  reg('leftUpperArm', REGION_ARM_L_UP);
+  reg('leftLowerArm', REGION_ARM_L_LOW);
+  reg('rightUpperArm', REGION_ARM_R_UP);
+  reg('rightLowerArm', REGION_ARM_R_LOW);
+  reg('leftHand', REGION_HAND);
+  reg('rightHand', REGION_HAND);
+
+  const regions = new Uint8Array(skeleton.bones.length);
+  for (let i = 0; i < skeleton.bones.length; i++) {
+    const bone = skeleton.bones[i];
+    if (EXCLUDE_BONE_REGEX.test(bone.name || '')) {
+      regions[i] = REGION_IGNORE;
+      continue;
+    }
+    let cur: THREE.Object3D | null = bone;
+    let found = REGION_IGNORE;
+    while (cur) {
+      const r = boneMap.get(cur);
+      if (r !== undefined) {
+        found = r;
+        break;
+      }
+      if (EXCLUDE_BONE_REGEX.test(cur.name || '')) {
+        found = REGION_IGNORE;
+        break;
+      }
+      cur = cur.parent;
+    }
+    regions[i] = found;
+  }
+  return regions;
+}
+
+interface BindPoseLandmarks {
+  hips: THREE.Vector3;
+  chest: THREE.Vector3;
+  neck: THREE.Vector3;
+  lUpLeg: THREE.Vector3;
+  lLowLeg: THREE.Vector3;
+  lFoot: THREE.Vector3;
+  rUpLeg: THREE.Vector3;
+  rLowLeg: THREE.Vector3;
+  rFoot: THREE.Vector3;
+  lUpArm: THREE.Vector3;
+  lLowArm: THREE.Vector3;
+  lHand: THREE.Vector3;
+  rUpArm: THREE.Vector3;
+  rLowArm: THREE.Vector3;
+  rHand: THREE.Vector3;
+}
+
+function getBindPoseLandmarks(
+  vrm: VRM,
+  mesh: THREE.SkinnedMesh
+): BindPoseLandmarks | null {
+  const h = vrm.humanoid;
+  const skel = mesh.skeleton;
+  if (!h || !skel || !skel.boneInverses?.length) return null;
+
+  const invBind = mesh.bindMatrixInverse;
+  const tmpM = new THREE.Matrix4();
+  const restPosOf = (name: VRMHumanBoneName): THREE.Vector3 | null => {
+    const node = h.getRawBoneNode(name);
+    if (!node) return null;
+    const idx = skel.bones.indexOf(node as THREE.Bone);
+    if (idx < 0 || !skel.boneInverses[idx]) return null;
+    // boneInverse transforms mesh-bind-space -> bone-local-space, so invBind * boneInverse^-1 maps (0,0,0) -> bind vertex space!
+    tmpM.copy(skel.boneInverses[idx]).invert().premultiply(invBind);
+    return new THREE.Vector3().setFromMatrixPosition(tmpM);
+  };
+
+  const hips = restPosOf('hips');
+  const chest = restPosOf('chest') || restPosOf('spine');
+  const neck = restPosOf('neck');
+  const lUpLeg = restPosOf('leftUpperLeg');
+  const lLowLeg = restPosOf('leftLowerLeg');
+  const lFoot = restPosOf('leftFoot');
+  const rUpLeg = restPosOf('rightUpperLeg');
+  const rLowLeg = restPosOf('rightLowerLeg');
+  const rFoot = restPosOf('rightFoot');
+  const lUpArm = restPosOf('leftUpperArm');
+  const lLowArm = restPosOf('leftLowerArm');
+  const lHand = restPosOf('leftHand');
+  const rUpArm = restPosOf('rightUpperArm');
+  const rLowArm = restPosOf('rightLowerArm');
+  const rHand = restPosOf('rightHand');
+
+  if (!hips || !chest || !lUpLeg || !rUpLeg) return null;
+
+  return {
+    hips,
+    chest,
+    neck: neck || hips.clone().add(new THREE.Vector3(0, 0.44, 0)),
+    lUpLeg,
+    lLowLeg: lLowLeg || lUpLeg.clone().add(new THREE.Vector3(0, -0.38, 0)),
+    lFoot: lFoot || lUpLeg.clone().add(new THREE.Vector3(0, -0.76, 0)),
+    rUpLeg,
+    rLowLeg: rLowLeg || rUpLeg.clone().add(new THREE.Vector3(0, -0.38, 0)),
+    rFoot: rFoot || rUpLeg.clone().add(new THREE.Vector3(0, -0.76, 0)),
+    lUpArm: lUpArm || chest.clone().add(new THREE.Vector3(0.13, 0.14, 0)),
+    lLowArm: lLowArm || chest.clone().add(new THREE.Vector3(0.36, 0.14, 0)),
+    lHand: lHand || chest.clone().add(new THREE.Vector3(0.58, 0.14, 0)),
+    rUpArm: rUpArm || chest.clone().add(new THREE.Vector3(-0.13, 0.14, 0)),
+    rLowArm: rLowArm || chest.clone().add(new THREE.Vector3(-0.36, 0.14, 0)),
+    rHand: rHand || chest.clone().add(new THREE.Vector3(-0.58, 0.14, 0)),
+  };
+}
+
+function projectFracAlongSegment(
+  px: number,
+  py: number,
+  pz: number,
+  a: THREE.Vector3,
+  b: THREE.Vector3
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  const lenSq = dx * dx + dy * dy + dz * dz;
+  if (lenSq < 1e-6) return 0;
+  return ((px - a.x) * dx + (py - a.y) * dy + (pz - a.z) * dz) / lenSq;
+}
+
+function distSqToSegment(
+  px: number,
+  py: number,
+  pz: number,
+  a: THREE.Vector3,
+  b: THREE.Vector3
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  const lenSq = dx * dx + dy * dy + dz * dz;
+  const t = lenSq < 1e-6 ? 0 : THREE.MathUtils.clamp(((px - a.x) * dx + (py - a.y) * dy + (pz - a.z) * dz) / lenSq, 0, 1);
+  const cx = a.x + dx * t;
+  const cy = a.y + dy * t;
+  const cz = a.z + dz * t;
+  return (px - cx) * (px - cx) + (py - cy) * (py - cy) + (pz - cz) * (pz - cz);
+}
+
 /**
- * Adds seamless, bright anime MToon-matched skin underlays for bare shoulders, collarbone/neck,
- * arms, and upper thighs so VRoid Studio models exported with "Delete transparent meshes"
- * never show hollow chests, invisible arms, or muddy grey tubes!
+ * Inspects the loaded VRM's intact Body_SKIN SkinnedMesh triangles so we NEVER spawn redundant
+ * synthetic arm/thigh skin tubes (or wrist seams!) when the VRM already has real sculpted skin there.
+ */
+function inspectVrmBodySkinCoverage(
+  vrm: VRM,
+  avatarRoot: THREE.Object3D
+): BodySkinCoverage {
+  let collarCount = 0;
+  let upperArmCount = 0;
+  let forearmCount = 0;
+  let thighCount = 0;
+
+  avatarRoot.traverse((obj) => {
+    if (!(obj instanceof THREE.SkinnedMesh) || obj.userData?.[GARMENT_TAG]) return;
+    const geo = obj.geometry;
+    const pos = geo.attributes.position;
+    const skinIdx = geo.attributes.skinIndex;
+    const skinW = geo.attributes.skinWeight;
+    if (!pos || !skinIdx || !skinW) return;
+
+    const lm = getBindPoseLandmarks(vrm, obj);
+    if (!lm) return;
+    const regions = classifySkeletonBoneRegions(vrm, obj.skeleton);
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const groups =
+      geo.groups && geo.groups.length > 0
+        ? geo.groups
+        : [{ start: 0, count: geo.index ? geo.index.count : pos.count, materialIndex: 0 }];
+    const idxAttr = geo.index;
+
+    const getDominantRegion = (vi: number) => {
+      let bestW = -1;
+      let bestR = REGION_IGNORE;
+      for (let k = 0; k < 4; k++) {
+        const w = skinW.getComponent(vi, k);
+        if (w > bestW) {
+          bestW = w;
+          bestR = regions[Math.round(skinIdx.getComponent(vi, k))] ?? REGION_IGNORE;
+        }
+      }
+      return bestR;
+    };
+
+    for (const grp of groups) {
+      const mat = mats[grp.materialIndex ?? 0];
+      const matName = `${obj.name || ''} ${mat?.name || ''}`;
+      if (!SKIN_MAT_REGEX.test(matName) || /face/i.test(matName)) continue;
+
+      const end = grp.start + grp.count;
+      for (let tri = grp.start; tri + 2 < end; tri += 3) {
+        const i0 = idxAttr ? idxAttr.getX(tri) : tri;
+        const r = getDominantRegion(i0);
+        const y = pos.getY(i0);
+        if (r === REGION_TORSO && y > lm.chest.y + (lm.neck.y - lm.chest.y) * 0.55 && y < lm.neck.y + 0.01) {
+          collarCount++;
+        } else if (r === REGION_ARM_L_UP || r === REGION_ARM_R_UP) {
+          upperArmCount++;
+        } else if (r === REGION_ARM_L_LOW || r === REGION_ARM_R_LOW) {
+          forearmCount++;
+        } else if ((r === REGION_LEG_L_UP || r === REGION_LEG_R_UP) && y > (lm.lUpLeg.y + lm.lLowLeg.y) * 0.5) {
+          thighCount++;
+        }
+      }
+    }
+  });
+
+  return {
+    hasCollarboneSkin: collarCount >= 40,
+    hasUpperArmSkin: upperArmCount >= 40,
+    hasForearmSkin: forearmCount >= 40,
+    hasUpperThighSkin: thighCount >= 40,
+  };
+}
+
+/**
+ * Clones REAL sculpted triangles directly from the VRM's own `SkinnedMesh` body/torso topology,
+ * extrudes them smoothly outward along position-welded vertex normals (`inflate` meters),
+ * generates clean seamless fabric UVs, and binds them to the EXACT SAME skeleton & bone weights!
+ *
+ * Result:
+ *  - ZERO cylindrical limb tubes or knee balls or diaper pelvis!
+ *  - Mathematically ZERO skin clipping on thighs, calves, hips, waist, or shoulders in ANY pose!
+ */
+function buildBodyClonedSkinnedGarment(params: {
+  vrm: VRM;
+  avatarRoot: THREE.Object3D;
+  mat: THREE.Material;
+  zone: SkinnedGarmentZone;
+  inflate: number;
+  topNeckFrac?: number;
+  uvScale?: number;
+}): number {
+  const {
+    vrm,
+    avatarRoot,
+    mat,
+    zone,
+    inflate,
+    topNeckFrac = 0.86,
+    uvScale = 1.65,
+  } = params;
+
+  let totalClonedTris = 0;
+
+  // Snapshot candidate source SkinnedMeshes first so adding cloned siblings doesn't re-traverse them
+  const sourceMeshes: THREE.SkinnedMesh[] = [];
+  avatarRoot.traverse((obj) => {
+    if (obj instanceof THREE.SkinnedMesh && !obj.userData?.[GARMENT_TAG]) {
+      sourceMeshes.push(obj);
+    }
+  });
+
+  for (const src of sourceMeshes) {
+    if (!src.parent || !src.skeleton) continue;
+    const geo = src.geometry;
+    const posAttr = geo.attributes.position;
+    const normAttr = geo.attributes.normal;
+    const skinIdxAttr = geo.attributes.skinIndex;
+    const skinWAttr = geo.attributes.skinWeight;
+    if (!posAttr || !normAttr || !skinIdxAttr || !skinWAttr) continue;
+
+    const lm = getBindPoseLandmarks(vrm, src);
+    if (!lm) continue;
+
+    const regions = classifySkeletonBoneRegions(vrm, src.skeleton);
+    const mats = Array.isArray(src.material) ? src.material : [src.material];
+    const groups =
+      geo.groups && geo.groups.length > 0
+        ? geo.groups
+        : [{ start: 0, count: geo.index ? geo.index.count : posAttr.count, materialIndex: 0 }];
+    const idxAttr = geo.index;
+
+    const yAnkle = Math.max(lm.lFoot.y, lm.rFoot.y);
+    const yKnee = (lm.lLowLeg.y + lm.rLowLeg.y) * 0.5;
+    const yHipJoint = (lm.lUpLeg.y + lm.rUpLeg.y) * 0.5;
+    const yWaistTop = lm.hips.y + Math.max(0.06, (lm.chest.y - lm.hips.y) * 0.45);
+    const yShortHem = yKnee + (yHipJoint - yKnee) * 0.46;
+    const yNeckLimit = lm.chest.y + (lm.neck.y - lm.chest.y) * topNeckFrac;
+    const yTorsoBottom = lm.hips.y - 0.025;
+    const ySwimBottom = yHipJoint - 0.055;
+
+    const getDominantRegion = (vi: number) => {
+      let bestW = -1;
+      let bestR = REGION_IGNORE;
+      for (let k = 0; k < 4; k++) {
+        const w = skinWAttr.getComponent(vi, k);
+        if (w > bestW) {
+          bestW = w;
+          bestR = regions[Math.round(skinIdxAttr.getComponent(vi, k))] ?? REGION_IGNORE;
+        }
+      }
+      return bestR;
+    };
+
+    // Determine which material groups are valid sources for this garment zone
+    const isLowerZone = zone === 'pants' || zone === 'shorts';
+    const isTorsoZone =
+      zone === 'torso_sleeveless' ||
+      zone === 'torso_short_sleeve' ||
+      zone === 'torso_long_sleeve' ||
+      zone === 'sleeves_full' ||
+      zone === 'swimsuit';
+
+    const keptIndices: number[] = [];
+
+    for (const grp of groups) {
+      const m = mats[grp.materialIndex ?? 0];
+      const matName = `${m?.name || ''} ${src.name || ''}`;
+      if (EXCLUDE_NON_BODY_MAT_REGEX.test(matName)) continue;
+
+      const isSkin = SKIN_MAT_REGEX.test(matName);
+      const isTops = TOPS_MAT_REGEX.test(matName);
+      const isSkirtOrLoose = SKIRT_OR_LOOSE_BOTTOM_REGEX.test(matName);
+
+      if (zone === 'gloves') {
+        if (!isSkin) continue;
+      } else if (isLowerZone) {
+        if (isSkirtOrLoose || (isTops && !isSkin)) continue;
+      } else if (isTorsoZone) {
+        if (isSkirtOrLoose) continue;
+        if (!isSkin && !isTops) continue;
+      }
+
+      const end = grp.start + grp.count;
+      for (let tri = grp.start; tri + 2 < end; tri += 3) {
+        const i0 = idxAttr ? idxAttr.getX(tri) : tri;
+        const i1 = idxAttr ? idxAttr.getX(tri + 1) : tri + 1;
+        const i2 = idxAttr ? idxAttr.getX(tri + 2) : tri + 2;
+
+        const r0 = getDominantRegion(i0);
+        const r1 = getDominantRegion(i1);
+        const r2 = getDominantRegion(i2);
+        if (
+          r0 === REGION_IGNORE ||
+          r1 === REGION_IGNORE ||
+          r2 === REGION_IGNORE ||
+          r0 === REGION_HAND ||
+          r1 === REGION_HAND ||
+          r2 === REGION_HAND
+        ) {
+          continue;
+        }
+
+        const cx = (posAttr.getX(i0) + posAttr.getX(i1) + posAttr.getX(i2)) / 3;
+        const cy = (posAttr.getY(i0) + posAttr.getY(i1) + posAttr.getY(i2)) / 3;
+        const cz = (posAttr.getZ(i0) + posAttr.getZ(i1) + posAttr.getZ(i2)) / 3;
+
+        const domR = r0 === r1 || r0 === r2 ? r0 : r1;
+        let keep = false;
+
+        if (zone === 'pants' || zone === 'shorts') {
+          const isLegOrPelvis =
+            domR === REGION_PELVIS ||
+            domR === REGION_LEG_L_UP ||
+            domR === REGION_LEG_L_LOW ||
+            domR === REGION_LEG_R_UP ||
+            domR === REGION_LEG_R_LOW;
+          if (isLegOrPelvis && cy <= yWaistTop) {
+            const minY = zone === 'shorts' ? yShortHem : yAnkle + 0.028;
+            if (cy >= minY) {
+              // Exclude any stray flared/wide cloth vertices far from hip/leg bones
+              const d2 =
+                domR === REGION_PELVIS
+                  ? (cx - lm.hips.x) ** 2 + (cz - lm.hips.z) ** 2
+                  : domR === REGION_LEG_L_UP
+                  ? distSqToSegment(cx, cy, cz, lm.lUpLeg, lm.lLowLeg)
+                  : domR === REGION_LEG_L_LOW
+                  ? distSqToSegment(cx, cy, cz, lm.lLowLeg, lm.lFoot)
+                  : domR === REGION_LEG_R_UP
+                  ? distSqToSegment(cx, cy, cz, lm.rUpLeg, lm.rLowLeg)
+                  : distSqToSegment(cx, cy, cz, lm.rLowLeg, lm.rFoot);
+              const maxR = domR === REGION_PELVIS ? 0.20 : 0.145;
+              if (d2 <= maxR * maxR) keep = true;
+            }
+          }
+        } else if (zone === 'swimsuit') {
+          const isTorsoOrPelvis =
+            domR === REGION_TORSO ||
+            domR === REGION_PELVIS ||
+            domR === REGION_LEG_L_UP ||
+            domR === REGION_LEG_R_UP;
+          if (isTorsoOrPelvis && cy >= ySwimBottom && cy <= yNeckLimit) {
+            const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
+            if (rad <= 0.21) keep = true;
+          }
+        } else if (zone === 'gloves') {
+          if (domR === REGION_ARM_L_LOW) {
+            const f = projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand);
+            if (f >= 0.14 && f <= 0.96) keep = true;
+          } else if (domR === REGION_ARM_R_LOW) {
+            const f = projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand);
+            if (f >= 0.14 && f <= 0.96) keep = true;
+          }
+        } else if (zone === 'sleeves_full') {
+          if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
+            keep = true;
+          } else if (domR === REGION_ARM_L_LOW) {
+            if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.94) keep = true;
+          } else if (domR === REGION_ARM_R_LOW) {
+            if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.94) keep = true;
+          }
+        } else {
+          // torso_sleeveless / torso_short_sleeve / torso_long_sleeve
+          if ((domR === REGION_TORSO || domR === REGION_PELVIS) && cy >= yTorsoBottom && cy <= yNeckLimit) {
+            const rad = Math.hypot(cx - lm.hips.x, cz - lm.hips.z);
+            if (rad <= 0.24) keep = true;
+          } else if (zone === 'torso_short_sleeve') {
+            if (domR === REGION_ARM_L_UP) {
+              if (projectFracAlongSegment(cx, cy, cz, lm.lUpArm, lm.lLowArm) <= 0.44) keep = true;
+            } else if (domR === REGION_ARM_R_UP) {
+              if (projectFracAlongSegment(cx, cy, cz, lm.rUpArm, lm.rLowArm) <= 0.44) keep = true;
+            }
+          } else if (zone === 'torso_long_sleeve') {
+            if (domR === REGION_ARM_L_UP || domR === REGION_ARM_R_UP) {
+              keep = true;
+            } else if (domR === REGION_ARM_L_LOW) {
+              if (projectFracAlongSegment(cx, cy, cz, lm.lLowArm, lm.lHand) <= 0.94) keep = true;
+            } else if (domR === REGION_ARM_R_LOW) {
+              if (projectFracAlongSegment(cx, cy, cz, lm.rLowArm, lm.rHand) <= 0.94) keep = true;
+            }
+          }
+        }
+
+        if (keep) {
+          keptIndices.push(i0, i1, i2);
+        }
+      }
+    }
+
+    if (keptIndices.length < 30) continue;
+
+    // Weld normals across colocated vertex positions so UV seam splits extrude watertight with ZERO cracks!
+    const uniqueVerts: number[] = [];
+    const oldToNew = new Map<number, number>();
+    const weldedNormals = new Map<string, [number, number, number]>();
+
+    const quantKey = (x: number, y: number, z: number) =>
+      `${Math.round(x * 2000)}_${Math.round(y * 2000)}_${Math.round(z * 2000)}`;
+
+    const newIndices = new Uint32Array(keptIndices.length);
+    for (let k = 0; k < keptIndices.length; k++) {
+      const oldI = keptIndices[k];
+      let newI = oldToNew.get(oldI);
+      if (newI === undefined) {
+        newI = uniqueVerts.length;
+        oldToNew.set(oldI, newI);
+        uniqueVerts.push(oldI);
+
+        const vx = posAttr.getX(oldI);
+        const vy = posAttr.getY(oldI);
+        const vz = posAttr.getZ(oldI);
+        const key = quantKey(vx, vy, vz);
+        let acc = weldedNormals.get(key);
+        if (!acc) {
+          acc = [0, 0, 0];
+          weldedNormals.set(key, acc);
+        }
+        acc[0] += normAttr.getX(oldI);
+        acc[1] += normAttr.getY(oldI);
+        acc[2] += normAttr.getZ(oldI);
+      }
+      newIndices[k] = newI;
+    }
+
+    const vCount = uniqueVerts.length;
+    const newPos = new Float32Array(vCount * 3);
+    const newNorm = new Float32Array(vCount * 3);
+    const newUv = new Float32Array(vCount * 2);
+    const newSkinIdx = new Uint16Array(vCount * 4);
+    const newSkinW = new Float32Array(vCount * 4);
+
+    for (let ni = 0; ni < vCount; ni++) {
+      const oi = uniqueVerts[ni];
+      const vx = posAttr.getX(oi);
+      const vy = posAttr.getY(oi);
+      const vz = posAttr.getZ(oi);
+
+      const acc = weldedNormals.get(quantKey(vx, vy, vz));
+      let nx = acc ? acc[0] : normAttr.getX(oi);
+      let ny = acc ? acc[1] : normAttr.getY(oi);
+      let nz = acc ? acc[2] : normAttr.getZ(oi);
+      const nLen = Math.hypot(nx, ny, nz) || 1;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+
+      // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes through!
+      const ox = vx + nx * inflate;
+      const oy = vy + ny * inflate;
+      const oz = vz + nz * inflate;
+
+      newPos[ni * 3] = ox;
+      newPos[ni * 3 + 1] = oy;
+      newPos[ni * 3 + 2] = oz;
+      newNorm[ni * 3] = nx;
+      newNorm[ni * 3 + 1] = ny;
+      newNorm[ni * 3 + 2] = nz;
+
+      // Clean seamless cylindrical UVs (per-leg centerline on legs so plaid/stripes run straight!)
+      const domR = getDominantRegion(oi);
+      let u = 0;
+      let v = vy * uvScale;
+      if (domR === REGION_LEG_L_UP || domR === REGION_LEG_L_LOW) {
+        u = (Math.atan2(ox - lm.lUpLeg.x, oz - lm.lUpLeg.z) / (Math.PI * 2) + 0.5) * 1.15;
+      } else if (domR === REGION_LEG_R_UP || domR === REGION_LEG_R_LOW) {
+        u = (Math.atan2(ox - lm.rUpLeg.x, oz - lm.rUpLeg.z) / (Math.PI * 2) + 0.5) * 1.15;
+      } else if (
+        domR === REGION_ARM_L_UP ||
+        domR === REGION_ARM_L_LOW ||
+        domR === REGION_ARM_R_UP ||
+        domR === REGION_ARM_R_LOW
+      ) {
+        u = ox * uvScale * 1.1;
+        v = (Math.atan2(oy - lm.lUpArm.y, oz - lm.lUpArm.z) / (Math.PI * 2) + 0.5) * 0.9;
+      } else {
+        u = (Math.atan2(ox - lm.hips.x, oz - lm.hips.z) / (Math.PI * 2) + 0.5) * 1.6;
+      }
+      newUv[ni * 2] = u;
+      newUv[ni * 2 + 1] = v;
+
+      for (let c = 0; c < 4; c++) {
+        newSkinIdx[ni * 4 + c] = Math.round(skinIdxAttr.getComponent(oi, c));
+        newSkinW[ni * 4 + c] = skinWAttr.getComponent(oi, c);
+      }
+    }
+
+    const subGeo = new THREE.BufferGeometry();
+    subGeo.setAttribute('position', new THREE.BufferAttribute(newPos, 3));
+    subGeo.setAttribute('normal', new THREE.BufferAttribute(newNorm, 3));
+    subGeo.setAttribute('uv', new THREE.BufferAttribute(newUv, 2));
+    subGeo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(newSkinIdx, 4));
+    subGeo.setAttribute('skinWeight', new THREE.BufferAttribute(newSkinW, 4));
+    subGeo.setIndex(new THREE.BufferAttribute(newIndices, 1));
+    subGeo.computeVertexNormals();
+
+    const skinned = new THREE.SkinnedMesh(subGeo, mat);
+    skinned.name = `GarmentSkinned_${zone}`;
+    skinned.userData[GARMENT_TAG] = true;
+    skinned.frustumCulled = false;
+    skinned.bind(src.skeleton, src.bindMatrix);
+    src.parent.add(skinned);
+
+    totalClonedTris += keptIndices.length / 3;
+  }
+
+  return totalClonedTris;
+}
+
+/**
+ * Adds seamless, bright anime MToon-matched skin underlays ONLY where the VRM model has missing
+ * VRoid transparent-mesh cutouts (never adding redundant forearm tubes or wrist seams when real skin exists!).
  */
 function addExposedSkinUnderlay(params: {
   vrm: VRM;
+  avatarRoot: THREE.Object3D;
   metrics: TorsoMetrics;
   skinHex: string;
   armMode?: 'full' | 'forearms_only' | 'upper_only' | 'below_cap' | 'none';
   collarboneBridge?: boolean;
   upperThighs?: boolean;
   fwdSign: number;
+  coverage?: BodySkinCoverage;
 }): void {
   const {
     vrm,
+    avatarRoot,
     metrics,
     skinHex,
     armMode = 'none',
@@ -717,11 +1333,12 @@ function addExposedSkinUnderlay(params: {
   } = params;
   const h = vrm.humanoid;
   if (!h) return;
+  const cov = params.coverage ?? inspectVrmBodySkinCoverage(vrm, avatarRoot);
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const skinMat = makeAnimeSkinMaterial(skinHex);
 
-  // 1. Seamless Collarbone + Upper Chest + Neck Skin Bridge (fills VRoid's deleted upper-chest triangles cleanly!)
-  if (collarboneBridge && metrics.chest) {
+  // 1. Collarbone + Upper Chest Skin Bridge ONLY if VRoid deleted upper-chest skin triangles
+  if (collarboneBridge && !cov.hasCollarboneSkin && metrics.chest) {
     const bridgeG = attachGroup(metrics.chest, 'GarmentSkinCollarbone');
     if (bridgeG) {
       const yLow = metrics.yShoulderFromChest - 0.065;
@@ -772,7 +1389,7 @@ function addExposedSkinUnderlay(params: {
       const hand = h.getRawBoneNode(s.hand);
       const fallbackX = (s.side === 1) !== isVrm0 ? 1 : -1;
 
-      if (up && armMode !== 'forearms_only') {
+      if (up && armMode !== 'forearms_only' && !cov.hasUpperArmSkin) {
         const upG = attachGroup(up, `GarmentSkinArmUp_${s.upper}`);
         if (upG) {
           const startFrac = armMode === 'below_cap' ? 0.14 : -0.05;
@@ -797,11 +1414,11 @@ function addExposedSkinUnderlay(params: {
         }
       }
 
-      if (low && armMode !== 'upper_only') {
+      if (low && armMode !== 'upper_only' && !cov.hasForearmSkin) {
         const lowG = attachGroup(low, `GarmentSkinArmLow_${s.lower}`);
         if (lowG) {
           const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), skinMat);
-          const tube = createBoneSegmentTube({
+          const tube = createTaperedEllipticalForearmTube({
             bone: low,
             childBone: hand,
             fallbackDir: new THREE.Vector3(fallbackX, 0, 0),
@@ -810,8 +1427,8 @@ function addExposedSkinUnderlay(params: {
             endFrac: 0.99,
             radiusStart: 0.024,
             radiusEnd: 0.018,
+            ellipseScaleZ: 0.88,
             mat: skinMat,
-            radialSegments: 16,
           });
           lowG.add(elbowBall, tube);
         }
@@ -819,8 +1436,8 @@ function addExposedSkinUnderlay(params: {
     }
   }
 
-  // 3. Slim Upper-Thigh Skin Underlay (fills any hip-to-mid-thigh cutout VRoid made under a skirt!)
-  if (upperThighs) {
+  // 3. Slim Upper-Thigh Skin Underlay ONLY if VRoid deleted upper-thigh skin under the original skirt
+  if (upperThighs && !cov.hasUpperThighSkin) {
     const legSides: Array<{ upper: VRMHumanBoneName; lower: VRMHumanBoneName }> = [
       { upper: 'leftUpperLeg', lower: 'leftLowerLeg' },
       { upper: 'rightUpperLeg', lower: 'rightLowerLeg' },
@@ -850,35 +1467,61 @@ function addExposedSkinUnderlay(params: {
 
 function addLegPants(params: {
   vrm: VRM;
+  avatarRoot: THREE.Object3D;
   mat: THREE.Material;
   cuffMat?: THREE.Material;
-  stripeMat?: THREE.Material;
   endFracLower?: number;
   shortsOnly?: boolean;
   looseFactor?: number;
   fwdSign: number;
-}): void {
+}): boolean {
   const {
     vrm,
+    avatarRoot,
     mat,
     cuffMat,
-    stripeMat,
     endFracLower = 0.95,
     shortsOnly = false,
     looseFactor = 1.0,
+    fwdSign,
   } = params;
+
+  // Primary path: True body-fitted SkinnedMesh pants/leggings/shorts cloned directly from the VRM's real
+  // sculpted hips, thighs, knees, and calves (ZERO cylinders, ZERO knee balls, ZERO skin clipping!)
+  const inflate = shortsOnly
+    ? 0.0085
+    : looseFactor <= 0.98
+    ? 0.006
+    : THREE.MathUtils.clamp(0.007 + (looseFactor - 1.0) * 0.035, 0.0065, 0.013);
+  const clonedTris = buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat,
+    zone: shortsOnly ? 'shorts' : 'pants',
+    inflate,
+    uvScale: 1.75,
+  });
+  if (clonedTris >= 80) {
+    return true;
+  }
+
+  // Fallback for non-skinned primitive avatars ONLY (using twist-free leg basis so calves NEVER flip forward!)
   const h = vrm.humanoid;
-  if (!h) return;
+  if (!h) return false;
 
   const sides: Array<{
     upper: VRMHumanBoneName;
     lower: VRMHumanBoneName;
     foot: VRMHumanBoneName;
-    sign: number;
   }> = [
-    { upper: 'leftUpperLeg', lower: 'leftLowerLeg', foot: 'leftFoot', sign: 1 },
-    { upper: 'rightUpperLeg', lower: 'rightLowerLeg', foot: 'rightFoot', sign: -1 },
+    { upper: 'leftUpperLeg', lower: 'leftLowerLeg', foot: 'leftFoot' },
+    { upper: 'rightUpperLeg', lower: 'rightLowerLeg', foot: 'rightFoot' },
   ];
+
+  const legBasisMat = new THREE.Matrix4();
+  const bX = new THREE.Vector3();
+  const bY = new THREE.Vector3();
+  const bZ = new THREE.Vector3();
 
   for (const s of sides) {
     const up = h.getRawBoneNode(s.upper);
@@ -887,82 +1530,44 @@ function addLegPants(params: {
 
     const upGroup = attachGroup(up, `GarmentLegUp_${s.upper}`);
     if (upGroup && up) {
-      // Smooth rounded hip cap tucked cleanly INSIDE pelvis shell (eliminates boxy flat top cylinder rims at hips!)
-      const hipBall = new THREE.Mesh(
-        new THREE.SphereGeometry(0.072 * looseFactor, 14, 12),
-        mat
-      );
-      hipBall.position.set(0, -0.015, 0);
-      upGroup.add(hipBall);
-
       const tube = createBoneSegmentTube({
         bone: up,
         childBone: low,
         fallbackDir: new THREE.Vector3(0, -1, 0),
         fallbackLen: 0.38,
-        startFrac: 0.02,
-        endFrac: shortsOnly ? 0.42 : 1.04,
-        radiusStart: 0.074 * looseFactor,
-        radiusEnd: (shortsOnly ? 0.070 : 0.064) * looseFactor,
+        startFrac: -0.02,
+        endFrac: shortsOnly ? 0.44 : 1.03,
+        radiusStart: 0.082 * looseFactor,
+        radiusEnd: (shortsOnly ? 0.072 : 0.064) * looseFactor,
         mat,
       });
       upGroup.add(tube);
-
-      if (shortsOnly && cuffMat) {
-        const hem = createBoneSegmentTube({
-          bone: up,
-          childBone: low,
-          fallbackDir: new THREE.Vector3(0, -1, 0),
-          fallbackLen: 0.38,
-          startFrac: 0.36,
-          endFrac: 0.43,
-          radiusStart: 0.073 * looseFactor,
-          radiusEnd: 0.073 * looseFactor,
-          mat: cuffMat,
-        });
-        upGroup.add(hem);
-      }
-
-      if (stripeMat && !shortsOnly) {
-        const stripe = createBoneSegmentTube({
-          bone: up,
-          childBone: low,
-          fallbackDir: new THREE.Vector3(0, -1, 0),
-          fallbackLen: 0.38,
-          startFrac: 0.05,
-          endFrac: 0.98,
-          radiusStart: 0.011,
-          radiusEnd: 0.009,
-          mat: stripeMat,
-          radialSegments: 8,
-        });
-        stripe.position.x += s.sign * 0.068 * looseFactor;
-        upGroup.add(stripe);
-      }
     }
 
     if (!shortsOnly && low) {
       const lowGroup = attachGroup(low, `GarmentLegLow_${s.lower}`);
       if (lowGroup) {
-        const kneeJoint = new THREE.Mesh(
-          new THREE.SphereGeometry(0.064 * looseFactor, 14, 12),
-          mat
-        );
-        // Anatomical calf-contoured lower pant leg (posterior calf bulge clearance so calves NEVER poke out the back!)
         const segVec =
           ft && ft.position.lengthSq() > 1e-5
             ? ft.position.clone()
             : new THREE.Vector3(0, -0.38, 0);
         const totalLen = segVec.length();
-        const dir = segVec.clone().normalize();
-        const startF = -0.03;
+        bY.copy(segVec).normalize();
+        // Twist-free basis: local +Z ALWAYS aligns with character forward (+fwdSign * Z), NEVER flipped 180°!
+        bZ.set(0, 0, fwdSign);
+        bZ.addScaledVector(bY, -bZ.dot(bY)).normalize();
+        bX.crossVectors(bY, bZ).normalize();
+        bZ.crossVectors(bX, bY).normalize();
+        legBasisMat.makeBasis(bX, bY, bZ);
+
+        const startF = -0.02;
         const endF = endFracLower;
         const segLen = Math.max(0.05, totalLen * (endF - startF));
         const midDist = totalLen * ((startF + endF) * 0.5);
 
         const shinGeo = new THREE.CylinderGeometry(
-          0.050 * looseFactor,
-          0.066 * looseFactor,
+          0.048 * looseFactor,
+          0.064 * looseFactor,
           segLen,
           20,
           10,
@@ -973,21 +1578,19 @@ function addLegPants(params: {
           const vx = shinPos.getX(vi);
           const vy = shinPos.getY(vi);
           const vz = shinPos.getZ(vi);
-          // t = 0 at knee (+segLen/2 after quaternion align? Note: +Y maps along `dir` = downward -> y=-segLen/2 is knee, y=+segLen/2 is ankle!)
           const t = THREE.MathUtils.clamp((vy + segLen * 0.5) / segLen, 0, 1);
-          // Smooth calf fullness peaking around t = 0.36 down the shin!
-          const calfWave = Math.exp(-Math.pow((t - 0.36) / 0.28, 2));
-          const radScale = 1.0 + calfWave * 0.16;
-          // Shift calf vertices gently posteriorly (-fwdSign in Z) to completely clear the calf muscle
-          const backShift = -params.fwdSign * calfWave * 0.018 * looseFactor;
+          const calfWave = Math.exp(-Math.pow((t - 0.34) / 0.26, 2));
+          const radScale = 1.0 + calfWave * 0.14;
+          // Local -Z is strictly posterior (back of calf) thanks to our twist-free basis!
+          const backShift = -calfWave * 0.016 * looseFactor;
           shinPos.setXYZ(vi, vx * radScale, vy, vz * radScale + backShift);
         }
         shinGeo.computeVertexNormals();
 
         const shin = new THREE.Mesh(shinGeo, mat);
-        shin.position.copy(dir).multiplyScalar(midDist);
-        shin.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-        lowGroup.add(kneeJoint, shin);
+        shin.position.copy(bY).multiplyScalar(midDist);
+        shin.quaternion.setFromRotationMatrix(legBasisMat);
+        lowGroup.add(shin);
 
         if (cuffMat) {
           const cuff = createBoneSegmentTube({
@@ -997,8 +1600,8 @@ function addLegPants(params: {
             fallbackLen: 0.38,
             startFrac: Math.max(0.76, endFracLower - 0.1),
             endFrac: endFracLower + 0.02,
-            radiusStart: 0.053 * looseFactor,
-            radiusEnd: 0.050 * looseFactor,
+            radiusStart: 0.052 * looseFactor,
+            radiusEnd: 0.049 * looseFactor,
             mat: cuffMat,
           });
           lowGroup.add(cuff);
@@ -1006,6 +1609,7 @@ function addLegPants(params: {
       }
     }
   }
+  return false;
 }
 
 function addArmSleeves(params: {
@@ -1150,6 +1754,8 @@ function addArmSleeves(params: {
  * peeking NEVER creates a gap in her waist or ribs!
  */
 function addSculptedTorso(params: {
+  vrm: VRM;
+  avatarRoot: THREE.Object3D;
   metrics: TorsoMetrics;
   topMat: THREE.Material;
   hipsMat?: THREE.Material;
@@ -1159,14 +1765,22 @@ function addSculptedTorso(params: {
   necklineHeightFrac?: number;
   bustBoost?: number;
   fwdSign: number;
+  /** Which skinned torso zone to clone directly from the VRM's own real sculpted body/tops mesh */
+  skinnedZone?: 'torso_sleeveless' | 'torso_short_sleeve' | 'torso_long_sleeve' | 'swimsuit';
+  skinnedInflate?: number;
+  /** Set true when real skinned pants/shorts already cover the pelvis (prevents bloated diaper shell!) */
+  pelvisCoveredByPants?: boolean;
 }): {
   chestGroup: THREE.Group | null;
   spineGroup: THREE.Group | null;
   hipsGroup: THREE.Group | null;
   topNeckY: number;
   waistYInChest: number;
+  usedSkinnedTorso: boolean;
 } {
   const {
+    vrm,
+    avatarRoot,
     metrics,
     topMat,
     hipsMat,
@@ -1175,6 +1789,9 @@ function addSculptedTorso(params: {
     necklineHeightFrac = 0.84,
     bustBoost = 0.024,
     fwdSign,
+    skinnedZone = 'torso_sleeveless',
+    skinnedInflate = 0.0065,
+    pelvisCoveredByPants = false,
   } = params;
 
   const hipsGroup = attachGroup(metrics.hips, 'GarmentHips');
@@ -1186,49 +1803,62 @@ function addSculptedTorso(params: {
   const yWaistInChest = -metrics.yChestFromSpine * 0.45;
   const yBustInChest = yTop * 0.48;
 
-  // 1. Continuous sculpted upper-torso & waist bodice attached to `chest` (spans ALL the way down to hips + up to neckline — ZERO torso gap or belly/back bleed-through!)
-  if (chestGroup) {
+  // Primary path: True body-fitted SkinnedMesh torso (+ optional short/long sleeves) cloned directly
+  // from the VRM's real sculpted anime bust, waist, shoulders & sleeves — ZERO boxy barrels or diaper shells!
+  const clonedTorsoTris = buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat: topMat,
+    zone: skinnedZone,
+    inflate: skinnedInflate,
+    topNeckFrac: necklineHeightFrac,
+    uvScale: 1.7,
+  });
+  const usedSkinnedTorso = clonedTorsoTris >= 80;
+
+  // Fallback sculpted lathe bodice ONLY if the loaded model had no clonable torso/top mesh
+  if (!usedSkinnedTorso && chestGroup) {
     const bodiceGeo = createContouredTorsoLathe({
       profile: [
-        [0.120 * scaleX, yBottomInChest],
-        [0.112 * scaleX, yWaistInChest],
-        [0.114 * scaleX, 0.0],
-        [0.121 * scaleX, yBustInChest],
-        [0.112 * scaleX, yTop * 0.82],
-        [necklineHeightFrac > 0.78 ? 0.094 * scaleX : 0.104 * scaleX, yTop],
-        [necklineHeightFrac > 0.78 ? 0.064 * scaleX : 0.088 * scaleX, yTop + 0.008],
+        [0.102 * scaleX, yBottomInChest],
+        [0.092 * scaleX, yWaistInChest],
+        [0.098 * scaleX, 0.0],
+        [0.108 * scaleX, yBustInChest],
+        [0.100 * scaleX, yTop * 0.82],
+        [necklineHeightFrac > 0.78 ? 0.086 * scaleX : 0.096 * scaleX, yTop],
+        [necklineHeightFrac > 0.78 ? 0.060 * scaleX : 0.082 * scaleX, yTop + 0.008],
       ],
-      scaleX: 1.09,
-      scaleZ: 0.94 * scaleZ,
+      scaleX: 1.06,
+      scaleZ: 0.88 * scaleZ,
       bustCenterY: yBustInChest,
       bustBoost,
-      frontBellyBoost: 0.010,
+      frontBellyBoost: 0.006,
       rearGluteY: yBottomInChest,
-      rearGluteBoost: 0.012,
+      rearGluteBoost: 0.008,
       fwdSign,
       segments: 30,
     });
     chestGroup.add(new THREE.Mesh(bodiceGeo, topMat));
   }
 
-  // 2. Sculpted pelvis / hip brief shell attached to `hips` (full rear-glute & side-hip wrap so skin & underwear NEVER clip through front, sides, or back!)
-  if (hipsGroup) {
-    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.52;
+  // Fallback slim pelvis liner ONLY when NOT covered by real skinned pants/swimsuit AND torso wasn't skinned
+  if (!usedSkinnedTorso && !pelvisCoveredByPants && hipsGroup) {
+    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.48;
     const pelvisGeo = createContouredTorsoLathe({
       profile: [
-        [0.068 * scaleX, -0.102],
-        [0.114 * scaleX, -0.072],
-        [0.132 * scaleX, -0.025],
-        [0.128 * scaleX, 0.025],
-        [0.116 * scaleX, metrics.ySpineFromHips * 0.95],
-        [0.112 * scaleX, hipTopY],
+        [0.064 * scaleX, -0.092],
+        [0.098 * scaleX, -0.062],
+        [0.112 * scaleX, -0.020],
+        [0.108 * scaleX, 0.025],
+        [0.098 * scaleX, metrics.ySpineFromHips * 0.92],
+        [0.094 * scaleX, hipTopY],
       ],
-      scaleX: 1.13,
-      scaleZ: 1.04 * scaleZ,
+      scaleX: 1.08,
+      scaleZ: 0.94 * scaleZ,
       bustBoost: 0,
-      frontBellyBoost: 0.008,
+      frontBellyBoost: 0.005,
       rearGluteY: -0.02,
-      rearGluteBoost: 0.022,
+      rearGluteBoost: 0.012,
       fwdSign,
       segments: 30,
     });
@@ -1241,6 +1871,7 @@ function addSculptedTorso(params: {
     hipsGroup,
     topNeckY: yTop,
     waistYInChest: yWaistInChest,
+    usedSkinnedTorso,
   };
 }
 
@@ -1281,6 +1912,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   const fwdSign = isVrm0 ? -1 : 1;
   const avatarSkinHex = sampleAvatarSkinColorHex(avatarRoot);
   const metrics = measureTorsoMetrics(vrm);
+  const skinCoverage = inspectVrmBodySkinCoverage(vrm, avatarRoot);
 
   const topMat = makeAnimeFabricMaterial(topHex, {
     textureDataUrl: topTextureDataUrl,
@@ -1297,22 +1929,36 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   const goldMat = makeAnimeFabricMaterial('#facc15', { doubleSide: true, emissiveBoost: 0.34 });
 
   if (garmentStyle === 'cozy_hoodie_pants') {
-    const { chestGroup, hipsGroup, topNeckY } = addSculptedTorso({
+    const usedSkinnedPants = addLegPants({
+      vrm,
+      avatarRoot,
+      mat: bottomMat,
+      cuffMat: bottomAccentMat,
+      looseFactor: 1.08,
+      fwdSign,
+    });
+    const { chestGroup, hipsGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.15,
-      scaleZ: 1.16,
+      scaleX: 1.12,
+      scaleZ: 1.12,
       necklineHeightFrac: 0.88,
       bustBoost: 0.018,
       fwdSign,
+      skinnedZone: 'torso_long_sleeve',
+      skinnedInflate: 0.011,
+      pelvisCoveredByPants: usedSkinnedPants,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.18 });
-    addLegPants({ vrm, mat: bottomMat, cuffMat: bottomAccentMat, looseFactor: 1.08, fwdSign });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.14 });
+    }
 
     if (chestGroup) {
       // Plush 3D Hood resting behind her neck & shoulders (never clipping chin!)
-      const hood = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.036, 12, 24), topMat);
+      const hood = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.032, 12, 24), topMat);
       hood.rotation.x = Math.PI * 0.46;
       hood.position.set(0, topNeckY - 0.005, -0.055 * fwdSign);
       chestGroup.add(hood);
@@ -1327,40 +1973,32 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       }
 
       // Front kangaroo pouch pocket
-      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.175, 0.095, 0.035), topAccentMat);
+      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.165, 0.088, 0.028), topAccentMat);
       pocket.position.set(0, -metrics.yChestFromSpine * 0.62, 0.098 * fwdSign);
       chestGroup.add(pocket);
     }
-    if (hipsGroup) {
-      const hoodieHem = new THREE.Mesh(
-        createSculptedSkirtGeometry({
-          topRadius: 0.136,
-          bottomRadius: 0.156,
-          height: 0.16,
-          pleatCount: 0,
-          scaleX: 1.15,
-          scaleZ: 1.08,
-        }),
-        topMat
-      );
-      hoodieHem.position.set(0, 0.015, 0);
-      const ribBand = new THREE.Mesh(new THREE.TorusGeometry(0.155, 0.015, 10, 28), topAccentMat);
+    if (hipsGroup && !usedSkinnedTorso) {
+      const ribBand = new THREE.Mesh(new THREE.TorusGeometry(0.122, 0.012, 10, 28), topAccentMat);
       ribBand.rotation.x = Math.PI / 2;
-      ribBand.scale.set(1.15, 1.08, 1);
-      ribBand.position.set(0, -0.065, 0);
-      hipsGroup.add(hoodieHem, ribBand);
+      ribBand.scale.set(1.08, 0.92, 1);
+      ribBand.position.set(0, -0.02, 0);
+      hipsGroup.add(ribBand);
     }
   } else if (garmentStyle === 'summer_sundress') {
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'below_cap',
       collarboneBridge: true,
       upperThighs: true,
       fwdSign,
+      coverage: skinCoverage,
     });
-    const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+    const { chestGroup, hipsGroup, topNeckY, waistYInChest, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: topMat,
@@ -1369,8 +2007,12 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       necklineHeightFrac: 0.64,
       bustBoost: 0.026,
       fwdSign,
+      skinnedZone: 'torso_sleeveless',
+      skinnedInflate: 0.0055,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'cap', looseFactor: 0.96 });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'cap', looseFactor: 0.96 });
+    }
 
     if (chestGroup) {
       // Delicate sundress shoulder straps bridging smoothly over collarbone
@@ -1379,27 +2021,27 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         strap.position.set(sx, topNeckY + 0.032, 0);
         chestGroup.add(strap);
       }
-      const trim = new THREE.Mesh(new THREE.TorusGeometry(0.104, 0.008, 10, 28), topAccentMat);
+      const trim = new THREE.Mesh(new THREE.TorusGeometry(0.102, 0.008, 10, 28), topAccentMat);
       trim.rotation.x = Math.PI / 2;
-      trim.scale.set(1.07, 0.85, 1);
+      trim.scale.set(1.05, 0.84, 1);
       trim.position.set(0, topNeckY, 0.004 * fwdSign);
       chestGroup.add(trim);
 
       // Waist ribbon sash + cute front bow
-      const belt = new THREE.Mesh(new THREE.TorusGeometry(0.109, 0.014, 10, 28), accMat);
+      const belt = new THREE.Mesh(new THREE.TorusGeometry(0.104, 0.013, 10, 28), accMat);
       belt.rotation.x = Math.PI / 2;
-      belt.scale.set(1.07, 0.86, 1);
+      belt.scale.set(1.05, 0.84, 1);
       belt.position.set(0, waistYInChest, 0);
       const bow = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 10), accMat);
       bow.scale.set(1.75, 0.85, 0.65);
-      bow.position.set(0, waistYInChest, 0.098 * fwdSign);
+      bow.position.set(0, waistYInChest, 0.096 * fwdSign);
       chestGroup.add(belt, bow);
     }
     if (hipsGroup) {
       // Graceful flared pleated anime midi sundress skirt!
       const skirt = new THREE.Mesh(
         createSculptedSkirtGeometry({
-          topRadius: 0.114,
+          topRadius: 0.112,
           bottomRadius: 0.30,
           height: 0.50,
           pleatCount: 16,
@@ -1421,13 +2063,26 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   } else if (garmentStyle === 'streetwear_jacket_shorts') {
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'none',
       upperThighs: true,
       fwdSign,
+      coverage: skinCoverage,
+    });
+    const usedSkinnedShorts = addLegPants({
+      vrm,
+      avatarRoot,
+      mat: bottomMat,
+      cuffMat: bottomAccentMat,
+      shortsOnly: true,
+      looseFactor: 1.04,
+      fwdSign,
     });
     const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat: whiteMat,
       hipsMat: bottomMat,
@@ -1436,26 +2091,31 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       necklineHeightFrac: 0.84,
       bustBoost: 0.022,
       fwdSign,
+      skinnedZone: 'torso_sleeveless',
+      skinnedInflate: 0.0055,
+      pelvisCoveredByPants: usedSkinnedShorts,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.12 });
-    addLegPants({
+    const clonedSleeves = buildBodyClonedSkinnedGarment({
       vrm,
-      mat: bottomMat,
-      cuffMat: bottomAccentMat,
-      shortsOnly: true,
-      looseFactor: 1.04,
-      fwdSign,
+      avatarRoot,
+      mat: topMat,
+      zone: 'sleeves_full',
+      inflate: 0.010,
+      uvScale: 1.7,
     });
+    if (clonedSleeves < 50) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.12 });
+    }
 
     if (chestGroup) {
       // Open-front cropped bomber jacket sculpted outer shell wrapping back & sides cleanly
       const jacketBack = new THREE.Mesh(
         createSculptedSkirtGeometry({
-          topRadius: 0.116,
-          bottomRadius: 0.112,
+          topRadius: 0.114,
+          bottomRadius: 0.110,
           height: topNeckY - waistYInChest + 0.02,
           pleatCount: 0,
-          scaleX: 1.12,
+          scaleX: 1.10,
           scaleZ: 0.88,
           openSlitFront: true,
           fwdSign,
@@ -1475,57 +2135,64 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         chestGroup.add(zip);
       }
 
-      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.016, 10, 24), topAccentMat);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.080, 0.014, 10, 24), topAccentMat);
       collar.rotation.x = Math.PI / 2;
       collar.position.set(0, topNeckY, -0.004 * fwdSign);
       chestGroup.add(collar);
     }
     if (hipsGroup) {
-      const belt = new THREE.Mesh(new THREE.TorusGeometry(0.116, 0.013, 10, 28), accMat);
+      const belt = new THREE.Mesh(new THREE.TorusGeometry(0.110, 0.012, 10, 28), accMat);
       belt.rotation.x = Math.PI / 2;
-      belt.scale.set(1.07, 0.86, 1);
+      belt.scale.set(1.06, 0.86, 1);
       belt.position.set(0, 0.032, 0);
       const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.016), goldMat);
-      buckle.position.set(0, 0.032, 0.108 * fwdSign);
+      buckle.position.set(0, 0.032, 0.104 * fwdSign);
       hipsGroup.add(belt, buckle);
     }
   } else if (garmentStyle === 'sporty_tee_leggings') {
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'forearms_only',
       fwdSign,
+      coverage: skinCoverage,
     });
-    const { chestGroup, hipsGroup, topNeckY } = addSculptedTorso({
+    const usedSkinnedLeggings = addLegPants({
+      vrm,
+      avatarRoot,
+      mat: bottomMat,
+      looseFactor: 0.98,
+      fwdSign,
+    });
+    const { chestGroup, hipsGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.02,
-      scaleZ: 1.0,
-      necklineHeightFrac: 0.84,
-      bustBoost: 0.024,
+      scaleX: 1.0,
+      scaleZ: 0.98,
+      necklineHeightFrac: 0.85,
+      bustBoost: 0.022,
       fwdSign,
+      skinnedZone: 'torso_short_sleeve',
+      skinnedInflate: 0.0065,
+      pelvisCoveredByPants: usedSkinnedLeggings,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'short', looseFactor: 1.02 });
-    addLegPants({
-      vrm,
-      mat: bottomMat,
-      stripeMat: bottomAccentMat,
-      looseFactor: 0.95,
-      fwdSign,
-    });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'short', looseFactor: 1.02 });
+    }
 
     if (chestGroup) {
-      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.074, 0.01, 10, 24), topAccentMat);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.009, 10, 24), topAccentMat);
       collar.rotation.x = Math.PI / 2;
       collar.position.set(0, topNeckY + 0.004, 0);
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.026, 0.014), topAccentMat);
-      stripe.position.set(0, topNeckY * 0.46, 0.095 * fwdSign);
-      chestGroup.add(collar, stripe);
+      chestGroup.add(collar);
     }
-    if (hipsGroup) {
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.116, 0.015, 10, 28), bottomAccentMat);
+    if (hipsGroup && !usedSkinnedLeggings) {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.112, 0.013, 10, 28), bottomAccentMat);
       band.rotation.x = Math.PI / 2;
       band.scale.set(1.06, 0.85, 1);
       band.position.set(0, 0.028, 0);
@@ -1533,14 +2200,18 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     }
   } else if (garmentStyle === 'kimono_yukata') {
     const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: topMat,
-      scaleX: 1.06,
-      scaleZ: 1.05,
+      scaleX: 1.05,
+      scaleZ: 1.04,
       necklineHeightFrac: 0.86,
       bustBoost: 0.016,
       fwdSign,
+      skinnedZone: 'torso_sleeveless',
+      skinnedInflate: 0.0085,
     });
     addArmSleeves({ vrm, mat: topMat, mode: 'kimono', looseFactor: 1.15 });
 
@@ -1592,13 +2263,17 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   } else if (garmentStyle === 'evening_gown') {
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'upper_only',
       collarboneBridge: true,
       fwdSign,
+      coverage: skinCoverage,
     });
     const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
@@ -1607,8 +2282,20 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       necklineHeightFrac: 0.62,
       bustBoost: 0.028,
       fwdSign,
+      skinnedZone: 'torso_sleeveless',
+      skinnedInflate: 0.0055,
     });
-    addArmSleeves({ vrm, mat: accMat, cuffMat: goldMat, mode: 'gloves', looseFactor: 0.98 });
+    const clonedGloves = buildBodyClonedSkinnedGarment({
+      vrm,
+      avatarRoot,
+      mat: accMat,
+      zone: 'gloves',
+      inflate: 0.0032,
+      uvScale: 1.8,
+    });
+    if (clonedGloves < 40) {
+      addArmSleeves({ vrm, mat: accMat, cuffMat: goldMat, mode: 'gloves', looseFactor: 0.98 });
+    }
 
     if (chestGroup) {
       // Dynamic off-shoulder satin shawl: sleek profile + real-time upper-arm conformity so it NEVER slices through biceps!
@@ -1618,9 +2305,9 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       shawl.position.set(0, topNeckY - 0.006, 0.004 * fwdSign);
       registerDynamicCollarRing(shawl, fwdSign, 0.046);
 
-      const corsage = new THREE.Mesh(new THREE.TorusGeometry(0.109, 0.013, 10, 28), goldMat);
+      const corsage = new THREE.Mesh(new THREE.TorusGeometry(0.106, 0.012, 10, 28), goldMat);
       corsage.rotation.x = Math.PI / 2;
-      corsage.scale.set(1.07, 0.86, 1);
+      corsage.scale.set(1.06, 0.85, 1);
       corsage.position.set(0, waistYInChest, 0);
       chestGroup.add(shawl, corsage);
     }
@@ -1654,21 +2341,35 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(outerGown, peplum);
     }
   } else if (garmentStyle === 'cozy_pajamas') {
-    const { chestGroup, hipsGroup, topNeckY } = addSculptedTorso({
+    const usedSkinnedPants = addLegPants({
+      vrm,
+      avatarRoot,
+      mat: bottomMat,
+      cuffMat: whiteMat,
+      looseFactor: 1.10,
+      fwdSign,
+    });
+    const { chestGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.08,
-      scaleZ: 1.08,
+      scaleX: 1.06,
+      scaleZ: 1.06,
       necklineHeightFrac: 0.85,
       bustBoost: 0.018,
       fwdSign,
+      skinnedZone: 'torso_long_sleeve',
+      skinnedInflate: 0.010,
+      pelvisCoveredByPants: usedSkinnedPants,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.1 });
-    addLegPants({ vrm, mat: bottomMat, cuffMat: whiteMat, looseFactor: 1.12, fwdSign });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.1 });
+    }
 
     if (chestGroup) {
-      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.013, 10, 24), whiteMat);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.076, 0.012, 10, 24), whiteMat);
       collar.rotation.x = Math.PI / 2;
       collar.position.set(0, topNeckY + 0.002, 0);
       chestGroup.add(collar);
@@ -1681,33 +2382,24 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       pocket.position.set(0.052, topNeckY * 0.42, 0.098 * fwdSign);
       chestGroup.add(pocket);
     }
-    if (hipsGroup) {
-      const shirtHem = new THREE.Mesh(
-        createSculptedSkirtGeometry({
-          topRadius: 0.134,
-          bottomRadius: 0.156,
-          height: 0.16,
-          pleatCount: 0,
-          scaleX: 1.15,
-          scaleZ: 1.08,
-        }),
-        topMat
-      );
-      shirtHem.position.set(0, 0.01, 0);
-      hipsGroup.add(shirtHem);
-    }
   } else if (garmentStyle === 'school_blazer') {
-    const { chestGroup, hipsGroup, topNeckY } = addSculptedTorso({
+    const { chestGroup, hipsGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.06,
-      scaleZ: 1.06,
+      scaleX: 1.05,
+      scaleZ: 1.05,
       necklineHeightFrac: 0.85,
       bustBoost: 0.020,
       fwdSign,
+      skinnedZone: 'torso_long_sleeve',
+      skinnedInflate: 0.0085,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.05 });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.05 });
+    }
 
     if (chestGroup) {
       const shirtV = new THREE.Mesh(new THREE.ConeGeometry(0.054, 0.13, 4), whiteMat);
@@ -1743,18 +2435,31 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(skirt);
     }
   } else if (garmentStyle === 'trench_coat_pants') {
-    const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+    const usedSkinnedPants = addLegPants({
+      vrm,
+      avatarRoot,
+      mat: bottomMat,
+      looseFactor: 1.0,
+      fwdSign,
+    });
+    const { chestGroup, hipsGroup, topNeckY, waistYInChest, usedSkinnedTorso } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat,
       hipsMat: bottomMat,
-      scaleX: 1.11,
-      scaleZ: 1.11,
+      scaleX: 1.09,
+      scaleZ: 1.09,
       necklineHeightFrac: 0.87,
       bustBoost: 0.018,
       fwdSign,
+      skinnedZone: 'torso_long_sleeve',
+      skinnedInflate: 0.010,
+      pelvisCoveredByPants: usedSkinnedPants,
     });
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.12 });
-    addLegPants({ vrm, mat: bottomMat, looseFactor: 1.0, fwdSign });
+    if (!usedSkinnedTorso) {
+      addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.12 });
+    }
 
     if (chestGroup) {
       for (const side of [-1, 1]) {
@@ -1804,22 +2509,28 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     });
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'full',
       collarboneBridge: true,
       upperThighs: true,
       fwdSign,
+      coverage: skinCoverage,
     });
     const { chestGroup, hipsGroup, topNeckY } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat: towelMat,
       hipsMat: towelMat,
-      scaleX: 1.08,
-      scaleZ: 1.07,
+      scaleX: 1.06,
+      scaleZ: 1.05,
       necklineHeightFrac: 0.62,
       bustBoost: 0.024,
       fwdSign,
+      skinnedZone: 'torso_sleeveless',
+      skinnedInflate: 0.009,
     });
 
     if (chestGroup) {
@@ -1870,14 +2581,18 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     });
     addExposedSkinUnderlay({
       vrm,
+      avatarRoot,
       metrics,
       skinHex: avatarSkinHex,
       armMode: 'full',
       collarboneBridge: true,
       upperThighs: true,
       fwdSign,
+      coverage: skinCoverage,
     });
     const { chestGroup, hipsGroup, topNeckY, waistYInChest } = addSculptedTorso({
+      vrm,
+      avatarRoot,
       metrics,
       topMat: swimMat,
       hipsMat: swimMat,
@@ -1886,6 +2601,9 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       necklineHeightFrac: 0.60,
       bustBoost: 0.028,
       fwdSign,
+      skinnedZone: 'swimsuit',
+      skinnedInflate: 0.0048,
+      pelvisCoveredByPants: true,
     });
 
     if (chestGroup) {
