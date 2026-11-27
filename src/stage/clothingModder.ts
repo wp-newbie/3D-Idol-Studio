@@ -666,9 +666,13 @@ export function applyOutfitModsToScene(params: {
       };
 
       // NEVER apply outfit recoloring or clothing textures to core skin, face, eyes, brows, lashes,
-      // mouth, teeth, or hair slots on multi-material body meshes (preserves VRM skin/eye/hair integrity!)
-      const isProtectedHairSlot = matCategory === 'Hair' && (mats.length > 1 || hasSkinMat || Boolean(effectiveMod?.textureDataUrl || effectiveMod?.textureVaultId));
-      if (isSkinOrFace || isProtectedHairSlot) {
+      // mouth, teeth, or hair slots (keeps outfit/pajama tints strictly off skin, face & hair!)
+      const isAnySkinFaceEyeOrHair =
+        isProtectedCoreOrHair ||
+        /skin|body|face|head|eye|iris|sclera|brow|lash|mouth|teeth|tooth|tongue|blush|hair/i.test(
+          mat.name || ''
+        );
+      if (isAnySkinFaceEyeOrHair && !isNativeOutfitSlot) {
         const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
         if (isSkinMat && cyclingShorts && snap.map) {
           const shortsTex = getCyclingShortsTexture(snap.map);

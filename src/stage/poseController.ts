@@ -323,32 +323,36 @@ export class AvatarPoseController {
     );
     const clavicleReliefZ = activeDiningFrame || isStudyingSeated ? 0.028 : 0.012;
 
+    const totalForwardLean = activityLeanX + seatedTableFlex;
+    // Distribute seated forward dining/desk lean smoothly across hips -> spine -> chest -> upperChest
+    // so there is NEVER a sharp waist kink or dark side-gap between pelvis and torso!
+    const hipsTiltFwd = Math.min(0.06, totalForwardLean * 0.24);
     const targets: Record<PoseBoneName, { x: number; y: number; z: number }> = {
       hips: {
-        x: 0,
+        x: torsoForwardSign * hipsTiltFwd,
         y: Math.sin(elapsed * 0.65) * 0.014,
         z: rollSign * bodyLang.hipWeightShift * 0.45,
       },
       spine: {
-        // Comfortable waist/lumbar forward flex during seated dining & studying so neck never cranes alone!
+        // Gentle lumbar flex distributed evenly so upper & lower garments stay continuous at the waist
         x:
-          torsoForwardSign * (0.05 + activityLeanX + seatedTableFlex * 0.62) +
-          torsoForwardSign * (bodyLang.spineLeanX * 0.55) +
+          torsoForwardSign * (0.04 + totalForwardLean * 0.44) +
+          torsoForwardSign * (bodyLang.spineLeanX * 0.48) +
           (isMusicPlaying ? torsoForwardSign * musicBeat * 0.04 : 0),
         y: gentleSway * (isMusicPlaying ? 0.06 : 0.018) + activityTwistY * 0.6,
         z: isMusicPlaying ? rollSign * Math.sin(elapsed * 2.2) * (0.04 + musicBass * 0.05) : 0,
       },
       chest: {
-        // Gentle upper-thoracic follow-through + breathing sine wave
+        // Smooth upper-thoracic follow-through + breathing sine wave
         x:
-          torsoForwardSign * (-0.02 + activityLeanX * 0.42 + seatedTableFlex * 0.38) +
+          torsoForwardSign * (-0.01 + totalForwardLean * 0.30) +
           breath * 0.012 +
-          torsoForwardSign * (bodyLang.spineLeanX * 0.25),
+          torsoForwardSign * (bodyLang.spineLeanX * 0.24),
         y: activityTwistY * 0.4,
         z: 0,
       },
       upperChest: {
-        x: torsoForwardSign * (seatedTableFlex * 0.24) + breath * 0.008,
+        x: torsoForwardSign * (totalForwardLean * 0.22) + breath * 0.008,
         y: 0,
         z: 0,
       },

@@ -166,8 +166,8 @@ function makeAnimeFabricMaterial(
     opacity: options?.opacity ?? 1.0,
     depthWrite: options?.transparent ? false : true,
     polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
 
   const url = options?.textureDataUrl;
@@ -1386,7 +1386,7 @@ function buildBodyClonedSkinnedGarment(params: {
     const yShortHem = yKnee + (yHipJoint - yKnee) * 0.46;
     const yNeckLimit = lm.chest.y + (lm.neck.y - lm.chest.y) * topNeckFrac;
     // Extend torso bodice cleanly down into the hip/pelvis band so dresses & tops NEVER leave a bare waist gap!
-    const yTorsoBottom = yHipJoint - 0.045 * unitScale;
+    const yTorsoBottom = yHipJoint - 0.055 * unitScale;
     const ySwimBottom = yHipJoint - 0.055 * unitScale;
 
     const getDominantRegion = (vi: number) => {
@@ -1817,11 +1817,14 @@ function buildBodyClonedSkinnedGarment(params: {
         }
       }
 
-      // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes through!
-      // Tops get +2.5mm extra ease over the waist overlap band so shirts cleanly layer over pant waistbands.
+      // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes mottled patches through!
+      // Add smooth outward clearance over the chest/bust/shoulder bend zone (+3.2mm) and waist/hips overlap (+3.8mm)
+      // so forward dining/desk arm reaches & seated torso flexion NEVER cause coplanar skin bleed-through!
       const waistEase =
-        isTorsoZone && vy < yWaistTop + 0.02 * unitScale ? 0.0025 * unitScale : 0;
-      const vertInflate = scaledInflate + waistEase;
+        isTorsoZone && vy < yWaistTop + 0.035 * unitScale ? 0.0038 * unitScale : 0;
+      const chestBendEase =
+        isTorsoZone && vy >= lm.chest.y - 0.035 * unitScale ? 0.0032 * unitScale : 0;
+      const vertInflate = scaledInflate + Math.max(waistEase, chestBendEase);
       const ox = vx + nx * vertInflate;
       const oy = vy + ny * vertInflate;
       const oz = vz + nz * vertInflate;
@@ -1931,8 +1934,8 @@ function buildBodyClonedSkinnedGarment(params: {
     // Depth polygonOffset prevents z-fighting against underlying base VRM body skin at any camera distance
     if (!isSkinZone) {
       mat.polygonOffset = true;
-      mat.polygonOffsetFactor = isTorsoZone ? -2 : -1;
-      mat.polygonOffsetUnits = isTorsoZone ? -2 : -1;
+      mat.polygonOffsetFactor = -2;
+      mat.polygonOffsetUnits = -2;
     }
 
     const skinned = new THREE.SkinnedMesh(subGeo, mat);
@@ -2609,11 +2612,11 @@ function addSculptedTorso(params: {
   const yWaistInChest = -metrics.yChestFromSpine * 0.58;
   const yBustInChest = yTop * 0.48;
 
-  // Slim uniform normal extrusion (+2.5mm to +4.0mm) for SkinnedMesh cloning; +14..18mm clearance for structured outerwear shells
+  // Slim uniform normal extrusion for SkinnedMesh cloning (+4.5mm..+6.0mm base + bend ease = zero coplanar patchwork!)
   const cloneInflate = preferSkinnedBody
-    ? THREE.MathUtils.clamp(skinnedInflate, 0.0025, 0.0040)
-    : THREE.MathUtils.clamp(skinnedInflate, 0.0032, 0.016);
-  const latheClr = preferSkinnedBody ? 0.0055 : THREE.MathUtils.clamp(skinnedInflate, 0.012, 0.017);
+    ? THREE.MathUtils.clamp(skinnedInflate, 0.0045, 0.0065)
+    : THREE.MathUtils.clamp(skinnedInflate, 0.0050, 0.016);
+  const latheClr = preferSkinnedBody ? 0.0075 : THREE.MathUtils.clamp(skinnedInflate, 0.013, 0.017);
 
   // Non-bloated anime torso contour:
   // - Waist explicitly tapered at ySpine: waistRadius <= chestRadius * 0.78
@@ -2687,10 +2690,36 @@ function addSculptedTorso(params: {
     chestGroup.add(new THREE.Mesh(bodiceGeo, topMat));
   }
 
+  // Interlocking `spine` bone bridge sleeve: articulates seamlessly between `hips` and `chest` when seated
+  // or leaning forward so NO dark side/waist V-notch can ever open between pelvis and torso!
+  if (needsRigidLathe && spineGroup) {
+    const linerScale = usedSkinnedTorso ? 0.95 : 0.985;
+    const ySpineBot = -metrics.ySpineFromHips * 0.72;
+    const ySpineTop = metrics.yChestFromSpine * 0.94;
+    const spineBridgeGeo = createContouredTorsoLathe({
+      profile: [
+        [THREE.MathUtils.lerp(rHips, rSpine, 0.35) * linerScale, ySpineBot],
+        [rSpine * linerScale, 0.0],
+        [THREE.MathUtils.lerp(rSpine, rChest, 0.45) * linerScale, ySpineTop * 0.55],
+        [THREE.MathUtils.lerp(rSpine, rChest, 0.80) * linerScale, ySpineTop],
+      ],
+      scaleX: 1.0,
+      scaleZ: zRatioTorso,
+      bustBoost: 0,
+      frontBellyBoost: 0,
+      rearGluteY: ySpineBot,
+      rearGluteBoost: 0.003,
+      fwdSign,
+      segments: 28,
+    });
+    spineGroup.add(new THREE.Mesh(spineBridgeGeo, topMat));
+  }
+
   // Continuous waist/hips overlap bridge ONLY when pelvis isn't already covered by skinned pants/body
+  // (capped cleanly at ySpineFromHips * 0.85 so its top rim NEVER juts forward out of the stomach when leaning!)
   if (needsRigidLathe && !pelvisCoveredByPants && hipsGroup) {
     const linerScale = usedSkinnedTorso ? 0.95 : 1.0;
-    const hipTopY = metrics.ySpineFromHips + metrics.yChestFromSpine * 0.55;
+    const hipTopY = metrics.ySpineFromHips * 0.85;
     const zRatioHips = THREE.MathUtils.clamp(
       ((metrics.hipsHalfD + latheClr) / Math.max(0.06, rHips)) * effectiveScaleZ,
       0.70,
@@ -2701,9 +2730,8 @@ function addSculptedTorso(params: {
         [rHips * 0.62 * linerScale, -0.088],
         [rHips * 0.94 * linerScale, -0.055],
         [rHips * 1.0 * linerScale, -0.012],
-        [THREE.MathUtils.lerp(rHips, rSpine, 0.55) * linerScale, metrics.ySpineFromHips * 0.55],
-        [rSpine * linerScale, metrics.ySpineFromHips * 1.02],
-        [THREE.MathUtils.lerp(rSpine, rChest, 0.42) * linerScale, hipTopY],
+        [THREE.MathUtils.lerp(rHips, rSpine, 0.55) * linerScale, hipTopY * 0.55],
+        [rSpine * linerScale, hipTopY],
       ],
       scaleX: 1.0,
       scaleZ: zRatioHips,
@@ -2805,16 +2833,6 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   const goldMat = makeAnimeFabricMaterial('#facc15', { doubleSide: true, emissiveBoost: 0.34 });
 
   if (garmentStyle === 'cozy_hoodie_pants') {
-    addExposedSkinUnderlay({
-      vrm,
-      avatarRoot,
-      metrics,
-      skinHex: avatarSkinHex,
-      armMode: 'none',
-      collarboneBridge: true,
-      fwdSign,
-      coverage: skinCoverage,
-    });
     const usedSkinnedPants = addLegPants({
       vrm,
       avatarRoot,
@@ -2844,7 +2862,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       bustBoost: 0.010,
       fwdSign,
       skinnedZone: 'torso_long_sleeve',
-      skinnedInflate: 0.0038,
+      skinnedInflate: 0.0056,
       pelvisCoveredByPants: usedSkinnedPants,
       preferSkinnedBody: true,
     });
@@ -2869,12 +2887,13 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         chestGroup.add(str, aglet);
       }
 
-      // Slim flat front kangaroo pouch pocket hugging torso surface
-      const pocket = new THREE.Mesh(new THREE.BoxGeometry(waistSurfaceHalfW * 1.18, 0.078, 0.010), topAccentMat);
-      pocket.position.set(0, -metrics.yChestFromSpine * 0.56, (waistSurfaceHalfD + 0.004) * fwdSign);
-      chestGroup.add(pocket);
+      if (!usedSkinnedTorso) {
+        const pocket = new THREE.Mesh(new THREE.BoxGeometry(waistSurfaceHalfW * 1.18, 0.078, 0.010), topAccentMat);
+        pocket.position.set(0, -metrics.yChestFromSpine * 0.56, (waistSurfaceHalfD + 0.004) * fwdSign);
+        chestGroup.add(pocket);
+      }
     }
-    if (hipsGroup) {
+    if (hipsGroup && !usedSkinnedTorso) {
       const ribBand = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.009, 10, 28), topAccentMat);
       ribBand.rotation.x = Math.PI / 2;
       ribBand.scale.set(waistSurfaceHalfW + 0.004, waistSurfaceHalfD + 0.004, 1);
@@ -3251,16 +3270,6 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(outerGown, peplum);
     }
   } else if (garmentStyle === 'cozy_pajamas') {
-    addExposedSkinUnderlay({
-      vrm,
-      avatarRoot,
-      metrics,
-      skinHex: avatarSkinHex,
-      armMode: 'none',
-      collarboneBridge: true,
-      fwdSign,
-      coverage: skinCoverage,
-    });
     const usedSkinnedPants = addLegPants({
       vrm,
       avatarRoot,
@@ -3278,11 +3287,11 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsMat: bottomMat,
       scaleX: 1.01,
       scaleZ: 0.87,
-      necklineHeightFrac: 0.85,
+      necklineHeightFrac: 0.90,
       bustBoost: 0.010,
       fwdSign,
       skinnedZone: 'torso_long_sleeve',
-      skinnedInflate: 0.0035,
+      skinnedInflate: 0.0054,
       pelvisCoveredByPants: usedSkinnedPants,
       preferSkinnedBody: true,
     });
@@ -3290,7 +3299,9 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       addArmSleeves({ vrm, mat: topMat, cuffMat: whiteMat, mode: 'full', looseFactor: 1.04 });
     }
 
-    if (chestGroup) {
+    // Only attach rigid chest pocket/buttons on non-skinned fallback torsos so seated forward lean
+    // NEVER detaches a rigid box flap out of the skinned pajama shirt!
+    if (chestGroup && !usedSkinnedTorso) {
       const trimZ = chestSurfaceFrontZ + 0.004;
       for (let i = 0; i < 3; i++) {
         const btn = new THREE.Mesh(new THREE.SphereGeometry(0.0055, 10, 10), whiteMat);

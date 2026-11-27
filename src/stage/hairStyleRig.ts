@@ -393,14 +393,97 @@ function markSwayNode(
   };
 }
 
+interface HeadClearanceBounds {
+  halfW: number;
+  frontZ: number;
+  backZ: number;
+  topY: number;
+}
+
+/**
+ * Dynamically measures the VRM's actual head + hair bounding envelope in head-bone local space
+ * so side locks, braids, buns, twin-tails, and hairpins always sit cleanly OUTSIDE ears & hair
+ * without clipping (while keeping VRM head proportions completely unlocked!).
+ */
+function measureHeadClearanceBounds(
+  vrm: VRM | null,
+  avatarRoot: THREE.Object3D,
+  headBone: THREE.Object3D | null,
+  fwdSign: number
+): HeadClearanceBounds {
+  const fallback: HeadClearanceBounds = {
+    halfW: 0.118,
+    frontZ: 0.105,
+    backZ: 0.115,
+    topY: 0.215,
+  };
+  if (!headBone) return fallback;
+
+  headBone.updateWorldMatrix(true, false);
+  const invHead = new THREE.Matrix4().copy(headBone.matrixWorld).invert();
+  const worldP = new THREE.Vector3();
+  const localP = new THREE.Vector3();
+  const xs: number[] = [];
+  const zFronts: number[] = [];
+  const zBacks: number[] = [];
+  const ys: number[] = [];
+
+  avatarRoot.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || obj.userData?.[HAIR_RIG_TAG]) return;
+    if (obj.userData?.__zeta_procedural_accessory__ || obj.userData?.__zeta_procedural_garment__) return;
+    const matNames = (Array.isArray(obj.material) ? obj.material : [obj.material])
+      .map((m) => m?.name || '')
+      .join(' ');
+    const hay = `${obj.name} ${matNames}`;
+    if (!/face|head|hair|ear/i.test(hay)) return;
+
+    const pos = obj.geometry?.attributes?.position;
+    if (!pos) return;
+    obj.updateWorldMatrix(true, false);
+    const step = Math.max(1, Math.floor(pos.count / 320));
+    for (let i = 0; i < pos.count; i += step) {
+      worldP.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
+      localP.copy(worldP).applyMatrix4(invHead);
+      // Sample around skull/ear/cheek region (exclude long hanging hair tails below chin)
+      if (localP.y < -0.02 || localP.y > 0.32) continue;
+      const ax = Math.abs(localP.x);
+      const az = Math.abs(localP.z);
+      if (ax > 0.22 || az > 0.22) continue;
+      if (localP.y >= 0.02 && localP.y <= 0.18) {
+        xs.push(ax);
+        const zf = localP.z * fwdSign;
+        if (zf > 0) zFronts.push(zf);
+        else zBacks.push(-zf);
+      }
+      ys.push(localP.y);
+    }
+  });
+
+  const pct = (arr: number[], q: number, fb: number, minV: number, maxV: number) => {
+    if (arr.length < 8) return fb;
+    arr.sort((a, b) => a - b);
+    return THREE.MathUtils.clamp(arr[Math.min(arr.length - 1, Math.floor(arr.length * q))], minV, maxV);
+  };
+
+  // Extra margin when vrm has native hair/ears
+  const extraW = vrm ? 0.008 : 0.006;
+  return {
+    halfW: pct(xs, 0.94, fallback.halfW, 0.095, 0.165) + extraW,
+    frontZ: pct(zFronts, 0.94, fallback.frontZ, 0.085, 0.155),
+    backZ: pct(zBacks, 0.94, fallback.backZ, 0.090, 0.165),
+    topY: pct(ys, 0.96, fallback.topY, 0.185, 0.275),
+  };
+}
+
 function buildHairStyleGroup(params: {
   style: HairStyleId;
   hairHex: string;
   highlightHex?: string | null;
   tieHex: string;
   fwdSign: number;
+  headBounds: HeadClearanceBounds;
 }): THREE.Group {
-  const { style, hairHex, highlightHex, tieHex, fwdSign } = params;
+  const { style, hairHex, highlightHex, tieHex, fwdSign, headBounds } = params;
   const group = new THREE.Group();
   group.name = `ProceduralHair_${style}`;
   group.userData[HAIR_RIG_TAG] = true;
@@ -416,10 +499,13 @@ function buildHairStyleGroup(params: {
     side: THREE.DoubleSide,
   });
   const backZ = -fwdSign;
+  const sideClearX = headBounds.halfW + 0.012;
+  const backClearZ = headBounds.backZ + 0.010;
+  const crownY = headBounds.topY;
 
   if (style === 'high_ponytail') {
     const anchor = new THREE.Group();
-    anchor.position.set(0, 0.165, 0.112 * backZ);
+    anchor.position.set(0, crownY * 0.78, backClearZ * backZ);
 
     const tie = createHairTie(tieHex, 0.028);
     tie.rotation.x = Math.PI / 2 - 0.35 * fwdSign;
@@ -449,7 +535,7 @@ function buildHairStyleGroup(params: {
   } else if (style === 'twin_tails') {
     for (const side of [-1, 1]) {
       const anchor = new THREE.Group();
-      anchor.position.set(side * 0.112, 0.155, 0.048 * backZ);
+      anchor.position.set(side * sideClearX, crownY * 0.74, (headBounds.backZ * 0.52) * backZ);
 
       const tie = createHairTie(tieHex, 0.024);
       tie.rotation.y = side * 0.55;
@@ -484,7 +570,7 @@ function buildHairStyleGroup(params: {
     });
     for (const side of [-1, 1]) {
       const bunGroup = new THREE.Group();
-      bunGroup.position.set(side * 0.115, 0.185, 0.035 * backZ);
+      bunGroup.position.set(side * (sideClearX + 0.008), crownY * 0.88, (headBounds.backZ * 0.42) * backZ);
 
       const bun = new THREE.Mesh(new THREE.SphereGeometry(0.056, 20, 16), hairMat);
       bun.scale.set(1.0, 0.94, 0.92);
@@ -511,7 +597,7 @@ function buildHairStyleGroup(params: {
     }
   } else if (style === 'side_braid') {
     const anchor = new THREE.Group();
-    anchor.position.set(0.095, 0.065, 0.045 * backZ);
+    anchor.position.set(sideClearX + 0.006, 0.068, (headBounds.backZ * 0.55) * backZ);
 
     const swayRoot = new THREE.Group();
     const beadCount = 9;
@@ -567,7 +653,7 @@ function buildHairStyleGroup(params: {
   } else if (style === 'drill_twintails') {
     for (const side of [-1, 1]) {
       const anchor = new THREE.Group();
-      anchor.position.set(side * 0.116, 0.145, 0.042 * backZ);
+      anchor.position.set(side * (sideClearX + 0.006), crownY * 0.70, (headBounds.backZ * 0.50) * backZ);
       const tie = createHairTie(tieHex, 0.024);
       tie.rotation.y = side * 0.6;
       anchor.add(tie);
@@ -594,28 +680,29 @@ function buildHairStyleGroup(params: {
       group.add(anchor);
     }
   } else if (style === 'bob_cut') {
-    // Sleek chin-length bob curved side locks & tucked nape volume
+    // Sleek chin-length bob curved side locks positioned cleanly OUTSIDE ear & cheek bounding radius (zero ear clipping!)
+    const sideOuterX = sideClearX + 0.012;
     for (const side of [-1, 1]) {
       const pts = [
-        new THREE.Vector3(side * 0.098, 0.13, 0.015 * fwdSign),
-        new THREE.Vector3(side * 0.118, 0.05, 0.028 * fwdSign),
-        new THREE.Vector3(side * 0.104, -0.022, 0.042 * fwdSign),
-        new THREE.Vector3(side * 0.068, -0.052, 0.048 * fwdSign),
+        new THREE.Vector3(side * (sideOuterX - 0.010), crownY * 0.62, 0.012 * backZ),
+        new THREE.Vector3(side * (sideOuterX + 0.010), 0.055, 0.018 * fwdSign),
+        new THREE.Vector3(side * (sideOuterX - 0.002), -0.022, 0.036 * fwdSign),
+        new THREE.Vector3(side * (sideOuterX - 0.030), -0.056, 0.044 * fwdSign),
       ];
-      group.add(createTaperedStrandMesh(pts, 0.032, hairMat));
+      group.add(createTaperedStrandMesh(pts, 0.020, hairMat));
     }
     for (const cx of [-0.065, -0.022, 0.022, 0.065]) {
       const pts = [
-        new THREE.Vector3(cx, 0.125, 0.092 * backZ),
-        new THREE.Vector3(cx * 1.08, 0.035, 0.112 * backZ),
-        new THREE.Vector3(cx * 0.92, -0.045, 0.078 * backZ),
+        new THREE.Vector3(cx, crownY * 0.60, backClearZ * backZ),
+        new THREE.Vector3(cx * 1.08, 0.035, (backClearZ + 0.020) * backZ),
+        new THREE.Vector3(cx * 0.92, -0.045, (backClearZ - 0.010) * backZ),
       ];
-      group.add(createTaperedStrandMesh(pts, 0.034, hairMat));
+      group.add(createTaperedStrandMesh(pts, 0.026, hairMat));
     }
   } else if (style === 'ahoge_clips') {
-    // Bouncy top ahoge + cute twin hairpins near bangs
+    // Bouncy top ahoge + cute twin hairpins anchored cleanly outside bangs/head surface
     const ahogePivot = new THREE.Group();
-    ahogePivot.position.set(0.008, 0.215, 0.015 * fwdSign);
+    ahogePivot.position.set(0.008, crownY + 0.004, 0.015 * fwdSign);
     const ahogePts = [
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0.018, 0.055, 0.012 * fwdSign),
@@ -635,7 +722,11 @@ function buildHairStyleGroup(params: {
     });
     for (let i = 0; i < 2; i++) {
       const clip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.007, 0.006), clipMat);
-      clip.position.set(0.072 + i * 0.005, 0.135 - i * 0.014, 0.095 * fwdSign);
+      clip.position.set(
+        headBounds.halfW * 0.68 + i * 0.005,
+        crownY * 0.64 - i * 0.014,
+        (headBounds.frontZ + 0.008) * fwdSign
+      );
       clip.rotation.z = -0.32 + i * 0.12;
       clip.rotation.y = 0.55 * fwdSign;
       group.add(clip);
@@ -677,18 +768,21 @@ export function syncProceduralHairStyleToVrm(params: {
   const fwdSign = isVrm0 ? -1 : 1;
   const resolvedHairHex = hairColorHex || sampleNativeHairColorHex(avatarRoot, '#3b4d63');
 
+  const headBone =
+    vrm?.humanoid?.getRawBoneNode('head') ||
+    vrm?.humanoid?.getNormalizedBoneNode('head') ||
+    null;
+
+  const headBounds = measureHeadClearanceBounds(vrm, avatarRoot, headBone, fwdSign);
+
   const hairGroup = buildHairStyleGroup({
     style: hairStyle,
     hairHex: resolvedHairHex,
     highlightHex: hairHighlightHex,
     tieHex: tieAccentHex,
     fwdSign,
+    headBounds,
   });
-
-  const headBone =
-    vrm?.humanoid?.getRawBoneNode('head') ||
-    vrm?.humanoid?.getNormalizedBoneNode('head') ||
-    null;
 
   if (headBone) {
     headBone.add(hairGroup);

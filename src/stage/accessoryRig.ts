@@ -84,15 +84,15 @@ function buildAccessoryGroup(
       metalness: 0.5,
     });
 
-    // Headband arc
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.008, 10, 32, Math.PI * 0.92), bandMat);
-    band.position.set(0, 0.105, 0.005 * fwdSign);
-    band.rotation.z = Math.PI * 0.04;
+    // Headband arc sized cleanly outside anime head/hair envelope (zero ear/side-hair clipping!)
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.126, 0.0075, 10, 32, Math.PI * 0.84), bandMat);
+    band.position.set(0, 0.118, 0.006 * fwdSign);
+    band.rotation.z = Math.PI * 0.08;
     group.add(band);
 
     for (const side of [-1, 1]) {
       const earPivot = new THREE.Group();
-      earPivot.position.set(side * 0.088, 0.205, 0.01 * fwdSign);
+      earPivot.position.set(side * 0.094, 0.218, 0.01 * fwdSign);
       earPivot.rotation.z = -side * 0.28;
       earPivot.rotation.y = side * 0.12 * fwdSign;
 
@@ -138,7 +138,7 @@ function buildAccessoryGroup(
       metalness: 0.15,
     });
     const pivot = new THREE.Group();
-    pivot.position.set(0.11, 0.175, 0.025 * fwdSign);
+    pivot.position.set(0.128, 0.188, 0.025 * fwdSign);
     pivot.rotation.z = -0.35;
     pivot.rotation.y = 0.25 * fwdSign;
 
