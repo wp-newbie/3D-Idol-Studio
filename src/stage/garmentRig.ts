@@ -587,7 +587,10 @@ function createSculptedSkirtGeometry(params: {
     const curvedR = THREE.MathUtils.lerp(topRadius, bottomRadius, Math.pow(t, flarePower));
     const pleat =
       pleatCount > 0 ? Math.sin(theta * pleatCount) * pleatDepth * Math.pow(t, 1.15) : 0;
-    const r = Math.max(0.02, curvedR + pleat);
+    // Extra outward rear pelvic / glute clearance (+0.014m rear clearance boost) so fabric drapes cleanly over glutes
+    const backAngleWeight = Math.max(0, -Math.cos(theta) * fwdSign);
+    const rearClearance = 0.014 * backAngleWeight;
+    const r = Math.max(0.02, curvedR + pleat + rearClearance);
     pos.setXYZ(i, Math.sin(theta) * r * scaleX, y, Math.cos(theta) * r * scaleZ);
   }
   geo.computeVertexNormals();
@@ -2548,6 +2551,7 @@ function addExposedSkinUnderlay(params: {
   const h = vrm.humanoid;
   if (!h) return;
   const cov = params.coverage ?? inspectVrmBodySkinCoverage(vrm, avatarRoot);
+  const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const skinMat = makeAnimeSkinMaterial(skinHex);
 
@@ -2594,13 +2598,13 @@ function addExposedSkinUnderlay(params: {
         armMode === 'upper_only' ||
         armMode === 'below_cap' ||
         armMode === 'below_short_sleeve') &&
-      !cov.hasUpperArmSkin;
+      (!cov.hasUpperArmSkin || culling.hasCulledArms || culling.isPreCulled);
     const needsForearm =
       (armMode === 'full' ||
         armMode === 'forearms_only' ||
         armMode === 'below_cap' ||
         armMode === 'below_short_sleeve') &&
-      !cov.hasForearmSkin;
+      (!cov.hasForearmSkin || culling.hasCulledArms || culling.isPreCulled);
 
     let clonedArmTris = 0;
     if (needsUpper || needsForearm) {
@@ -2714,8 +2718,7 @@ function addExposedSkinUnderlay(params: {
   }
 
   // 4. Watertight Torso & Midriff Bridge (prevents severed waist on culled-skin models)
-  const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
-  if (culling.hasCulledTorso && metrics.chest) {
+  if ((culling.hasCulledTorso || culling.isPreCulled) && metrics.chest) {
     const torsoBridge = attachGroup(metrics.chest, 'GarmentSkinTorsoBridge');
     if (torsoBridge) {
       const yBot = -(metrics.yChestFromSpine + metrics.ySpineFromHips * 0.92);
@@ -2736,12 +2739,14 @@ function addExposedSkinUnderlay(params: {
         fwdSign,
         segments: 24,
       });
-      torsoBridge.add(new THREE.Mesh(torsoGeo, skinMat));
+      const torsoMesh = new THREE.Mesh(torsoGeo, skinMat);
+      torsoMesh.frustumCulled = false;
+      torsoBridge.add(torsoMesh);
     }
   }
 
   // 5. Watertight Pelvis & Upper Hip Bridge
-  if (culling.hasCulledThighs && metrics.hips) {
+  if ((culling.hasCulledThighs || culling.isPreCulled) && metrics.hips) {
     const pelvisBridge = attachGroup(metrics.hips, 'GarmentSkinPelvisBridge');
     if (pelvisBridge) {
       const rHips = metrics.hipsHalfW * 0.98;
@@ -2761,7 +2766,9 @@ function addExposedSkinUnderlay(params: {
         fwdSign,
         segments: 24,
       });
-      pelvisBridge.add(new THREE.Mesh(pelvisGeo, skinMat));
+      const pelvisMesh = new THREE.Mesh(pelvisGeo, skinMat);
+      pelvisMesh.frustumCulled = false;
+      pelvisBridge.add(pelvisMesh);
     }
   }
 }
@@ -2923,31 +2930,31 @@ export function syncShowerCensorsToVrm(params: {
 
   // 1. Soft creamy anime foam lather (hugged flush to anatomy with zero opaque bowling ball look)
   const coreFoamMat = new THREE.MeshStandardMaterial({
-    color: '#ffffff',
+    color: '#fffbfb',
     emissive: '#fce7f3',
-    emissiveIntensity: 0.18,
-    roughness: 0.92,
-    metalness: 0.02,
+    emissiveIntensity: 0.05,
+    roughness: 0.70,
+    metalness: 0.04,
     transparent: true,
-    opacity: 0.88,
+    opacity: 0.78,
     depthWrite: true,
   });
 
   // 2. Soft translucent iridescent suds micro-bubble layer
   const bubbleMat = new THREE.MeshStandardMaterial({
     color: '#f8fafc',
-    emissive: new THREE.Color(accentHex).multiplyScalar(0.24),
-    emissiveIntensity: 0.28,
+    emissive: new THREE.Color(accentHex).multiplyScalar(0.18),
+    emissiveIntensity: 0.20,
     roughness: 0.22,
     metalness: 0.18,
     transparent: true,
-    opacity: 0.65,
+    opacity: 0.60,
     depthWrite: true,
   });
 
-  const wChest = Math.max(0.11, metrics.chestHalfW * 1.18);
-  const dChest = Math.max(0.08, metrics.chestHalfD * 1.15);
-  const zChestFront = dChest * 0.40 * fwdSign;
+  const wChest = Math.max(0.10, metrics.chestHalfW * 1.05);
+  const dChest = Math.max(0.07, metrics.chestHalfD * 1.05);
+  const zChestFront = dChest * 0.38 * fwdSign;
 
   // --- 1. CHEST / UPPER CHEST BUST FOAM CLUSTER ---
   const chestGroup = new THREE.Group();
@@ -2957,45 +2964,45 @@ export function syncShowerCensorsToVrm(params: {
   chestGroup.frustumCulled = false;
 
   // Center bust lather pad (anatomically contoured, hugs the cleavage smoothly)
-  const centerPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), coreFoamMat);
+  const centerPuff = new THREE.Mesh(new THREE.SphereGeometry(0.034, 14, 12), coreFoamMat);
   centerPuff.position.set(0, 0, zChestFront);
-  centerPuff.scale.set(1.25, 0.94, 0.58);
+  centerPuff.scale.set(1.15, 0.88, 0.50);
   chestGroup.add(centerPuff);
 
   // Left & right bust lather puffs with lateral rib wrap
   for (const side of [-1, 1]) {
-    const bustPuff = new THREE.Mesh(new THREE.SphereGeometry(0.048, 14, 12), coreFoamMat);
-    bustPuff.position.set(side * wChest * 0.38, 0, zChestFront * 0.94);
-    bustPuff.scale.set(1.12, 0.92, 0.56);
+    const bustPuff = new THREE.Mesh(new THREE.SphereGeometry(0.032, 14, 12), coreFoamMat);
+    bustPuff.position.set(side * wChest * 0.36, 0, zChestFront * 0.94);
+    bustPuff.scale.set(1.08, 0.86, 0.48);
 
     // Lateral wrap around the ribs/underarm so side profile is 100% covered!
-    const sideWrap = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), coreFoamMat);
-    sideWrap.position.set(side * wChest * 0.64, -0.012, zChestFront * 0.48);
-    sideWrap.scale.set(0.96, 0.88, 0.52);
+    const sideWrap = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), coreFoamMat);
+    sideWrap.position.set(side * wChest * 0.60, -0.010, zChestFront * 0.48);
+    sideWrap.scale.set(0.92, 0.84, 0.46);
 
     // Sparkling suds bubbles
-    const dab1 = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), bubbleMat);
-    dab1.position.set(side * wChest * 0.34, 0.038, zChestFront * 1.02);
+    const dab1 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), bubbleMat);
+    dab1.position.set(side * wChest * 0.32, 0.028, zChestFront * 1.02);
 
-    const dab2 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), bubbleMat);
-    dab2.position.set(side * wChest * 0.56, -0.030, zChestFront * 0.82);
+    const dab2 = new THREE.Mesh(new THREE.SphereGeometry(0.010, 8, 8), bubbleMat);
+    dab2.position.set(side * wChest * 0.52, -0.024, zChestFront * 0.82);
 
     chestGroup.add(bustPuff, sideWrap, dab1, dab2);
   }
 
   // Upper collarbone suds rim & lower sternum suds rim
-  const upperCollarPuff = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), coreFoamMat);
-  upperCollarPuff.position.set(0, 0.042, zChestFront * 0.82);
-  upperCollarPuff.scale.set(1.15, 0.82, 0.52);
+  const upperCollarPuff = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), coreFoamMat);
+  upperCollarPuff.position.set(0, 0.032, zChestFront * 0.80);
+  upperCollarPuff.scale.set(1.08, 0.78, 0.46);
 
-  const lowerSternumPuff = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), coreFoamMat);
-  lowerSternumPuff.position.set(0, -0.042, zChestFront * 0.82);
-  lowerSternumPuff.scale.set(1.15, 0.82, 0.52);
+  const lowerSternumPuff = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 10), coreFoamMat);
+  lowerSternumPuff.position.set(0, -0.032, zChestFront * 0.80);
+  lowerSternumPuff.scale.set(1.08, 0.78, 0.46);
 
   // Surface bubble clusters
   for (let i = 0; i < 5; i++) {
-    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.011 + (i % 3) * 0.004, 8, 8), bubbleMat);
-    bub.position.set(-0.045 + i * 0.022, 0.008 + (i % 2) * 0.024, zChestFront * 1.05);
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.009 + (i % 3) * 0.003, 8, 8), bubbleMat);
+    bub.position.set(-0.036 + i * 0.018, 0.006 + (i % 2) * 0.018, zChestFront * 1.02);
     chestGroup.add(bub);
   }
 
@@ -3009,54 +3016,54 @@ export function syncShowerCensorsToVrm(params: {
   hipsGroup.userData.__zeta_procedural_garment__ = true;
   hipsGroup.frustumCulled = false;
 
-  const wHips = Math.max(0.12, metrics.hipsHalfW * 1.18);
-  const dHips = Math.max(0.10, metrics.hipsHalfD * 1.22);
-  const zHipsFront = dHips * 0.40 * fwdSign;
-  const zHipsBack = -dHips * 0.40 * fwdSign;
+  const wHips = Math.max(0.11, metrics.hipsHalfW * 1.08);
+  const dHips = Math.max(0.09, metrics.hipsHalfD * 1.10);
+  const zHipsFront = dHips * 0.38 * fwdSign;
+  const zHipsBack = -dHips * 0.38 * fwdSign;
 
   // Front central pelvic lather pad
-  const frontPelvis = new THREE.Mesh(new THREE.SphereGeometry(0.058, 14, 12), coreFoamMat);
-  frontPelvis.position.set(0, -0.010, zHipsFront);
-  frontPelvis.scale.set(1.24, 0.96, 0.58);
+  const frontPelvis = new THREE.Mesh(new THREE.SphereGeometry(0.038, 14, 12), coreFoamMat);
+  frontPelvis.position.set(0, -0.008, zHipsFront);
+  frontPelvis.scale.set(1.15, 0.90, 0.52);
   hipsGroup.add(frontPelvis);
 
   // Left & right groin, outer hip, and glute wraps
   for (const side of [-1, 1]) {
-    const groinPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), coreFoamMat);
-    groinPuff.position.set(side * wHips * 0.42, -0.016, zHipsFront * 0.88);
-    groinPuff.scale.set(1.12, 0.92, 0.56);
+    const groinPuff = new THREE.Mesh(new THREE.SphereGeometry(0.034, 14, 12), coreFoamMat);
+    groinPuff.position.set(side * wHips * 0.38, -0.012, zHipsFront * 0.86);
+    groinPuff.scale.set(1.08, 0.88, 0.50);
 
-    const outerHipWrap = new THREE.Mesh(new THREE.SphereGeometry(0.048, 12, 10), coreFoamMat);
-    outerHipWrap.position.set(side * wHips * 0.68, -0.008, 0);
-    outerHipWrap.scale.set(0.96, 0.92, 0.55);
+    const outerHipWrap = new THREE.Mesh(new THREE.SphereGeometry(0.030, 12, 10), coreFoamMat);
+    outerHipWrap.position.set(side * wHips * 0.62, -0.006, 0);
+    outerHipWrap.scale.set(0.92, 0.86, 0.48);
 
-    const glutePuff = new THREE.Mesh(new THREE.SphereGeometry(0.055, 14, 12), coreFoamMat);
-    glutePuff.position.set(side * wHips * 0.38, -0.015, zHipsBack * 0.92);
-    glutePuff.scale.set(1.15, 0.95, 0.58);
+    const glutePuff = new THREE.Mesh(new THREE.SphereGeometry(0.036, 14, 12), coreFoamMat);
+    glutePuff.position.set(side * wHips * 0.36, -0.012, zHipsBack * 0.88);
+    glutePuff.scale.set(1.10, 0.90, 0.52);
 
-    const hipDab1 = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 8), bubbleMat);
-    hipDab1.position.set(side * wHips * 0.42, 0.035, zHipsFront * 0.96);
+    const hipDab1 = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 8), bubbleMat);
+    hipDab1.position.set(side * wHips * 0.38, 0.026, zHipsFront * 0.92);
 
-    const hipDab2 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), bubbleMat);
-    hipDab2.position.set(side * wHips * 0.62, -0.038, zHipsFront * 0.65);
+    const hipDab2 = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 8), bubbleMat);
+    hipDab2.position.set(side * wHips * 0.56, -0.028, zHipsFront * 0.62);
 
     hipsGroup.add(groinPuff, outerHipWrap, glutePuff, hipDab1, hipDab2);
   }
 
   // Under-pelvic perineal / thigh gap seal
-  const bottomSealPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10), coreFoamMat);
-  bottomSealPuff.position.set(0, -0.068, 0);
-  bottomSealPuff.scale.set(1.0, 0.78, 1.15);
+  const bottomSealPuff = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 10), coreFoamMat);
+  bottomSealPuff.position.set(0, -0.052, 0);
+  bottomSealPuff.scale.set(0.95, 0.75, 1.05);
 
   // Waistband top foam ring
-  const waistTopPuff = new THREE.Mesh(new THREE.SphereGeometry(0.046, 12, 10), coreFoamMat);
-  waistTopPuff.position.set(0, 0.045, zHipsFront * 0.75);
-  waistTopPuff.scale.set(1.15, 0.82, 0.55);
+  const waistTopPuff = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 10), coreFoamMat);
+  waistTopPuff.position.set(0, 0.036, zHipsFront * 0.72);
+  waistTopPuff.scale.set(1.08, 0.78, 0.48);
 
   // Surface bubbles
   for (let i = 0; i < 6; i++) {
-    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.011 + (i % 3) * 0.004, 8, 8), bubbleMat);
-    bub.position.set(-0.06 + i * 0.024, 0.008 + (i % 2) * 0.026, zHipsFront * 1.02);
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.009 + (i % 3) * 0.003, 8, 8), bubbleMat);
+    bub.position.set(-0.048 + i * 0.019, 0.006 + (i % 2) * 0.020, zHipsFront * 0.98);
     hipsGroup.add(bub);
   }
 
@@ -3671,35 +3678,51 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
   clearExistingGarments(avatarRoot);
   if (!vrm?.humanoid || garmentStyle === 'default') return;
 
-  // Automatic runtime fallback for pre-culled legacy VRM models (exported with VRoid "Delete transparent meshes"):
-  // Preserve native clothing & rely on clean material/texture recoloring in clothingModder.ts instead of exposing a hollow cavity!
   const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
-  if (culling.isPreCulled) {
-    console.info(
-      '[GarmentRig] Pre-culled body skin detected (torso/thighs missing) — preserving native clothing mesh with material/texture recoloring fallback.',
-      culling
-    );
-    return;
+  const skinCoverage = inspectVrmBodySkinCoverage(vrm, avatarRoot);
+  const avatarSkinHex = sampleAvatarSkinColorHex(avatarRoot);
+
+  // Watertight Culled-Skin Safety: Always bridge missing torso, arm, and pelvic polygons with
+  // watertight MToon skin underlays on culled VRMs so no hollow cavities or transparent gaps appear!
+  const isCulled =
+    culling.isPreCulled ||
+    culling.hasCulledTorso ||
+    culling.hasCulledArms ||
+    culling.hasCulledThighs ||
+    !skinCoverage.hasUpperArmSkin ||
+    !skinCoverage.hasForearmSkin;
+
+  if (isCulled) {
+    ensureWatertightBodySkinUnderlay({
+      vrm,
+      avatarRoot,
+      skinHex: avatarSkinHex,
+    });
   }
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const fwdSign = isVrm0 ? -1 : 1;
-  const avatarSkinHex = sampleAvatarSkinColorHex(avatarRoot);
   const metrics = measureTorsoMetrics(vrm, avatarRoot, fwdSign);
-  const skinCoverage = inspectVrmBodySkinCoverage(vrm, avatarRoot);
   // Raised waistband origin slightly above hips bone top edge so skirts & coat tails NEVER expose pelvis/underwear!
   const skirtWaistTopY = Math.max(0.055, metrics.ySpineFromHips * 0.78);
-  const skirtTopRadiusBase = Math.max(metrics.hipsHalfW, metrics.spineHalfW) + metrics.garmentClearance;
+  // Generous base radius with +0.010m clearance boost to guarantee glutes & thighs never poke through skirts
+  const skirtTopRadiusBase = Math.max(metrics.hipsHalfW, metrics.spineHalfW) + metrics.garmentClearance + 0.010;
 
   const topMat = makeAnimeFabricMaterial(topHex, {
     textureDataUrl: topTextureDataUrl,
     doubleSide: true,
   });
+  topMat.polygonOffset = true;
+  topMat.polygonOffsetFactor = -3;
+  topMat.polygonOffsetUnits = -3;
   const topAccentMat = makeAnimeFabricMaterial(topAccentHex, { doubleSide: true });
   const bottomMat = makeAnimeFabricMaterial(bottomHex, {
     textureDataUrl: bottomTextureDataUrl,
     doubleSide: true,
   });
+  bottomMat.polygonOffset = true;
+  bottomMat.polygonOffsetFactor = -2;
+  bottomMat.polygonOffsetUnits = -2;
   const bottomAccentMat = makeAnimeFabricMaterial(bottomAccentHex, { doubleSide: true });
   const accMat = makeAnimeFabricMaterial(accessoryHex, { doubleSide: true, emissiveBoost: 0.28 });
   const whiteMat = makeAnimeFabricMaterial('#ffffff', { doubleSide: true, emissiveBoost: 0.28 });
@@ -4726,9 +4749,12 @@ export function updateProceduralGarmentSway(
           nz = _tmpVert.z;
         }
 
-        // Posterior skirt pulls softly forward out of the chair backrest & cushions cleanly onto the seat!
-        const backPullForward = Math.min(0.12, h * 0.22) * t * backWeight * s;
-        nz += fwd * backPullForward;
+        // Posterior skirt drapes over the seated glutes and cushions cleanly onto the seat plane
+        // (pushed rearward along -Z and lifted upward along +Y so glute skin NEVER pokes through fabric!)
+        const rearGlutePush = Math.min(0.048, 0.042 * backWeight * effectiveThighPitch);
+        const rearGluteLift = Math.min(0.038, 0.032 * backWeight * effectiveThighPitch);
+        nz -= fwd * rearGlutePush;
+        ny += rearGluteLift;
 
         // Enforce world-space seat contact plane (y >= seatSurfaceY + 0.014) for posterior/lateral vertices
         if (s > 0.01 && t > 0.12) {

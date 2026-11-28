@@ -179,17 +179,17 @@ function buildAccessoryGroup(
     });
 
     const visor = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.118, 0.114, 0.046, 28, 1, true, -Math.PI * 0.34, Math.PI * 0.68),
+      new THREE.CylinderGeometry(0.088, 0.085, 0.038, 28, 1, true, -Math.PI * 0.35, Math.PI * 0.70),
       glassMat
     );
-    visor.position.set(0, 0.072, 0.088);
+    visor.position.set(0, 0.048, 0.050);
     group.add(visor);
 
     const browBar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.121, 0.121, 0.009, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
+      new THREE.CylinderGeometry(0.090, 0.090, 0.008, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
       frameMat
     );
-    browBar.position.set(0, 0.095, 0.088);
+    browBar.position.set(0, 0.068, 0.050);
     group.add(browBar);
   } else if (id === 'choker') {
     const strapMat = new THREE.MeshStandardMaterial({
@@ -204,13 +204,14 @@ function buildAccessoryGroup(
       roughness: 0.15,
       metalness: 0.7,
     });
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.0085, 10, 32), strapMat);
+    // Snug anime neck fit (+0.004m clearance, radius 0.042m instead of oversized 0.056m)
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.0052, 10, 32), strapMat);
     collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, 0.02, 0.004);
+    collar.position.set(0, 0.02, 0.003);
     group.add(collar);
 
-    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.015, 0), gemMat);
-    gem.position.set(0, 0.014, 0.060);
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.011, 0), gemMat);
+    gem.position.set(0, 0.014, 0.046);
     group.add(gem);
   } else if (id === 'fairy_wings') {
     const wingMat = new THREE.MeshStandardMaterial({

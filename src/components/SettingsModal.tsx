@@ -180,7 +180,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Scrollable Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* Real API Error Alert */}
-          {lastApiError && settings.enableGeminiCloud !== false && !errorDismissed && (
+          {lastApiError && settings.enableGeminiCloud !== false && !settings.preferLocalAi && !errorDismissed && (
             <div className="flex items-start justify-between gap-2.5 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
               <div className="flex items-start gap-2.5">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />

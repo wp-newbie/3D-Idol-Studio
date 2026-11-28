@@ -1720,7 +1720,42 @@ async function generatePersonaReplyOnce(params: {
       resolvedModel: activeModel,
     };
   } catch (err) {
-    throw parseFriendlyError(err, endpointLabel);
+    const friendlyErr = parseFriendlyError(err, endpointLabel);
+    console.warn('[Gemini] Live API call failed, attempting graceful fallback:', friendlyErr.message);
+
+    // Rule 7 / Seamless Local AI Fallback: Attempt local LM Studio before failing
+    try {
+      if (await isLocalLmStudioAvailable()) {
+        const localRes = await callLocalLmStudioRestApi({
+          systemInstruction,
+          contents,
+          mood: persona.mood,
+        });
+        if (localRes.text) {
+          return {
+            rawText: localRes.text,
+            isFallback: false,
+            providerNote: `Offline Local AI · LM Studio (${localRes.resolvedModel})`,
+            toolEvents: [],
+            resolvedModel: localRes.resolvedModel,
+          };
+        }
+      }
+    } catch (localErr) {
+      console.warn('[LM Studio] Graceful fallback to local LM Studio also failed:', localErr);
+    }
+
+    // If local AI or demo fallback is suitable, fall back to offline demo response
+    if (Boolean(settings.preferLocalAi)) {
+      return {
+        rawText: pickContextualOfflineReply(persona, userPrompt),
+        isFallback: true,
+        providerNote: 'Offline Demo Mode (Local Fallback)',
+        toolEvents: [],
+      };
+    }
+
+    throw friendlyErr;
   }
 }
 

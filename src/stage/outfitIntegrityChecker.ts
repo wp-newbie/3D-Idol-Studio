@@ -854,8 +854,11 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
               }
 
               // Penetration guard: if vertex is penetrating closer than 0.014m, push outward to 0.018m
-              const minDist = 0.014;
-              const targetDist = 0.018;
+              // For rear glutes & pelvic regions, require >= 0.024m clearance so no skin pokes through fabric
+              const fwdSign = vrm.meta?.metaVersion === '0' ? -1 : 1;
+              const isRearGlute = _query.z * fwdSign < -0.01;
+              const minDist = isRearGlute ? 0.020 : 0.014;
+              const targetDist = isRearGlute ? 0.024 : 0.018;
               if (bestTri !== -1 && bestDistSq < minDist * minDist) {
                 const tri = grid.triangles[bestTri];
                 if (bNorm) {

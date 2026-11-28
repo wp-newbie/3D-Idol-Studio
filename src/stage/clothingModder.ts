@@ -764,8 +764,8 @@ export function applyOutfitModsToScene(params: {
   } = params;
   const loader = new THREE.TextureLoader();
 
-  // In shower or bath: immediately mount watertight skin underlay on culled models before stripping street clothes!
-  if (isBathOrShower && vrm) {
+  // In shower or bath OR when hiding native clothes on culled models: mount watertight skin underlay!
+  if (vrm && (isBathOrShower || (hideNativeGarment && (cullingReport?.isPreCulled || cullingReport?.hasCulledTorso || cullingReport?.hasCulledArms || cullingReport?.hasCulledThighs)))) {
     ensureWatertightBodySkinUnderlay({ vrm, avatarRoot: root });
   }
 
@@ -903,10 +903,12 @@ export function applyOutfitModsToScene(params: {
         (matCategory && meshVisibility[matCategory] === false) ||
         (mats.length === 1 && meshVisibility[name] === false);
 
+      const isCollarOrFlap = /collar|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|vest|flap|badge|brooch|cuff|armband/i.test(mat.name || '');
+
       const shouldHideNativeGarmentSlot =
         isSlotExplicitlyHidden ||
         ((hideNativeGarment || isBathOrShower) &&
-          (!isCulledOrUnreplaced || isBathOrShower) &&
+          (!isCulledOrUnreplaced || isBathOrShower || isCollarOrFlap) &&
           !preserveNativeClothingForPreCulled);
 
       if (shouldHideNativeGarmentSlot && isNativeOutfitSlot) {

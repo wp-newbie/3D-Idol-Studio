@@ -1494,18 +1494,25 @@ export const App: React.FC = () => {
               : String(err);
 
         lastFailedTurnRef.current = { promptText, role };
-        setConnectionMode('error');
-        setApiErrorToast(reason);
-        setProviderStatus(`API Error — ${reason}`);
+        const isOffline = currentState.settings.enableGeminiCloud === false || currentState.settings.preferLocalAi;
+        if (!isOffline) {
+          setConnectionMode('error');
+          setApiErrorToast(reason);
+          setProviderStatus(`API Error — ${reason}`);
 
-        const isAuthFailure =
-          (err instanceof GeminiApiError &&
-            (err.statusCode === 401 || err.statusCode === 403)) ||
-          /API key not valid|API_KEY_INVALID|UNAUTHENTICATED/i.test(reason);
-        // Only auto-open Settings once per session for actual invalid-key auth errors
-        if (isAuthFailure && !hasAutoPromptedAuthRef.current) {
-          hasAutoPromptedAuthRef.current = true;
-          setIsSettingsOpen(true);
+          const isAuthFailure =
+            (err instanceof GeminiApiError &&
+              (err.statusCode === 401 || err.statusCode === 403)) ||
+            /API key not valid|API_KEY_INVALID|UNAUTHENTICATED/i.test(reason);
+          // Only auto-open Settings once per session for actual invalid-key auth errors
+          if (isAuthFailure && !hasAutoPromptedAuthRef.current) {
+            hasAutoPromptedAuthRef.current = true;
+            setIsSettingsOpen(true);
+          }
+        } else {
+          setConnectionMode('demo');
+          setApiErrorToast(null);
+          setProviderStatus('Offline Local AI / Demo Active');
         }
       } finally {
         setIsGenerating(false);

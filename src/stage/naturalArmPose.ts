@@ -930,14 +930,14 @@ export function applyDiningArms(
   // Outward carrying angle (~18°–24° elbow flare) keeps elbows down & comfortably away from the ribcage,
   // eliminating deltoid pinching while framing the tabletop/plate cleanly without clipping into cake/dishware!
   // Right arm (eating side, -X in character frame):
-  const rUpX = lerp(lerp(-0.38, -0.34, f.dipToPlate), -0.40, f.eatLift);
-  const rUpY = lerp(lerp(-0.56, -0.52, f.dipToPlate), -0.64, f.eatLift);
-  const rUpZ = lerp(lerp(0.73, 0.78, f.dipToPlate), 0.65, f.eatLift);
+  const rUpX = lerp(lerp(-0.36, -0.32, f.dipToPlate), -0.40, f.eatLift);
+  const rUpY = lerp(lerp(-0.66, -0.60, f.dipToPlate), -0.64, f.eatLift);
+  const rUpZ = lerp(lerp(0.64, 0.70, f.dipToPlate), 0.65, f.eatLift);
 
   // Frame the right edge of the plate cleanly above tabletop (y ≈ 0.76) -> dip to chopsticks -> lift to chin side
-  const rLowX = lerp(lerp(0.10, 0.24, f.dipToPlate), 0.20, f.eatLift);
-  const rLowY = lerp(lerp(0.14, 0.02, f.dipToPlate), 0.94, f.eatLift);
-  const rLowZ = lerp(lerp(0.98, 0.97, f.dipToPlate), 0.28, f.eatLift);
+  const rLowX = lerp(lerp(0.12, 0.26, f.dipToPlate), 0.20, f.eatLift);
+  const rLowY = lerp(lerp(0.32, 0.22, f.dipToPlate), 0.94, f.eatLift);
+  const rLowZ = lerp(lerp(0.92, 0.94, f.dipToPlate), 0.28, f.eatLift);
 
   // Distributed wrist pronation/supination so palm angles naturally inward/down (never flat-clipping cake!)
   const rHandEuler: [number, number, number] = [
@@ -948,13 +948,13 @@ export function applyDiningArms(
 
   // Left arm (drinking mug side, +X in character frame):
   // Outward elbow flare -> frame left placemat/teacup -> raise smoothly in front of lips
-  const lUpX = lerp(lerp(0.38, 0.36, f.reachToMug), 0.24, f.drinkLift);
-  const lUpY = lerp(lerp(-0.56, -0.50, f.reachToMug), -0.32 - f.mugTilt * 0.03, f.drinkLift);
-  const lUpZ = lerp(lerp(0.74, 0.79, f.reachToMug), 0.91, f.drinkLift);
+  const lUpX = lerp(lerp(0.36, 0.34, f.reachToMug), 0.24, f.drinkLift);
+  const lUpY = lerp(lerp(-0.66, -0.58, f.reachToMug), -0.32 - f.mugTilt * 0.03, f.drinkLift);
+  const lUpZ = lerp(lerp(0.64, 0.70, f.reachToMug), 0.91, f.drinkLift);
 
-  const lLowX = lerp(lerp(-0.12, 0.04, f.reachToMug), -0.46, f.drinkLift);
-  const lLowY = lerp(lerp(0.14, 0.04, f.reachToMug), 0.82 + f.mugTilt * 0.04, f.drinkLift);
-  const lLowZ = lerp(lerp(0.98, 0.99, f.reachToMug), 0.30, f.drinkLift);
+  const lLowX = lerp(lerp(-0.10, 0.04, f.reachToMug), -0.46, f.drinkLift);
+  const lLowY = lerp(lerp(0.30, 0.20, f.reachToMug), 0.82 + f.mugTilt * 0.04, f.drinkLift);
+  const lLowZ = lerp(lerp(0.92, 0.96, f.reachToMug), 0.30, f.drinkLift);
 
   // Natural left-wrist orientation: palm angled softly inward around teacup (no horizontal tabletop slicing)
   const lHandEuler: [number, number, number] = [
