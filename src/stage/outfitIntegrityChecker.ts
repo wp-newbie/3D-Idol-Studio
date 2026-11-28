@@ -342,6 +342,7 @@ export function autoSealSeamGaps(params: {
       collarMesh.userData.__zeta_procedural_garment__ = true;
       collarMesh.userData[SEAM_SEAL_TAG] = 'collar';
       collarMesh.frustumCulled = false;
+      collarMesh.visible = false;
       collarMesh.position.set(0, -0.010, 0);
       neckNode.add(collarMesh);
       sealedGaps.push('neckCollar');
@@ -368,6 +369,7 @@ export function autoSealSeamGaps(params: {
       waistMesh.userData.__zeta_procedural_garment__ = true;
       waistMesh.userData[SEAM_SEAL_TAG] = 'waist';
       waistMesh.frustumCulled = false;
+      waistMesh.visible = false;
       waistMesh.position.set(0, -waistSpan * 0.45, 0);
       spineNode.add(waistMesh);
       sealedGaps.push('chestStomach');
@@ -390,6 +392,7 @@ export function autoSealSeamGaps(params: {
       capMesh.userData.__zeta_procedural_garment__ = true;
       capMesh.userData[SEAM_SEAL_TAG] = 'deltoid_l';
       capMesh.frustumCulled = false;
+      capMesh.visible = false;
       lShoulder.add(capMesh);
       sealedGaps.push('shoulders');
     }
@@ -407,6 +410,7 @@ export function autoSealSeamGaps(params: {
       capMesh.userData.__zeta_procedural_garment__ = true;
       capMesh.userData[SEAM_SEAL_TAG] = 'deltoid_r';
       capMesh.frustumCulled = false;
+      capMesh.visible = false;
       rShoulder.add(capMesh);
       if (!sealedGaps.includes('shoulders')) sealedGaps.push('shoulders');
     }
@@ -428,6 +432,7 @@ export function autoSealSeamGaps(params: {
       kneeMesh.userData.__zeta_procedural_garment__ = true;
       kneeMesh.userData[SEAM_SEAL_TAG] = 'knee_l';
       kneeMesh.frustumCulled = false;
+      kneeMesh.visible = false;
       lLowLeg.add(kneeMesh);
       sealedGaps.push('legsToes');
     }
@@ -445,6 +450,7 @@ export function autoSealSeamGaps(params: {
       kneeMesh.userData.__zeta_procedural_garment__ = true;
       kneeMesh.userData[SEAM_SEAL_TAG] = 'knee_r';
       kneeMesh.frustumCulled = false;
+      kneeMesh.visible = false;
       rLowLeg.add(kneeMesh);
       if (!sealedGaps.includes('legsToes')) sealedGaps.push('legsToes');
     }

@@ -2540,6 +2540,7 @@ function addExposedSkinUnderlay(params: {
   skinHex: string;
   armMode?: 'full' | 'forearms_only' | 'upper_only' | 'below_cap' | 'below_short_sleeve' | 'none';
   collarboneBridge?: boolean;
+  torsoBridge?: boolean;
   upperThighs?: boolean;
   fwdSign: number;
   coverage?: BodySkinCoverage;
@@ -2551,6 +2552,7 @@ function addExposedSkinUnderlay(params: {
     skinHex,
     armMode = 'none',
     collarboneBridge = false,
+    torsoBridge = false,
     upperThighs = false,
     fwdSign,
   } = params;
@@ -2560,6 +2562,51 @@ function addExposedSkinUnderlay(params: {
   const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const skinMat = makeAnimeSkinMaterial(skinHex);
+
+  // 0. REAL Sculpted SkinnedMesh Torso / Waist / Midriff Skin (ZERO hollow waist / midriff gap!)
+  if (torsoBridge || culling.hasCulledTorso || culling.isPreCulled || !cov.hasCollarboneSkin) {
+    const clonedTorsoSkinTris = buildBodyClonedSkinnedGarment({
+      vrm,
+      avatarRoot,
+      mat: skinMat,
+      zone: 'torso_sleeveless',
+      inflate: -0.0024,
+    });
+    if (clonedTorsoSkinTris < 60 && metrics.spine) {
+      const spineSkinG = attachGroup(metrics.spine, 'GarmentSkinTorsoWaist');
+      if (spineSkinG) {
+        const ySpineBot = -metrics.ySpineFromHips * 0.95;
+        const ySpineTop = metrics.yChestFromSpine * 1.05;
+        const rHips = metrics.hipsHalfW * 0.96;
+        const rSpine = metrics.spineHalfW * 0.96;
+        const rChest = metrics.chestHalfW * 0.96;
+        const zRatioTorso = THREE.MathUtils.clamp(
+          (metrics.chestHalfD / Math.max(0.06, rChest)) * 0.86,
+          0.66,
+          0.84
+        );
+        const spineSkinGeo = createContouredTorsoLathe({
+          profile: [
+            [THREE.MathUtils.lerp(rHips, rSpine, 0.35), ySpineBot],
+            [rSpine, 0.0],
+            [THREE.MathUtils.lerp(rSpine, rChest, 0.45), ySpineTop * 0.55],
+            [THREE.MathUtils.lerp(rSpine, rChest, 0.80), ySpineTop],
+          ],
+          scaleX: 1.0,
+          scaleZ: zRatioTorso,
+          bustBoost: 0,
+          frontBellyBoost: 0,
+          rearGluteY: ySpineBot,
+          rearGluteBoost: 0.006,
+          fwdSign,
+          segments: 28,
+        });
+        const spineMesh = new THREE.Mesh(spineSkinGeo, skinMat);
+        spineMesh.userData[SHOWER_UNDERLAY_TAG] = true;
+        spineSkinG.add(spineMesh);
+      }
+    }
+  }
 
   // 1. REAL Sculpted SkinnedMesh Collarbone + Upper Chest Skin (ZERO hollow chest/neck gap!)
   if (collarboneBridge && !cov.hasCollarboneSkin) {
@@ -2670,18 +2717,12 @@ function addExposedSkinUnderlay(params: {
               mat: skinMat,
             });
             upG.add(tube);
-
-            if (armMode !== 'below_cap' && armMode !== 'below_short_sleeve') {
-              const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.029, 14, 12), skinMat);
-              upG.add(shoulderBall);
-            }
           }
         }
 
         if (low && needsForearm) {
           const lowG = attachGroup(low, `GarmentSkinArmLow_${s.lower}`);
           if (lowG) {
-            const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.0235, 12, 10), skinMat);
             const tube = createTaperedEllipticalForearmTube({
               bone: low,
               childBone: hand,
@@ -2694,7 +2735,7 @@ function addExposedSkinUnderlay(params: {
               ellipseScaleZ: 0.88,
               mat: skinMat,
             });
-            lowG.add(elbowBall, tube);
+            lowG.add(tube);
           }
         }
       }
@@ -2895,6 +2936,7 @@ export function ensureWatertightBodySkinUnderlay(params: {
     skinHex,
     armMode: 'full',
     collarboneBridge: true,
+    torsoBridge: true,
     upperThighs: true,
     fwdSign,
     coverage,
@@ -3554,7 +3596,8 @@ function addSculptedTorso(params: {
     });
   }
   const usedSkinnedTorso = clonedTorsoTris >= 80 && torsoCoverage.isSolid;
-  const needsRigidLathe = !usedSkinnedTorso || (closedOuterwear && !preferSkinnedBody);
+  // If SkinnedMesh torso is solid and complete, do NOT add duplicate rigid lathe (eliminates double-mesh Z-fighting!)
+  const needsRigidLathe = !usedSkinnedTorso;
 
   // Only add contoured lathe shell when SkinnedMesh torso is incomplete OR for structured tailored coats/blazers
   if (needsRigidLathe && chestGroup) {
@@ -3786,13 +3829,15 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hood.position.set(0, topNeckY - 0.005, -(metrics.upperChestHalfD * 0.62) * fwdSign);
       chestGroup.add(hood);
 
-      // Flush drawstrings sitting +4mm above garment surface
-      for (const sx of [-0.028, 0.028]) {
-        const str = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0032, 0.11, 8), whiteMat);
-        str.position.set(sx, topNeckY - 0.060, trimZ * fwdSign);
-        const aglet = new THREE.Mesh(new THREE.CylinderGeometry(0.0042, 0.0042, 0.014, 8), accMat);
-        aglet.position.set(sx, topNeckY - 0.118, trimZ * fwdSign);
-        chestGroup.add(str, aglet);
+      // Flush drawstrings sitting snugly against front chest surface (only on sculpted outer hoodie)
+      if (!usedSkinnedTorso) {
+        for (const sx of [-0.024, 0.024]) {
+          const str = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, 0.065, 8), whiteMat);
+          str.position.set(sx, topNeckY - 0.045, Math.abs(trimZ) * fwdSign);
+          const aglet = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 0.010, 8), accMat);
+          aglet.position.set(sx, topNeckY - 0.080, Math.abs(trimZ) * fwdSign);
+          chestGroup.add(str, aglet);
+        }
       }
 
       if (!usedSkinnedTorso) {
@@ -4763,17 +4808,25 @@ export function updateProceduralGarmentSway(
 
         // Posterior skirt drapes over the seated glutes and cushions cleanly onto the seat plane
         // (pushed rearward along -Z and lifted upward along +Y so glute skin NEVER pokes through fabric!)
-        const rearGlutePush = Math.min(0.056, 0.048 * backWeight * effectiveThighPitch);
-        const rearGluteLift = Math.min(0.044, 0.038 * backWeight * effectiveThighPitch);
+        const rearGlutePush = Math.min(0.065, 0.055 * backWeight * effectiveThighPitch);
+        const rearGluteLift = Math.min(0.048, 0.042 * backWeight * effectiveThighPitch);
         nz -= fwd * rearGlutePush;
         ny += rearGluteLift;
 
-        // Enforce world-space seat contact plane (y >= seatSurfaceY + 0.014) for posterior/lateral vertices
-        if (s > 0.01 && t > 0.12) {
+        // When seated, prevent outer coat tails / peplum ruffles from slicing into the pleated skirt or chair seat
+        if (skirtData.isCoatTail && s > 0.05) {
+          nx += Math.sign(rx || 1) * 0.026 * s;
+          if (backWeight > 0.25) {
+            ny += 0.022 * s * backWeight;
+          }
+        }
+
+        // Enforce world-space seat contact plane (y >= seatSurfaceY + 0.015) for posterior/lateral vertices
+        if (s > 0.01 && t > 0.08) {
           _tmpWorldVert.set(nx, ny, nz).applyMatrix4(obj.matrixWorld);
           // Posterior & mid-skirt rest flat on seat cushion; very front edge drapes gently over thigh knees
           const minWorldY =
-            seatFloorY - frontWeight * Math.min(0.06, h * 0.14) * tCurve;
+            seatFloorY + 0.015 - frontWeight * Math.min(0.06, h * 0.14) * tCurve;
           if (_tmpWorldVert.y < minWorldY) {
             const liftDelta = (minWorldY - _tmpWorldVert.y) * s;
             _tmpWorldVert.y += liftDelta;

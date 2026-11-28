@@ -1463,15 +1463,18 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
       animatedNodes.push(drop);
     }
 
-    // Ambient Warm Steam Puffs rising gently within the shower booth
-    const steamMat = new THREE.MeshBasicMaterial({
-      color: '#ffffff',
+    // Ambient Warm Steam Puffs rising gently within the shower booth (soft, non-obtrusive atmospheric wisps)
+    const steamMat = new THREE.MeshStandardMaterial({
+      color: '#fdf2f8',
+      roughness: 0.82,
+      metalness: 0.05,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.12,
+      depthWrite: false,
     });
-    for (let i = 0; i < 8; i++) {
-      const puff = new THREE.Mesh(new THREE.SphereGeometry(0.09 + (i % 3) * 0.03, 10, 8), steamMat);
-      puff.position.set(-0.32 + (i % 4) * 0.21, 0.55 + (i % 3) * 0.42, -0.15 + (i % 2) * 0.30);
+    for (let i = 0; i < 6; i++) {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(0.045 + (i % 3) * 0.015, 10, 8), steamMat);
+      puff.position.set(-0.25 + (i % 3) * 0.22, 0.35 + (i % 2) * 0.45, -0.15 + (i % 2) * 0.25);
       puff.userData.waterFall = { baseY: puff.position.y, phase: i * 0.85 };
       root.add(puff);
       animatedNodes.push(puff);

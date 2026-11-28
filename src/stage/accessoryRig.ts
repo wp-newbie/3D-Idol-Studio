@@ -182,11 +182,10 @@ function buildAccessoryGroup(
     });
 
     // Sleek anime cyber visor fitted flush across the brow/forehead (zero floating forward gap):
-    // Radius ~0.076m, height ~0.024m, nestled flush against bangs/forehead
     const visorGeo = new THREE.CylinderGeometry(
-      0.076,
       0.074,
-      0.024,
+      0.072,
+      0.022,
       28,
       1,
       true,
@@ -194,17 +193,17 @@ function buildAccessoryGroup(
       Math.PI * 0.64
     );
     const visor = new THREE.Mesh(visorGeo, glassMat);
-    visor.position.set(0, 0.038, 0.015 * fwdSign);
+    visor.position.set(0, 0.036, 0.002 * fwdSign);
     if (fwdSign < 0) {
       visor.rotation.y = Math.PI;
     }
     group.add(visor);
 
     const browBar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.077, 0.077, 0.005, 28, 1, true, -Math.PI * 0.33, Math.PI * 0.66),
+      new THREE.CylinderGeometry(0.075, 0.075, 0.004, 28, 1, true, -Math.PI * 0.33, Math.PI * 0.66),
       frameMat
     );
-    browBar.position.set(0, 0.050, 0.015 * fwdSign);
+    browBar.position.set(0, 0.047, 0.002 * fwdSign);
     if (fwdSign < 0) {
       browBar.rotation.y = Math.PI;
     }
@@ -212,8 +211,8 @@ function buildAccessoryGroup(
 
     // Sleek side temples hugging the skull back toward ears
     for (const side of [-1, 1]) {
-      const temple = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.006, 0.065), frameMat);
-      temple.position.set(side * 0.074, 0.046, -0.018 * fwdSign);
+      const temple = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.005, 0.055), frameMat);
+      temple.position.set(side * 0.072, 0.044, -0.022 * fwdSign);
       group.add(temple);
     }
   } else if (id === 'choker') {
@@ -239,52 +238,44 @@ function buildAccessoryGroup(
     gem.position.set(0, 0.014, 0.046);
     group.add(gem);
   } else if (id === 'fairy_wings') {
+    const backZ = -fwdSign;
     const wingMat = new THREE.MeshStandardMaterial({
       color: primaryColor,
       emissive: primaryColor,
-      emissiveIntensity: 0.55,
-      roughness: 0.18,
-      metalness: 0.35,
-      transparent: true,
-      opacity: 0.55,
-      side: THREE.DoubleSide,
-    });
-    const edgeMat = new THREE.MeshStandardMaterial({
-      color: '#f8fafc',
-      emissive: primaryColor,
       emissiveIntensity: 0.85,
-      roughness: 0.2,
-      metalness: 0.7,
+      roughness: 0.25,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.42,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
 
     const upperShape = new THREE.Shape();
     upperShape.moveTo(0, 0);
-    upperShape.bezierCurveTo(0.14, 0.22, 0.40, 0.26, 0.42, 0.10);
-    upperShape.bezierCurveTo(0.42, -0.02, 0.20, -0.06, 0, -0.03);
+    upperShape.bezierCurveTo(0.08, 0.14, 0.24, 0.18, 0.26, 0.07);
+    upperShape.bezierCurveTo(0.24, -0.02, 0.12, -0.04, 0, -0.02);
 
     const lowerShape = new THREE.Shape();
-    lowerShape.moveTo(0, -0.02);
-    lowerShape.bezierCurveTo(0.14, -0.04, 0.26, -0.12, 0.20, -0.16);
-    lowerShape.bezierCurveTo(0.12, -0.16, 0.04, -0.08, 0, -0.04);
+    lowerShape.moveTo(0, -0.015);
+    lowerShape.bezierCurveTo(0.08, -0.03, 0.16, -0.08, 0.13, -0.11);
+    lowerShape.bezierCurveTo(0.08, -0.11, 0.03, -0.05, 0, -0.025);
 
-    const upperGeo = new THREE.ShapeGeometry(upperShape, 16);
-    const lowerGeo = new THREE.ShapeGeometry(lowerShape, 14);
+    const upperGeo = new THREE.ShapeGeometry(upperShape, 12);
+    const lowerGeo = new THREE.ShapeGeometry(lowerShape, 10);
 
     for (const side of [-1, 1]) {
       const wingPivot = new THREE.Group();
-      // Mounted safely behind the upper back, swept outward and backwards
-      wingPivot.position.set(side * 0.04, 0.08, -0.095);
-      wingPivot.rotation.y = -side * 0.38;
-      wingPivot.rotation.x = -0.15;
+      // Mounted safely behind the upper back / scapulae (never clipping shoulders or arms)
+      wingPivot.position.set(side * 0.038, 0.04, 0.075 * backZ);
+      wingPivot.rotation.y = -side * 0.42;
+      wingPivot.rotation.x = -0.10 * fwdSign;
       wingPivot.scale.x = side;
 
       const upperMesh = new THREE.Mesh(upperGeo, wingMat);
       const lowerMesh = new THREE.Mesh(lowerGeo, wingMat);
-      const spineRib = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.003, 0.26, 8), edgeMat);
-      spineRib.rotation.z = -1.15;
-      spineRib.position.set(0.14, 0.06, 0);
-
-      wingPivot.add(upperMesh, lowerMesh, spineRib);
+      // No stray rods or cylinders jutting out behind neck/shoulder!
+      wingPivot.add(upperMesh, lowerMesh);
       group.add(wingPivot);
     }
   } else if (id === 'idol_crown') {

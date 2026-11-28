@@ -1779,6 +1779,7 @@ export async function summarizeConversationMemories(params: {
     .join('\n');
 
   const existingFacts = persona.memoryJournal.map((m) => m.fact).join('; ');
+  if (settings.enableGeminiCloud === false) return [];
   const apiKey = resolveEffectiveApiKey(settings);
 
   if (apiKey) {

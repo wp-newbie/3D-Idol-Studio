@@ -183,29 +183,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* Real API Error Alert */}
           {lastApiError && settings.enableGeminiCloud !== false && !settings.preferLocalAi && !errorDismissed && (
-            <div className="flex items-start justify-between gap-2.5 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
-              <div className="flex items-start gap-2.5">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
-                <div className="space-y-1">
-                  <div className="font-semibold text-rose-200">
-                    Gemini API Request Failed — Please Fix Key or Model
+            <div className="flex flex-col gap-2 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
+              <div className="flex items-start justify-between gap-2.5">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+                  <div className="space-y-1">
+                    <div className="font-semibold text-rose-200">
+                      Gemini API Request Failed — Please Fix Key or Model
+                    </div>
+                    <p className="font-mono text-[11px] leading-snug text-rose-200/90">
+                      {lastApiError}
+                    </p>
                   </div>
-                  <p className="font-mono text-[11px] leading-snug text-rose-200/90">
-                    {lastApiError}
-                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorDismissed(true);
+                    onDismissError?.();
+                  }}
+                  className="rounded-lg p-1 text-rose-300 hover:bg-white/10"
+                  title="Dismiss warning"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setErrorDismissed(true);
-                  onDismissError?.();
-                }}
-                className="rounded-lg p-1 text-rose-300 hover:bg-white/10"
-                title="Dismiss warning"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-2 pt-1 border-t border-rose-500/20">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateSettings({ enableGeminiCloud: false });
+                    setErrorDismissed(true);
+                    onDismissError?.();
+                  }}
+                  className="rounded-lg bg-rose-500/30 px-3 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/45 transition-colors"
+                >
+                  Disable Cloud &amp; Switch to 100% Offline LM Studio
+                </button>
+              </div>
             </div>
           )}
 

@@ -367,15 +367,15 @@ function createTaperedStrandMesh(
   return new THREE.Mesh(geo, material);
 }
 
-function createHairTie(colorHex: string, radius = 0.024): THREE.Mesh {
+function createHairTie(colorHex: string, radius = 0.016): THREE.Mesh {
   const mat = new THREE.MeshStandardMaterial({
     color: colorHex,
     emissive: colorHex,
-    emissiveIntensity: 0.15,
+    emissiveIntensity: 0.22,
     roughness: 0.35,
     metalness: 0.2,
   });
-  return new THREE.Mesh(new THREE.TorusGeometry(radius, 0.0085, 10, 20), mat);
+  return new THREE.Mesh(new THREE.TorusGeometry(radius, 0.0035, 12, 24), mat);
 }
 
 function markSwayNode(
@@ -535,10 +535,11 @@ function buildHairStyleGroup(params: {
   } else if (style === 'twin_tails') {
     for (const side of [-1, 1]) {
       const anchor = new THREE.Group();
-      anchor.position.set(side * sideClearX, crownY * 0.74, (headBounds.backZ * 0.52) * backZ);
+      anchor.position.set(side * (sideClearX - 0.004), crownY * 0.62, (headBounds.backZ * 0.44) * backZ);
 
-      const tie = createHairTie(tieHex, 0.024);
-      tie.rotation.y = side * 0.55;
+      const tie = createHairTie(tieHex, 0.016);
+      tie.rotation.x = Math.PI * 0.5;
+      tie.rotation.z = -side * 0.35;
       anchor.add(tie);
 
       const swayRoot = new THREE.Group();
@@ -653,9 +654,10 @@ function buildHairStyleGroup(params: {
   } else if (style === 'drill_twintails') {
     for (const side of [-1, 1]) {
       const anchor = new THREE.Group();
-      anchor.position.set(side * (sideClearX + 0.006), crownY * 0.70, (headBounds.backZ * 0.50) * backZ);
-      const tie = createHairTie(tieHex, 0.024);
-      tie.rotation.y = side * 0.6;
+      anchor.position.set(side * (sideClearX - 0.002), crownY * 0.62, (headBounds.backZ * 0.44) * backZ);
+      const tie = createHairTie(tieHex, 0.016);
+      tie.rotation.x = Math.PI * 0.5;
+      tie.rotation.z = -side * 0.35;
       anchor.add(tie);
 
       const swayRoot = new THREE.Group();
@@ -665,16 +667,17 @@ function buildHairStyleGroup(params: {
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const angle = t * turns * Math.PI * 2 * side;
-        const spiralR = (0.018 + Math.sin(t * Math.PI * 0.85) * 0.034) * (1 - t * 0.45);
+        // Spiral starts cleanly at 0 radius at t = 0 (right through center of tie ring)
+        const spiralR = t * (0.018 + Math.sin(t * Math.PI * 0.85) * 0.034) * (1 - t * 0.45);
         helixPts.push(
           new THREE.Vector3(
-            side * (0.045 + t * 0.035) + Math.cos(angle) * spiralR,
-            -t * 0.42,
-            (0.025 + t * 0.03) * backZ + Math.sin(angle) * spiralR
+            side * (t * 0.045) + Math.cos(angle) * spiralR,
+            -t * 0.44,
+            (t * 0.035) * backZ + Math.sin(angle) * spiralR
           )
         );
       }
-      swayRoot.add(createTaperedStrandMesh(helixPts, 0.028, hairMat, 8, 34));
+      swayRoot.add(createTaperedStrandMesh(helixPts, 0.026, hairMat, 8, 34));
       markSwayNode(swayRoot, side > 0 ? 0.3 : 1.9, 0.055, 0.035);
       anchor.add(swayRoot);
       group.add(anchor);

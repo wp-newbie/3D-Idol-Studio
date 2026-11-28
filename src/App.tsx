@@ -745,6 +745,13 @@ export const App: React.FC = () => {
   const handleValidateAndActivateKey = useCallback(
     async (overrideKey?: string): Promise<boolean> => {
       const currentSettings = studioRef.current.settings;
+      if (currentSettings.enableGeminiCloud === false) {
+        setConnectionMode('live');
+        setApiErrorToast(null);
+        setValidationMessage('Operating offline with LM Studio. Gemini Cloud API is disabled.');
+        setProviderStatus('Cloud Gemini Disabled · Local AI / Offline Active');
+        return true;
+      }
       const keyToTest = sanitizeApiKey(overrideKey ?? currentSettings.apiKey);
       const isLocal =
         currentSettings.preferLocalAi ||
@@ -1509,10 +1516,9 @@ export const App: React.FC = () => {
             (err instanceof GeminiApiError &&
               (err.statusCode === 401 || err.statusCode === 403)) ||
             /API key not valid|API_KEY_INVALID|UNAUTHENTICATED/i.test(reason);
-          // Only auto-open Settings once per session for actual invalid-key auth errors
-          if (isAuthFailure && !hasAutoPromptedAuthRef.current) {
+          // Never force open SettingsModal unprompted (user can click 'Fix Key' toast if desired)
+          if (isAuthFailure) {
             hasAutoPromptedAuthRef.current = true;
-            setIsSettingsOpen(true);
           }
         } else {
           setConnectionMode('demo');
