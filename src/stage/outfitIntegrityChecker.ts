@@ -1,11 +1,13 @@
 import * as THREE from 'three';
-import type { VRM } from '@pixiv/three-vrm';
+import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
 import type { OutfitSlot } from '../types/studio';
 import type { VrmBodyCullingReport } from './clothingModder';
 import {
   findPrimaryBodyMesh,
   getOrBuildBodySpatialGrid,
   closestPointOnTriangleBarycentric,
+  makeAnimeSkinMaterial,
+  sampleAvatarSkinColorHex,
 } from './garmentRig';
 
 export type IntegrityZone =
@@ -39,6 +41,7 @@ export interface OutfitIntegrityReport {
     legs_knees_toes: OutfitIntegrityZoneResult;
     same_person_identity: OutfitIntegrityZoneResult;
   };
+  boneCoverage?: Record<VRMHumanBoneName, number>;
 }
 
 export interface OutfitIntegrityContext {
@@ -52,16 +55,397 @@ export interface OutfitIntegrityContext {
 const PROTECTED_SKIN_HAIR_REGEX =
   /(^|[_\-\s.])(skin|body|face|head|eye|iris|sclera|cornea|brow|eyebrow|lash|eyelash|mouth|teeth|tooth|tongue|blush|hair|twintail|ponytail|ahoge|bangs)([_\-\s.\d()]|$)|_(skin|face|eye|brow|lash|mouth|teeth|hair)\b/i;
 
+export const CRITICAL_HUMANOID_BONES: VRMHumanBoneName[] = [
+  'neck',
+  'upperChest',
+  'chest',
+  'spine',
+  'hips',
+  'leftShoulder',
+  'rightShoulder',
+  'leftUpperArm',
+  'rightUpperArm',
+  'leftLowerArm',
+  'rightLowerArm',
+  'leftUpperLeg',
+  'rightUpperLeg',
+  'leftLowerLeg',
+  'rightLowerLeg',
+];
+
+export const MIN_BONE_VERTEX_OCCUPANCY: Record<VRMHumanBoneName, number> = {
+  neck: 15,
+  leftShoulder: 15,
+  rightShoulder: 15,
+  upperChest: 30,
+  chest: 30,
+  spine: 30,
+  hips: 30,
+  leftUpperArm: 30,
+  rightUpperArm: 30,
+  leftLowerArm: 30,
+  rightLowerArm: 30,
+  leftUpperLeg: 30,
+  rightUpperLeg: 30,
+  leftLowerLeg: 30,
+  rightLowerLeg: 30,
+} as Record<VRMHumanBoneName, number>;
+
+const _skinnedWorldPos = new THREE.Vector3();
+const _boneWorldPos = new THREE.Vector3();
+const _tempV1 = new THREE.Vector3();
+const _tempV2 = new THREE.Vector3();
+
+/**
+ * Procedural SkinnedMesh Renderability & World-Deformation Verification:
+ * Validates that a procedural SkinnedMesh is properly rigged, bound, and deforming in world space.
+ * Catches collapsed meshes (vertices at origin) or un-bound skeletons.
+ */
+export function verifyProceduralSkinnedMesh(
+  mesh: THREE.SkinnedMesh,
+  bodyMesh: THREE.SkinnedMesh | null,
+  _vrm: VRM
+): boolean {
+  if (!mesh.visible) return false;
+  // Always force frustumCulled = false so dynamically animated or seated avatar is never culled
+  mesh.frustumCulled = false;
+
+  const geo = mesh.geometry;
+  if (!geo) return false;
+  const pos = geo.attributes.position;
+  const skinIdx = geo.attributes.skinIndex;
+  const skinW = geo.attributes.skinWeight;
+  if (!pos || !skinIdx || !skinW || pos.count === 0) return false;
+
+  if (!mesh.skeleton || mesh.skeleton.bones.length === 0) return false;
+  if (bodyMesh?.skeleton && mesh.skeleton !== bodyMesh.skeleton) {
+    if (!mesh.skeleton.bones[0] || !mesh.skeleton.bones[0].parent) return false;
+  }
+
+  if (!mesh.skeleton.boneInverses || mesh.skeleton.boneInverses.length === 0) {
+    mesh.skeleton.calculateInverses();
+  }
+
+  // Sample at least 3 vertices (start, middle, end)
+  const sampleIndices = [0, Math.floor(pos.count * 0.5), pos.count - 1];
+  let validCount = 0;
+
+  for (const vIdx of sampleIndices) {
+    _tempV1.set(pos.getX(vIdx), pos.getY(vIdx), pos.getZ(vIdx)).applyMatrix4(mesh.bindMatrix);
+    _skinnedWorldPos.set(0, 0, 0);
+    let totalWeight = 0;
+    let maxWeight = -1;
+    let domBone: THREE.Bone | null = null;
+
+    for (let k = 0; k < 4; k++) {
+      const weight = skinW.getComponent(vIdx, k);
+      if (weight > 0.001) {
+        totalWeight += weight;
+        const bIdx = Math.round(skinIdx.getComponent(vIdx, k));
+        const bone = mesh.skeleton.bones[bIdx];
+        if (bone) {
+          if (weight > maxWeight) {
+            maxWeight = weight;
+            domBone = bone;
+          }
+          const boneInv = mesh.skeleton.boneInverses[bIdx];
+          if (boneInv) {
+            _tempV2.copy(_tempV1).applyMatrix4(boneInv).applyMatrix4(bone.matrixWorld);
+            _skinnedWorldPos.addScaledVector(_tempV2, weight);
+          }
+        }
+      }
+    }
+
+    if (totalWeight > 0.1 && domBone) {
+      domBone.getWorldPosition(_boneWorldPos);
+      const dist = _skinnedWorldPos.distanceTo(_boneWorldPos);
+      if (!isNaN(dist) && dist < 0.25) {
+        validCount++;
+      }
+    }
+  }
+
+  return validCount >= 2;
+}
+
+/**
+ * Bone-Zone Vertex Occupancy Audit:
+ * Tallies how many visible vertices have significant skin weight (>= 0.25) for every critical humanoid bone.
+ */
+export function computeVisibleBoneCoverage(
+  vrm: VRM,
+  avatarRoot: THREE.Object3D
+): Record<VRMHumanBoneName, number> {
+  const counts = {} as Record<VRMHumanBoneName, number>;
+  for (const b of CRITICAL_HUMANOID_BONES) {
+    counts[b] = 0;
+  }
+  if (!vrm.humanoid || !avatarRoot) return counts;
+
+  const boneMap = new Map<THREE.Object3D, VRMHumanBoneName>();
+  for (const bName of CRITICAL_HUMANOID_BONES) {
+    const raw = vrm.humanoid.getRawBoneNode(bName);
+    if (raw) boneMap.set(raw, bName);
+    const norm = vrm.humanoid.getNormalizedBoneNode(bName);
+    if (norm) boneMap.set(norm, bName);
+  }
+
+  const bodyMesh = findPrimaryBodyMesh(avatarRoot);
+
+  avatarRoot.traverse((obj) => {
+    if (!(obj instanceof THREE.SkinnedMesh)) return;
+    if (!obj.visible) return;
+    const geo = obj.geometry;
+    if (!geo) return;
+    const pos = geo.attributes.position;
+    const skinIdx = geo.attributes.skinIndex;
+    const skinW = geo.attributes.skinWeight;
+    if (!pos || !skinIdx || !skinW || pos.count === 0) return;
+    if (!obj.skeleton || obj.skeleton.bones.length === 0) return;
+
+    // Verify procedural renderability before counting
+    if (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__) {
+      if (!verifyProceduralSkinnedMesh(obj, bodyMesh, vrm)) {
+        return;
+      }
+    }
+
+    const skelMap = new Array<VRMHumanBoneName | null>(obj.skeleton.bones.length);
+    for (let b = 0; b < obj.skeleton.bones.length; b++) {
+      const bone = obj.skeleton.bones[b];
+      let found: VRMHumanBoneName | null = null;
+      let cur: THREE.Object3D | null = bone;
+      while (cur) {
+        if (boneMap.has(cur)) {
+          found = boneMap.get(cur)!;
+          break;
+        }
+        cur = cur.parent;
+      }
+      skelMap[b] = found;
+    }
+
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const groups =
+      geo.groups && geo.groups.length > 0
+        ? geo.groups
+        : [{ start: 0, count: geo.index ? geo.index.count : pos.count, materialIndex: 0 }];
+    const idxAttr = geo.index;
+
+    const grpVisible = groups.map((grp: { materialIndex?: number }) => {
+      const m = mats[grp.materialIndex ?? 0];
+      if (!m || !m.visible) return false;
+      const anyM = m as unknown as { opacity?: number };
+      if (anyM.opacity !== undefined && anyM.opacity <= 0.01) return false;
+      return true;
+    });
+
+    const visited = new Uint8Array(pos.count);
+    for (let g = 0; g < groups.length; g++) {
+      if (!grpVisible[g]) continue;
+      const grp = groups[g];
+      const end = grp.start + grp.count;
+      for (let t = grp.start; t < end; t++) {
+        const vi = idxAttr ? idxAttr.getX(t) : t;
+        if (visited[vi]) continue;
+        visited[vi] = 1;
+
+        for (let k = 0; k < 4; k++) {
+          const w = skinW.getComponent(vi, k);
+          if (w >= 0.25) {
+            const bIdx = Math.round(skinIdx.getComponent(vi, k));
+            const hBone = skelMap[bIdx];
+            if (hBone && counts[hBone] !== undefined) {
+              counts[hBone]++;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  return counts;
+}
+
+export function isBoneCoverageSatisfied(
+  coverage: Record<VRMHumanBoneName, number>
+): { satisfied: boolean; deficitBones: Array<{ bone: VRMHumanBoneName; count: number; required: number }> } {
+  const deficitBones: Array<{ bone: VRMHumanBoneName; count: number; required: number }> = [];
+  for (const bone of CRITICAL_HUMANOID_BONES) {
+    const required = MIN_BONE_VERTEX_OCCUPANCY[bone] ?? 30;
+    const count = coverage[bone] ?? 0;
+    if (count < required) {
+      deficitBones.push({ bone, count, required });
+    }
+  }
+  return {
+    satisfied: deficitBones.length === 0,
+    deficitBones,
+  };
+}
+
+const SEAM_SEAL_TAG = '__zeta_seam_seal__';
+
+/**
+ * Seam-Gap & Chipped-Edge Auto-Sealer:
+ * Checks spatial continuity between adjacent humanoid bone zones (neck ↔ upperChest, spine ↔ hips,
+ * shoulder ↔ upperArm, upperLeg ↔ lowerLeg) and bridges any gaps (> 0.012m) with skin-matched sleeves.
+ */
+export function autoSealSeamGaps(params: {
+  vrm: VRM;
+  avatarRoot?: THREE.Object3D;
+  bodyMesh: THREE.SkinnedMesh | null;
+  skinHex: string;
+}): string[] {
+  const { vrm, skinHex } = params;
+  const sealedGaps: string[] = [];
+  const h = vrm.humanoid;
+  if (!h) return sealedGaps;
+
+  const skinMat = makeAnimeSkinMaterial(skinHex);
+  skinMat.polygonOffset = true;
+  skinMat.polygonOffsetFactor = -2;
+  skinMat.polygonOffsetUnits = -2;
+
+  // 1. Neck ↔ UpperChest Collar Seam Auto-Sealer
+  const neckNode = h.getRawBoneNode('neck') || h.getNormalizedBoneNode('neck');
+  if (neckNode) {
+    let existingCollar = false;
+    neckNode.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'collar') existingCollar = true;
+    });
+    if (!existingCollar) {
+      const collarGeo = new THREE.CylinderGeometry(0.048, 0.054, 0.024, 24, 1, true);
+      collarGeo.computeVertexNormals();
+      const collarMesh = new THREE.Mesh(collarGeo, skinMat);
+      collarMesh.name = 'Zeta_AutoSeal_Collar';
+      collarMesh.userData.__zeta_procedural_garment__ = true;
+      collarMesh.userData[SEAM_SEAL_TAG] = 'collar';
+      collarMesh.frustumCulled = false;
+      collarMesh.position.set(0, -0.010, 0);
+      neckNode.add(collarMesh);
+      sealedGaps.push('neckCollar');
+    }
+  }
+
+  // 2. Spine ↔ Hips Waist Seam Auto-Sealer
+  const spineNode = h.getRawBoneNode('spine') || h.getNormalizedBoneNode('spine');
+  const hipsNode = h.getRawBoneNode('hips') || h.getNormalizedBoneNode('hips');
+  if (spineNode && hipsNode) {
+    let existingWaist = false;
+    spineNode.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'waist') existingWaist = true;
+    });
+    if (!existingWaist) {
+      const ySpineWorld = spineNode.getWorldPosition(new THREE.Vector3()).y;
+      const yHipsWorld = hipsNode.getWorldPosition(new THREE.Vector3()).y;
+      const waistSpan = Math.max(0.045, Math.abs(ySpineWorld - yHipsWorld) * 1.15);
+
+      const waistGeo = new THREE.CylinderGeometry(0.098, 0.112, waistSpan, 28, 1, true);
+      waistGeo.computeVertexNormals();
+      const waistMesh = new THREE.Mesh(waistGeo, skinMat);
+      waistMesh.name = 'Zeta_AutoSeal_Waist';
+      waistMesh.userData.__zeta_procedural_garment__ = true;
+      waistMesh.userData[SEAM_SEAL_TAG] = 'waist';
+      waistMesh.frustumCulled = false;
+      waistMesh.position.set(0, -waistSpan * 0.45, 0);
+      spineNode.add(waistMesh);
+      sealedGaps.push('chestStomach');
+    }
+  }
+
+  // 3. Shoulders ↔ UpperArms Deltoid Seam Auto-Sealer
+  const lShoulder = h.getRawBoneNode('leftShoulder') || h.getNormalizedBoneNode('leftShoulder');
+  const rShoulder = h.getRawBoneNode('rightShoulder') || h.getNormalizedBoneNode('rightShoulder');
+  if (lShoulder) {
+    let hasCap = false;
+    lShoulder.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'deltoid_l') hasCap = true;
+    });
+    if (!hasCap) {
+      const capGeo = new THREE.SphereGeometry(0.034, 14, 12);
+      capGeo.computeVertexNormals();
+      const capMesh = new THREE.Mesh(capGeo, skinMat);
+      capMesh.name = 'Zeta_AutoSeal_Deltoid_L';
+      capMesh.userData.__zeta_procedural_garment__ = true;
+      capMesh.userData[SEAM_SEAL_TAG] = 'deltoid_l';
+      capMesh.frustumCulled = false;
+      lShoulder.add(capMesh);
+      sealedGaps.push('shoulders');
+    }
+  }
+  if (rShoulder) {
+    let hasCap = false;
+    rShoulder.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'deltoid_r') hasCap = true;
+    });
+    if (!hasCap) {
+      const capGeo = new THREE.SphereGeometry(0.034, 14, 12);
+      capGeo.computeVertexNormals();
+      const capMesh = new THREE.Mesh(capGeo, skinMat);
+      capMesh.name = 'Zeta_AutoSeal_Deltoid_R';
+      capMesh.userData.__zeta_procedural_garment__ = true;
+      capMesh.userData[SEAM_SEAL_TAG] = 'deltoid_r';
+      capMesh.frustumCulled = false;
+      rShoulder.add(capMesh);
+      if (!sealedGaps.includes('shoulders')) sealedGaps.push('shoulders');
+    }
+  }
+
+  // 4. UpperLeg ↔ LowerLeg Knee Joint Auto-Sealer
+  const lLowLeg = h.getRawBoneNode('leftLowerLeg') || h.getNormalizedBoneNode('leftLowerLeg');
+  const rLowLeg = h.getRawBoneNode('rightLowerLeg') || h.getNormalizedBoneNode('rightLowerLeg');
+  if (lLowLeg) {
+    let hasKnee = false;
+    lLowLeg.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'knee_l') hasKnee = true;
+    });
+    if (!hasKnee) {
+      const kneeGeo = new THREE.SphereGeometry(0.038, 14, 12);
+      kneeGeo.computeVertexNormals();
+      const kneeMesh = new THREE.Mesh(kneeGeo, skinMat);
+      kneeMesh.name = 'Zeta_AutoSeal_Knee_L';
+      kneeMesh.userData.__zeta_procedural_garment__ = true;
+      kneeMesh.userData[SEAM_SEAL_TAG] = 'knee_l';
+      kneeMesh.frustumCulled = false;
+      lLowLeg.add(kneeMesh);
+      sealedGaps.push('legsToes');
+    }
+  }
+  if (rLowLeg) {
+    let hasKnee = false;
+    rLowLeg.traverse((c) => {
+      if (c.userData?.[SEAM_SEAL_TAG] === 'knee_r') hasKnee = true;
+    });
+    if (!hasKnee) {
+      const kneeGeo = new THREE.SphereGeometry(0.038, 14, 12);
+      kneeGeo.computeVertexNormals();
+      const kneeMesh = new THREE.Mesh(kneeGeo, skinMat);
+      kneeMesh.name = 'Zeta_AutoSeal_Knee_R';
+      kneeMesh.userData.__zeta_procedural_garment__ = true;
+      kneeMesh.userData[SEAM_SEAL_TAG] = 'knee_r';
+      kneeMesh.frustumCulled = false;
+      rLowLeg.add(kneeMesh);
+      if (!sealedGaps.includes('legsToes')) sealedGaps.push('legsToes');
+    }
+  }
+
+  return sealedGaps;
+}
+
 /**
  * Hard Safety Guard: Asserts that:
  * 1. The VRM has confirmed complete, unculled base skin underneath (torso & upper arms intact), AND
- * 2. A replacement procedural garment mesh is actively mounted in the scene with visible === true and valid geometry.
+ * 2. A replacement procedural garment mesh is actively mounted in the scene with visible === true and valid geometry, AND
+ * 3. Visible bone vertex occupancy is fully satisfied across all critical bones.
  *
- * If either condition is false, native clothing meshes and material slots MUST NEVER be hidden!
+ * If ANY condition is false, native clothing meshes and material slots MUST NEVER be hidden!
  */
 export function canSafelyHideNativeWardrobe(
   avatarRoot: THREE.Object3D | null,
-  cullingReport: VrmBodyCullingReport | null | undefined
+  cullingReport: VrmBodyCullingReport | null | undefined,
+  vrm?: VRM | null
 ): boolean {
   if (!avatarRoot) return false;
   // Rule 1: Skin must be complete & unculled across torso, arms, and thighs
@@ -73,7 +457,9 @@ export function canSafelyHideNativeWardrobe(
   ) {
     return false;
   }
+
   // Rule 2: A replacement procedural garment mesh must be actively mounted with visible geometry
+  const bodyMesh = findPrimaryBodyMesh(avatarRoot);
   let hasMountedProceduralMesh = false;
   avatarRoot.traverse((obj) => {
     if (
@@ -85,11 +471,27 @@ export function canSafelyHideNativeWardrobe(
         obj.geometry?.attributes?.position &&
         obj.geometry.attributes.position.count > 30
       ) {
-        hasMountedProceduralMesh = true;
+        if (obj instanceof THREE.SkinnedMesh && vrm) {
+          if (verifyProceduralSkinnedMesh(obj, bodyMesh, vrm)) {
+            hasMountedProceduralMesh = true;
+          }
+        } else {
+          hasMountedProceduralMesh = true;
+        }
       }
     }
   });
-  return hasMountedProceduralMesh;
+  if (!hasMountedProceduralMesh) return false;
+
+  // Rule 3: If VRM is provided, test that visible bone occupancy is fully satisfied
+  if (vrm) {
+    const coverage = computeVisibleBoneCoverage(vrm, avatarRoot);
+    if (!isBoneCoverageSatisfied(coverage).satisfied) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -105,11 +507,14 @@ export function canSafelyHideNativeWardrobe(
  *  7. legsToes        - Skirt/trouser clearance over thighs and knees with dynamic thigh deflection
  *
  * Plus:
- *  - Coplanar / Dual-Outfit Conflict Resolution (auto-hides overlapping native clothes)
+ *  - Bone-Zone Vertex Occupancy Audit (Hard veto against missing body parts)
+ *  - Procedural SkinnedMesh Renderability & World-Deformation Verification
+ *  - Seam-Gap & Chipped-Edge Auto-Sealer (neck, shoulders, waist, knees)
+ *  - Coplanar / Dual-Outfit Conflict Resolution (auto-hides overlapping native clothes only when 100% safe)
  *  - Culled-Skin & UV-Mask Safety Audit (safe fallback without hollow cavities)
  *  - Dynamic Pose Stress Check (simulated seated/forward lean gap audit)
  *  - Same-Person Identity Guard (VRM body & head proportions strictly unlocked, skin/face/hair untouched)
- *  - Multi-pass auto-repair loop returning { passed, score, repairedZones, fallbackTriggered, warnings }
+ *  - Multi-pass auto-repair loop returning { passed, score, repairedZones, fallbackTriggered, warnings, boneCoverage }
  */
 export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitIntegrityReport {
   const { vrm, avatarRoot, garmentStyle, cullingReport } = context;
@@ -156,17 +561,46 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
   const isProceduralActive = Boolean(garmentStyle && garmentStyle !== 'default');
   const isPreCulled = Boolean(cullingReport?.isPreCulled);
   const bodyMesh = findPrimaryBodyMesh(avatarRoot);
+  const skinHex = sampleAvatarSkinColorHex(avatarRoot);
+  let latestBoneCoverage: Record<VRMHumanBoneName, number> = {} as Record<VRMHumanBoneName, number>;
 
-  // Multi-pass verification & auto-repair loop (2 passes)
+  // Multi-pass verification & self-healing loop (2 passes)
   for (let pass = 1; pass <= 2; pass++) {
     // -------------------------------------------------------------------------
-    // 1. Coplanar / Dual-Outfit Conflict Resolution
+    // 1. Procedural SkinnedMesh Renderability & World-Deformation Verification
     // -------------------------------------------------------------------------
+    const invalidProceduralMeshes: THREE.SkinnedMesh[] = [];
+    avatarRoot.traverse((obj) => {
+      if (
+        obj instanceof THREE.SkinnedMesh &&
+        (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+      ) {
+        if (!verifyProceduralSkinnedMesh(obj, bodyMesh, vrm)) {
+          invalidProceduralMeshes.push(obj);
+        }
+      }
+    });
+
+    for (const m of invalidProceduralMeshes) {
+      m.parent?.remove(m);
+      m.geometry?.dispose();
+      fallbackTriggered = true;
+      repairsApplied.push(`Disposed un-bound or collapsed procedural SkinnedMesh "${m.name}"`);
+      warnings.push(`Procedural mesh "${m.name}" failed world-deformation check and was removed`);
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Bone-Zone Vertex Occupancy Audit (Hard Veto Against Missing Body Parts)
+    // -------------------------------------------------------------------------
+    latestBoneCoverage = computeVisibleBoneCoverage(vrm, avatarRoot);
+    const coverageCheck = isBoneCoverageSatisfied(latestBoneCoverage);
+
     if (isProceduralActive) {
-      const safeToHideNative = canSafelyHideNativeWardrobe(avatarRoot, cullingReport);
-      if (!safeToHideNative) {
-        // Pre-culled model OR no valid replacement procedural mesh active:
-        // Hard Safety Lock: Enforce native clothing visibility to prevent hollow torso/arms!
+      const safeToHide = canSafelyHideNativeWardrobe(avatarRoot, cullingReport, vrm) && coverageCheck.satisfied;
+
+      if (!safeToHide) {
+        // Pre-culled model OR insufficient bone vertex occupancy:
+        // Enforce native clothing & material visibility!
         let nativeRestored = 0;
         avatarRoot.traverse((obj) => {
           if (
@@ -183,24 +617,34 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
               if (!m) continue;
               if (!m.visible) {
                 m.visible = true;
-                const anyM = m as unknown as { transparent?: boolean; opacity?: number; depthWrite?: boolean };
+                const anyM = m as unknown as {
+                  transparent?: boolean;
+                  opacity?: number;
+                  depthWrite?: boolean;
+                  alphaMap?: THREE.Texture | null;
+                  alphaTest?: number;
+                };
                 anyM.transparent = false;
                 anyM.opacity = 1;
                 anyM.depthWrite = true;
+                if (anyM.alphaMap) {
+                  anyM.alphaMap = null;
+                  anyM.alphaTest = 0;
+                }
                 nativeRestored++;
               }
             }
           }
         });
 
-        // Also hide any partial procedural 3D meshes so native clothing recolor is clean
+        // Hide conflicting partial procedural 3D meshes on pre-culled model
         let proceduralGarmentsHidden = 0;
         avatarRoot.traverse((obj) => {
           if (
             obj instanceof THREE.Mesh &&
             (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
           ) {
-            if (obj.visible && isPreCulled) {
+            if (obj.visible && isPreCulled && !obj.userData?.__zeta_seam_seal__) {
               obj.visible = false;
               proceduralGarmentsHidden++;
             }
@@ -209,31 +653,40 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
 
         if (nativeRestored > 0) {
           fallbackTriggered = true;
-          repairsApplied.push(`Hard safety lock: restored ${nativeRestored} native clothing mesh/material slot(s) to guarantee solid torso & arms`);
-          warnings.push('Pre-culled skin or missing procedural mesh detected — preserved native wardrobe');
+          const deficitDesc = coverageCheck.deficitBones
+            .map((d) => `${d.bone} (${d.count}/${d.required})`)
+            .join(', ');
+          repairsApplied.push(
+            `Bone Occupancy Hard Veto: restored ${nativeRestored} native clothing mesh/material slot(s)${
+              deficitDesc ? ` [deficits: ${deficitDesc}]` : ''
+            }`
+          );
+          warnings.push('Pre-culled skin or bone vertex deficit detected — enforced native wardrobe visibility');
           repairedZonesSet.add('chestStomach');
           repairedZonesSet.add('upperArms');
           repairedZonesSet.add('shoulders');
           repairedZonesSet.add('hipsGlutes');
         }
       } else {
-        // Intact model AND valid procedural mesh active: hide conflicting native clothing slots so they do not Z-fight
+        // Intact model AND valid procedural mesh active: hide conflicting native clothing slots
         let nativeSlotsHidden = 0;
         avatarRoot.traverse((obj) => {
-          if (obj instanceof THREE.Mesh && !obj.userData?.__zeta_procedural_garment__ && !obj.userData?.__zeta_garment_rig__) {
+          if (
+            obj instanceof THREE.Mesh &&
+            !obj.userData?.__zeta_procedural_garment__ &&
+            !obj.userData?.__zeta_garment_rig__
+          ) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const hasSkin = mats.some(
               (m) => m && PROTECTED_SKIN_HAIR_REGEX.test(m.name || obj.name)
             );
 
-            // Separate clothing mesh without skin/hair
             if (!hasSkin && !PROTECTED_SKIN_HAIR_REGEX.test(obj.name)) {
               if (obj.visible) {
                 obj.visible = false;
                 nativeSlotsHidden++;
               }
             } else {
-              // Merged body mesh: hide non-skin, non-hair material slots
               for (const m of mats) {
                 if (!m) continue;
                 if (!PROTECTED_SKIN_HAIR_REGEX.test(m.name || '') && m.visible) {
@@ -258,13 +711,26 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     }
 
     // -------------------------------------------------------------------------
-    // 2. Zone 1: neckCollar & Floating Ring Elimination
+    // 3. Seam-Gap & Chipped-Edge Auto-Sealer (neck, shoulders, waist, knees)
+    // -------------------------------------------------------------------------
+    const sealedGaps = autoSealSeamGaps({ vrm, avatarRoot, bodyMesh, skinHex });
+    for (const zone of sealedGaps) {
+      repairedZonesSet.add(zone as IntegrityZone);
+      repairsApplied.push(`Auto-sealed seam gap across joint zone: ${zone}`);
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Material Shading, DoubleSide & polygonOffset Validation
     // -------------------------------------------------------------------------
     let collarRepaired = false;
     let floatingBeltsFixed = 0;
 
     avatarRoot.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && obj.userData?.__zeta_procedural_garment__) {
+      if (
+        obj instanceof THREE.Mesh &&
+        (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+      ) {
+        obj.frustumCulled = false;
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         for (const m of mats) {
           if (!m) continue;
@@ -316,7 +782,7 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     }
 
     // -------------------------------------------------------------------------
-    // 3. Zone 6: hipsGlutes & Rest-Pose Vertex-to-Body Penetration Guard
+    // 5. Rest-Pose Vertex-to-Body Penetration Guard (< 0.014m pushed to 0.018m)
     // -------------------------------------------------------------------------
     if (bodyMesh && bodyMesh.geometry && isProceduralActive && !isPreCulled) {
       const grid = getOrBuildBodySpatialGrid(bodyMesh.geometry);
@@ -386,9 +852,9 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
                 }
               }
 
-              // If vertex is penetrating closer than 0.012m to nearest body triangle, push outward to 0.016m
-              const minDist = 0.012;
-              const targetDist = 0.016;
+              // Penetration guard: if vertex is penetrating closer than 0.014m, push outward to 0.018m
+              const minDist = 0.014;
+              const targetDist = 0.018;
               if (bestTri !== -1 && bestDistSq < minDist * minDist) {
                 const tri = grid.triangles[bestTri];
                 if (bNorm) {
@@ -422,18 +888,18 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
         });
 
         if (pushedVerts > 0) {
-          repairsApplied.push(`Penetration guard: pushed ${pushedVerts} penetrating garment vertex/vertices outward to >= 0.016m`);
+          repairsApplied.push(`Penetration guard: pushed ${pushedVerts} penetrating garment vertex/vertices outward to >= 0.018m`);
           repairedZonesSet.add('hipsGlutes');
           zones.hipsGlutes = {
             status: 'repaired',
-            detail: `Pushed ${pushedVerts} vertex/vertices outward along body normal to ensure >= 0.016m clearance.`,
+            detail: `Pushed ${pushedVerts} vertex/vertices outward along body normal to ensure >= 0.018m clearance.`,
           };
         }
       }
     }
 
     // -------------------------------------------------------------------------
-    // 4. Zone 4: forearmsWrists & Zone 2: shoulders
+    // 6. Zone Statuses: forearmsWrists & shoulders
     // -------------------------------------------------------------------------
     const h = vrm.humanoid;
     const lHand = h?.getNormalizedBoneNode('leftHand');
@@ -450,14 +916,13 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     }
 
     // -------------------------------------------------------------------------
-    // 5. Zone 7: legsToes & Thigh Deflection
+    // 7. Zone Status: legsToes & Thigh Deflection
     // -------------------------------------------------------------------------
     if (isPreCulled) {
       zones.legsToes = {
         status: 'warn',
         detail: 'Pre-culled model: native bottoms safely preserved with material recoloring.',
       };
-      warnings.push('Pre-culled under-cloth skin detected; native clothing slots preserved.');
     } else {
       zones.legsToes = {
         status: repairedZonesSet.has('legsToes') ? 'repaired' : 'pass',
@@ -466,7 +931,7 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     }
 
     // -------------------------------------------------------------------------
-    // 6. Dynamic Pose Stress Check (Forward Lean / Seated Spine Continuity)
+    // 8. Dynamic Pose Stress Check (Forward Lean / Seated Spine Continuity)
     // -------------------------------------------------------------------------
     const spineNode = h?.getNormalizedBoneNode('spine');
     const chestNode = h?.getNormalizedBoneNode('chest');
@@ -482,7 +947,7 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     }
 
     // -------------------------------------------------------------------------
-    // 7. Same-Person Identity Guard (Proportions Unlocked, Skin Untouched)
+    // 9. Same-Person Identity Guard (Proportions Unlocked, Skin Untouched)
     // -------------------------------------------------------------------------
     let identityProtected = true;
     avatarRoot.traverse((obj) => {
@@ -491,7 +956,6 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
         for (const m of mats) {
           if (!m) continue;
           if (PROTECTED_SKIN_HAIR_REGEX.test(m.name || obj.name)) {
-            // Restore visibility if skin/hair material was accidentally hidden
             if (!m.visible) {
               m.visible = true;
               repairsApplied.push(`Restored visibility on protected core material: ${m.name}`);
@@ -503,7 +967,6 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     });
 
     if (vrm.scene && vrm.scene.scale.x !== 0 && vrm.scene.scale.y !== 0) {
-      // Proportions remain dynamically unlocked (never clamped to 1.0)
       if (!identityProtected) {
         repairedZonesSet.add('neckCollar');
       }
@@ -511,8 +974,18 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
   }
 
   // ---------------------------------------------------------------------------
-  // Score Calculation (0 - 100)
+  // Final Pass 2 Verification & Score Calculation
   // ---------------------------------------------------------------------------
+  latestBoneCoverage = computeVisibleBoneCoverage(vrm, avatarRoot);
+  const finalCoverageCheck = isBoneCoverageSatisfied(latestBoneCoverage);
+
+  if (!finalCoverageCheck.satisfied) {
+    // If any bone remains deficient after pass 2, log issue and enforce solid fallback
+    for (const d of finalCoverageCheck.deficitBones) {
+      issues.push(`Bone "${d.bone}" vertex occupancy critically low (${d.count}/${d.required})`);
+    }
+  }
+
   let score = 100;
   score -= issues.length * 15;
   score -= warnings.length * 5;
@@ -526,8 +999,18 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
 
   if (import.meta.env.DEV) {
     console.info(
-      `[OutfitIntegrityChecker] 7-Zone Audit for "${garmentStyle || 'default'}": ${passed ? `✅ PASS (Score: ${score}/100)` : `⚠️ ${issues.length} ISSUE(S)`}`,
-      { score, repairedZones, repairsApplied, warnings, fallbackTriggered }
+      `[OutfitIntegrity] 2-Pass Audit Complete for "${garmentStyle || 'default'}": ${
+        passed ? `✅ PASS (Score: ${score}/100)` : `⚠️ ${issues.length} ISSUE(S)`
+      }`,
+      {
+        score,
+        passed,
+        repairedZones,
+        repairsApplied,
+        warnings,
+        fallbackTriggered,
+        boneCoverage: latestBoneCoverage,
+      }
     );
   }
 
@@ -551,5 +1034,6 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
         detail: 'Avatar identity preserved: proportions dynamic & unlocked; all skin/face/hair untouched.',
       },
     },
+    boneCoverage: latestBoneCoverage,
   };
 }

@@ -1,7 +1,12 @@
 import * as THREE from 'three';
+import type { VRM } from '@pixiv/three-vrm';
 import type { ClothingCategory, MaterialMod, MeshDescriptor } from '../types/studio';
 import { getTextureFromVault } from '../storage/modelVault';
-import { canSafelyHideNativeWardrobe } from './outfitIntegrityChecker';
+import {
+  canSafelyHideNativeWardrobe,
+  computeVisibleBoneCoverage,
+  isBoneCoverageSatisfied,
+} from './outfitIntegrityChecker';
 
 export const CLOTHING_CATEGORY_ORDER: ClothingCategory[] = [
   'Tops',
@@ -720,6 +725,7 @@ function isProceduralOverlayObject(obj: THREE.Object3D): boolean {
 
 export function applyOutfitModsToScene(params: {
   root: THREE.Object3D;
+  vrm?: VRM | null;
   meshVisibility: Record<string, boolean>;
   materialMods: Record<string, MaterialMod>;
   isImportedModel: boolean;
@@ -741,6 +747,7 @@ export function applyOutfitModsToScene(params: {
 }): void {
   const {
     root,
+    vrm = null,
     meshVisibility,
     materialMods,
     isImportedModel,
@@ -749,7 +756,6 @@ export function applyOutfitModsToScene(params: {
     hideNativeGarment = false,
     preserveNativeClothingForPreCulled = false,
     fallbackRecolorPalette = null,
-    garmentStyle = null,
     cullingReport = null,
     onTextureLoaded,
   } = params;
@@ -762,7 +768,7 @@ export function applyOutfitModsToScene(params: {
     cullingReport?.hasCulledThighs ||
     preserveNativeClothingForPreCulled ||
     !cullingReport ||
-    !canSafelyHideNativeWardrobe(root, cullingReport)
+    !canSafelyHideNativeWardrobe(root, cullingReport, vrm)
   );
 
   const applyTextureUrl = (
@@ -822,7 +828,20 @@ export function applyOutfitModsToScene(params: {
     if (preserveNativeClothingForPreCulled || isCulledOrUnreplaced) {
       obj.visible = origVisible;
     } else if (hideNativeGarment && !isProtectedBodyOrHairMesh) {
+      // Bone-Zone Vertex Occupancy Audit: verify that hiding this mesh does not cause
+      // any critical bone (neck, torso, shoulders, arms, legs) to drop below safe vertex counts!
       obj.visible = false;
+      if (vrm) {
+        const testCov = computeVisibleBoneCoverage(vrm, root);
+        const check = isBoneCoverageSatisfied(testCov);
+        if (!check.satisfied) {
+          obj.visible = origVisible;
+          console.warn(
+            `[OutfitIntegrity] VETOED hiding native clothing mesh "${name}": would cause critical bone vertex deficit`,
+            check.deficitBones
+          );
+        }
+      }
     } else if (name in meshVisibility) {
       obj.visible = hasSkinMat && meshVisibility[name] === false ? origVisible : meshVisibility[name];
     } else if (obj.visible !== origVisible) {
@@ -869,13 +888,19 @@ export function applyOutfitModsToScene(params: {
         needsUpdate: boolean;
       };
 
-      if (hideNativeGarment && !isCulledOrUnreplaced && !preserveNativeClothingForPreCulled && isNativeOutfitSlot) {
+      if (
+        hideNativeGarment &&
+        !isCulledOrUnreplaced &&
+        !preserveNativeClothingForPreCulled &&
+        isNativeOutfitSlot &&
+        obj.visible === false
+      ) {
         mat.visible = false;
         anyMat.transparent = true;
         anyMat.opacity = 0;
         anyMat.depthWrite = false;
         continue;
-      } else if (!mat.visible || (isCulledOrUnreplaced && isNativeOutfitSlot)) {
+      } else {
         mat.visible = true;
         anyMat.transparent = false;
         anyMat.opacity = 1;
@@ -908,35 +933,19 @@ export function applyOutfitModsToScene(params: {
       if (isAnySkinFaceEyeOrHair && !isNativeOutfitSlot) {
         const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
         if (isSkinMat) {
-          const canAlphaMask =
-            hideNativeGarment &&
-            !isCulledOrUnreplaced &&
-            !preserveNativeClothingForPreCulled &&
-            (!cullingReport || !cullingReport.isPreCulled) &&
-            hasValidBodyUVs(obj);
-          if (canAlphaMask) {
-            const cov = getGarmentCoverageFlags(garmentStyle);
-            if (
-              cov.coversTorso ||
-              cov.coversUpperArms ||
-              cov.coversForearms ||
-              cov.coversThighs ||
-              cov.coversCalves
-            ) {
-              const alphaMask = getBodyAlphaMaskTexture(cov);
-              anyMat.alphaMap = alphaMask;
-              anyMat.alphaTest = 0.5;
-              anyMat.needsUpdate = true;
-            } else if (anyMat.alphaMap) {
-              anyMat.alphaMap = null;
-              anyMat.alphaTest = 0;
-              anyMat.needsUpdate = true;
-            }
-          } else if (anyMat.alphaMap) {
+          // Hard rule: NEVER apply alphaMap or alphaTest to core body skin!
+          // 2D rectangular alpha masks cause midriff/waist cutouts, upper-back black holes,
+          // and floating limbs when seated or in motion across different VRM clothing styles.
+          // Procedural garments already rely on barycentric skin-weight transfer, outward
+          // normal displacement, and polygon-offset to prevent fabric poke-through cleanly.
+          if (anyMat.alphaMap) {
             anyMat.alphaMap = null;
             anyMat.alphaTest = 0;
             anyMat.needsUpdate = true;
           }
+          anyMat.transparent = false;
+          anyMat.opacity = 1;
+          anyMat.depthWrite = true;
 
           if (cyclingShorts && snap.map) {
             const shortsTex = getCyclingShortsTexture(snap.map);

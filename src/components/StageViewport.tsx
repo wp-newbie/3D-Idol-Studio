@@ -2105,6 +2105,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
           applyOutfitModsToScene({
             root: modelRoot,
+            vrm: currentVrmRef.current,
             meshVisibility: activeSlot.meshVisibility,
             materialMods: activeSlot.materialMods,
             isImportedModel: true,
@@ -2471,6 +2472,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
     applyOutfitModsToScene({
       root: avatarRoot,
+      vrm: currentVrmRef.current,
       meshVisibility: activeSlot.meshVisibility,
       materialMods: activeSlot.materialMods,
       isImportedModel: true,
@@ -2612,6 +2614,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     activeSlot.id,
     persona.accentColor,
     isLoadingModel,
+    posture,
+    lifeScene?.dining,
   ]);
 
   // 3e. Sync real 3D hand-held activity props (teacup, chopsticks, pen, toothbrush, towel, palette, brush, whisk, book, camera)

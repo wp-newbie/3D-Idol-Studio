@@ -56,8 +56,7 @@ function clearExistingAccessories(root: THREE.Object3D): void {
 
 function buildAccessoryGroup(
   id: ProceduralAccessoryId,
-  accentHex: string,
-  fwdSign: number
+  accentHex: string
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = `ProceduralAccessory_${id}`;
@@ -87,18 +86,18 @@ function buildAccessoryGroup(
     // Sleek headband nestled cleanly along the top-back crown of the head (behind bangs/forehead)
     // with radius closely fitting the skull so it NEVER slices horizontally through front bangs!
     const band = new THREE.Mesh(new THREE.TorusGeometry(0.108, 0.0055, 10, 32, Math.PI * 0.72), bandMat);
-    band.position.set(0, 0.185, -0.018 * fwdSign);
-    band.rotation.x = 0.22 * fwdSign;
+    band.position.set(0, 0.185, -0.018);
+    band.rotation.x = 0.22;
     band.rotation.z = Math.PI * 0.14;
     group.add(band);
 
     for (const side of [-1, 1]) {
       const earPivot = new THREE.Group();
       // Natural ear positioning on top of skull/crown behind frontal bangs
-      earPivot.position.set(side * 0.088, 0.208, -0.012 * fwdSign);
+      earPivot.position.set(side * 0.088, 0.208, -0.012);
       earPivot.rotation.z = -side * 0.28;
-      earPivot.rotation.y = side * 0.12 * fwdSign;
-      earPivot.rotation.x = 0.08 * fwdSign;
+      earPivot.rotation.y = side * 0.12;
+      earPivot.rotation.x = 0.08;
 
       const outerEar = new THREE.Mesh(new THREE.ConeGeometry(0.042, 0.088, 4), outerMat);
       outerEar.scale.set(1.0, 1.0, 0.48);
@@ -107,7 +106,7 @@ function buildAccessoryGroup(
 
       const innerEar = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.056, 4), innerMat);
       innerEar.scale.set(1.0, 1.0, 0.35);
-      innerEar.position.set(0, -0.006, 0.011 * fwdSign);
+      innerEar.position.set(0, -0.006, 0.011);
       innerEar.rotation.y = Math.PI / 4;
       earPivot.add(innerEar);
 
@@ -124,8 +123,8 @@ function buildAccessoryGroup(
       opacity: 0.92,
     });
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.009, 14, 48), haloMat);
-    ring.rotation.x = Math.PI / 2 - 0.14 * fwdSign;
-    ring.position.set(0, 0.295, -0.02 * fwdSign);
+    ring.rotation.x = Math.PI / 2 - 0.14;
+    ring.position.set(0, 0.295, -0.02);
     group.add(ring);
 
     const innerSpark = new THREE.Mesh(
@@ -142,9 +141,9 @@ function buildAccessoryGroup(
       metalness: 0.15,
     });
     const pivot = new THREE.Group();
-    pivot.position.set(0.128, 0.188, 0.025 * fwdSign);
+    pivot.position.set(0.128, 0.188, 0.025);
     pivot.rotation.z = -0.35;
-    pivot.rotation.y = 0.25 * fwdSign;
+    pivot.rotation.y = 0.25;
 
     const knot = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 12), bowMat);
     pivot.add(knot);
@@ -157,7 +156,7 @@ function buildAccessoryGroup(
       pivot.add(loop);
 
       const tail = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.065, 0.005), bowMat);
-      tail.position.set(side * 0.018, -0.036, -0.004 * fwdSign);
+      tail.position.set(side * 0.018, -0.036, -0.004);
       tail.rotation.z = side * 0.28;
       pivot.add(tail);
     }
@@ -183,16 +182,14 @@ function buildAccessoryGroup(
       new THREE.CylinderGeometry(0.118, 0.114, 0.046, 28, 1, true, -Math.PI * 0.34, Math.PI * 0.68),
       glassMat
     );
-    visor.position.set(0, 0.072, 0.005 * fwdSign);
-    visor.rotation.y = fwdSign > 0 ? 0 : Math.PI;
+    visor.position.set(0, 0.072, 0.088);
     group.add(visor);
 
     const browBar = new THREE.Mesh(
       new THREE.CylinderGeometry(0.121, 0.121, 0.009, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
       frameMat
     );
-    browBar.position.set(0, 0.095, 0.005 * fwdSign);
-    browBar.rotation.y = visor.rotation.y;
+    browBar.position.set(0, 0.095, 0.088);
     group.add(browBar);
   } else if (id === 'choker') {
     const strapMat = new THREE.MeshStandardMaterial({
@@ -209,11 +206,11 @@ function buildAccessoryGroup(
     });
     const collar = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.0085, 10, 32), strapMat);
     collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, 0.02, 0.004 * fwdSign);
+    collar.position.set(0, 0.02, 0.004);
     group.add(collar);
 
     const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.015, 0), gemMat);
-    gem.position.set(0, 0.014, 0.062 * fwdSign);
+    gem.position.set(0, 0.014, 0.060);
     group.add(gem);
   } else if (id === 'fairy_wings') {
     const wingMat = new THREE.MeshStandardMaterial({
@@ -236,28 +233,30 @@ function buildAccessoryGroup(
 
     const upperShape = new THREE.Shape();
     upperShape.moveTo(0, 0);
-    upperShape.bezierCurveTo(0.14, 0.24, 0.42, 0.3, 0.44, 0.12);
-    upperShape.bezierCurveTo(0.45, -0.02, 0.22, -0.08, 0, -0.04);
+    upperShape.bezierCurveTo(0.14, 0.22, 0.40, 0.26, 0.42, 0.10);
+    upperShape.bezierCurveTo(0.42, -0.02, 0.20, -0.06, 0, -0.03);
 
     const lowerShape = new THREE.Shape();
-    lowerShape.moveTo(0, -0.03);
-    lowerShape.bezierCurveTo(0.16, -0.06, 0.3, -0.22, 0.24, -0.34);
-    lowerShape.bezierCurveTo(0.16, -0.4, 0.04, -0.22, 0, -0.08);
+    lowerShape.moveTo(0, -0.02);
+    lowerShape.bezierCurveTo(0.14, -0.04, 0.26, -0.12, 0.20, -0.16);
+    lowerShape.bezierCurveTo(0.12, -0.16, 0.04, -0.08, 0, -0.04);
 
     const upperGeo = new THREE.ShapeGeometry(upperShape, 16);
     const lowerGeo = new THREE.ShapeGeometry(lowerShape, 14);
 
     for (const side of [-1, 1]) {
       const wingPivot = new THREE.Group();
-      wingPivot.position.set(side * 0.04, 0.06, -0.105 * fwdSign);
-      wingPivot.rotation.y = side * (fwdSign > 0 ? -0.42 : 0.42);
+      // Mounted safely behind the upper back, swept outward and backwards
+      wingPivot.position.set(side * 0.04, 0.08, -0.095);
+      wingPivot.rotation.y = -side * 0.38;
+      wingPivot.rotation.x = -0.15;
       wingPivot.scale.x = side;
 
       const upperMesh = new THREE.Mesh(upperGeo, wingMat);
       const lowerMesh = new THREE.Mesh(lowerGeo, wingMat);
-      const spineRib = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.003, 0.34, 8), edgeMat);
+      const spineRib = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.003, 0.26, 8), edgeMat);
       spineRib.rotation.z = -1.15;
-      spineRib.position.set(0.17, 0.08, 0);
+      spineRib.position.set(0.14, 0.06, 0);
 
       wingPivot.add(upperMesh, lowerMesh, spineRib);
       group.add(wingPivot);
@@ -279,9 +278,9 @@ function buildAccessoryGroup(
     });
 
     const crownPivot = new THREE.Group();
-    crownPivot.position.set(0.035, 0.215, 0.035 * fwdSign);
+    crownPivot.position.set(0.035, 0.215, 0.025);
     crownPivot.rotation.z = -0.18;
-    crownPivot.rotation.x = 0.12 * fwdSign;
+    crownPivot.rotation.x = 0.12;
 
     const baseRing = new THREE.Mesh(new THREE.TorusGeometry(0.046, 0.006, 10, 28), goldMat);
     baseRing.rotation.x = Math.PI / 2;
@@ -298,7 +297,7 @@ function buildAccessoryGroup(
     }
 
     const centerGem = new THREE.Mesh(new THREE.OctahedronGeometry(0.011, 0), gemMat);
-    centerGem.position.set(0, 0.022, 0.046 * fwdSign);
+    centerGem.position.set(0, 0.022, 0.046);
     crownPivot.add(centerGem);
 
     group.add(crownPivot);
@@ -314,14 +313,14 @@ function buildAccessoryGroup(
       roughness: 0.85,
     });
     const towelPivot = new THREE.Group();
-    towelPivot.position.set(0, 0.222, 0.005 * fwdSign);
+    towelPivot.position.set(0, 0.222, 0.005);
     towelPivot.rotation.z = -0.05;
 
     const foldBottom = new THREE.Mesh(new THREE.BoxGeometry(0.145, 0.024, 0.115), towelMat);
     const foldTop = new THREE.Mesh(new THREE.BoxGeometry(0.138, 0.022, 0.108), towelMat);
     foldTop.position.y = 0.021;
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.146, 0.008, 0.024), stripeMat);
-    stripe.position.set(0, 0.016, 0.044 * fwdSign);
+    stripe.position.set(0, 0.016, 0.044);
 
     towelPivot.add(foldBottom, foldTop, stripe);
     group.add(towelPivot);
@@ -344,8 +343,6 @@ export function syncProceduralAccessoriesToVrm(params: {
 
   clearExistingAccessories(avatarRoot);
   if (!vrm || !vrm.humanoid || !accessories || accessories.length === 0) return;
-
-  const fwdSign = vrm.meta?.metaVersion === '0' ? -1 : 1;
 
   // Measure normalized bone orientation: raw head bones in some VRM models carry baked local rotations,
   // so attach into an identity-aligned anchor beneath the raw humanoid bone.
@@ -381,7 +378,7 @@ export function syncProceduralAccessoriesToVrm(params: {
     // Align anchor to vrm.scene's upright axes at current pose
     anchor.quaternion.copy(boneWorldQuat).invert().multiply(sceneWorldQuat);
 
-    const meshGroup = buildAccessoryGroup(id, accentHex, fwdSign);
+    const meshGroup = buildAccessoryGroup(id, accentHex);
     anchor.add(meshGroup);
     boneNode.add(anchor);
   }

@@ -198,7 +198,7 @@ function makeAnimeFabricMaterial(
  * True `@pixiv/three-vrm` MToonMaterial skin shader matching VRoid Studio's native Face/Body skin
  * under any number of studio lights — NEVER blows out to pure white!
  */
-function makeAnimeSkinMaterial(skinHex: string): MToonMaterial {
+export function makeAnimeSkinMaterial(skinHex: string): MToonMaterial {
   const lit = new THREE.Color(skinHex);
   const shade = lit.clone().multiplyScalar(0.86);
   return new MToonMaterial({
@@ -224,7 +224,7 @@ function attachGroup(parent: THREE.Object3D | null, name: string): THREE.Group |
  * Samples the loaded VRM avatar's actual bright MToon skin tone (preferring Face_00_SKIN first
  * since Face textures have clean cheek skin with zero clothing cutout holes!).
  */
-function sampleAvatarSkinColorHex(avatarRoot: THREE.Object3D): string {
+export function sampleAvatarSkinColorHex(avatarRoot: THREE.Object3D): string {
   const fallbackHex = '#fad5d2';
   let faceSkinMat: { color?: THREE.Color; map?: THREE.Texture | null } | null = null;
   let bodySkinMat: { color?: THREE.Color; map?: THREE.Texture | null } | null = null;
