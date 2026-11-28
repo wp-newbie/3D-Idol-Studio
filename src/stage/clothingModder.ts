@@ -791,26 +791,22 @@ export function applyOutfitModsToScene(params: {
     const hasSkinMat = mats.some(
       (m) => m && (isCoreSkinOrFaceMaterial(m.name) || isBodySkinMaterial(m.name))
     );
+    const hasHairMat = mats.some(
+      (m) => m && (classifyName(m.name) === 'Hair' || /hair|twintail|ponytail|bangs/i.test(m.name))
+    );
+    const isProtectedBodyOrHairMesh =
+      hasSkinMat ||
+      hasHairMat ||
+      PROTECTED_BODY_FACE_HAIR_REGEX.test(name);
 
-    // 1. Visibility toggle (NEVER hide a merged Body mesh with skin, nor hide native clothing on pre-culled VRMs!)
-    const allMatsAreNativeOutfit =
-      !hasSkinMat &&
-      mats.every((m) => {
-        if (!m) return false;
-        const cat = classifyName(m.name) || classifyName(name);
-        return (
-          cat === 'Tops' ||
-          cat === 'Bottoms' ||
-          cat === 'Footwear' ||
-          cat === 'Accessories' ||
-          NATIVE_OUTFIT_HIDE_REGEX.test(`${m.name || ''} ${name}`)
-        );
-      });
-
+    // 1. Visibility toggle:
+    // When a procedural 3D garment is active and not pre-culled, strictly hide ALL native clothing,
+    // tops, bottoms, footwear, underwear, and accessories so zero native meshes peek through.
+    // (NEVER hide a merged Body mesh containing skin, nor hide native clothing on pre-culled VRMs!)
     const origVisible = snapshotOriginalVisible(obj);
     if (preserveNativeClothingForPreCulled) {
       obj.visible = origVisible;
-    } else if (hideNativeGarment && allMatsAreNativeOutfit) {
+    } else if (hideNativeGarment && !isProtectedBodyOrHairMesh) {
       obj.visible = false;
     } else if (name in meshVisibility) {
       obj.visible = hasSkinMat && meshVisibility[name] === false ? origVisible : meshVisibility[name];
@@ -828,23 +824,19 @@ export function applyOutfitModsToScene(params: {
         isCoreSkinOrFaceMaterial(mat.name) || isBodySkinMaterial(mat.name);
       const matCategory =
         classifyName(mat.name) || (mats.length === 1 && !hasSkinMat ? classifyName(name) : null);
+      const isHair =
+        matCategory === 'Hair' ||
+        /hair|twintail|ponytail|bangs/i.test(mat.name);
 
       // Per-material hiding works on BOTH separate clothing meshes AND merged VRoid multi-material Body meshes!
       // Keep skin/face/head/eye/brow/lash/mouth/teeth/hair ALWAYS visible; hide all conflicting native clothing,
       // underwear, footwear, and outfit-bound accessories when a procedural 3D silhouette is active (unless pre-culled).
-      const matTargetName = `${mat.name || ''} ${mats.length === 1 && !hasSkinMat ? name : ''}`;
       const isProtectedCoreOrHair =
         isSkinOrFace ||
-        matCategory === 'Hair' ||
+        isHair ||
         (PROTECTED_BODY_FACE_HAIR_REGEX.test(mat.name || '') &&
           !NATIVE_OUTFIT_HIDE_REGEX.test(mat.name || ''));
-      const isNativeOutfitSlot =
-        !isProtectedCoreOrHair &&
-        (matCategory === 'Tops' ||
-          matCategory === 'Bottoms' ||
-          matCategory === 'Footwear' ||
-          matCategory === 'Accessories' ||
-          NATIVE_OUTFIT_HIDE_REGEX.test(matTargetName));
+      const isNativeOutfitSlot = !isProtectedCoreOrHair;
 
       const anyMat = mat as unknown as {
         color?: THREE.Color;

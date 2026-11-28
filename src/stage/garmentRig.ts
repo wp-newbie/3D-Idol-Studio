@@ -1318,7 +1318,7 @@ const _wtBP = new THREE.Vector3();
 const _wtCP = new THREE.Vector3();
 const _wtBC = new THREE.Vector3();
 
-function closestPointOnTriangleBarycentric(
+export function closestPointOnTriangleBarycentric(
   p: THREE.Vector3,
   a: THREE.Vector3,
   b: THREE.Vector3,
@@ -1390,13 +1390,13 @@ function closestPointOnTriangleBarycentric(
   return outClosest.distanceToSquared(p);
 }
 
-interface BodySpatialGrid {
+export interface BodySpatialGrid {
   cellSize: number;
   cells: Map<string, number[]>;
   triangles: Array<[number, number, number]>;
 }
 
-function getOrBuildBodySpatialGrid(bodyGeo: THREE.BufferGeometry): BodySpatialGrid | null {
+export function getOrBuildBodySpatialGrid(bodyGeo: THREE.BufferGeometry): BodySpatialGrid | null {
   const existing = (bodyGeo.userData as Record<string, unknown>)?.__zeta_body_spatial_grid__;
   if (existing) {
     return existing as BodySpatialGrid;
@@ -1496,14 +1496,33 @@ export function transferSkinWeightsFromBody(
   const baseClearance = isOuterwear ? (options?.maxClearance ?? 0.020) : (options?.baseClearance ?? 0.014);
   const minClearance = options?.minClearance ?? 0.008;
 
-  // Pre-classify bones for edge / boundary taper (neck, hands, feet)
+  // Pre-classify bones for edge / boundary taper (neck, hands, feet) and region-specific clearance
   const bones = bodyMesh.skeleton.bones;
   const isBoundaryBone = new Uint8Array(bones.length);
+  const isPelvisBone = new Uint8Array(bones.length);
+  const isElbowBone = new Uint8Array(bones.length);
+  let lShoulderIdx = -1;
+  let rShoulderIdx = -1;
+  let upperChestIdx = -1;
+  let chestIdx = -1;
+  let lUpArmIdx = -1;
+  let rUpArmIdx = -1;
+
   for (let b = 0; b < bones.length; b++) {
     const n = (bones[b]?.name || '').toLowerCase();
     if (/neck|head/i.test(n)) isBoundaryBone[b] = 1;
     else if (/hand|wrist|finger|thumb/i.test(n)) isBoundaryBone[b] = 2;
     else if (/foot|toe|ankle/i.test(n)) isBoundaryBone[b] = 3;
+
+    if (/hips|pelvis|butt|glute/i.test(n)) isPelvisBone[b] = 1;
+    if (/lowerarm|forearm|elbow/i.test(n)) isElbowBone[b] = 1;
+
+    if (/leftshoulder|shoulder.*l\b/i.test(n)) lShoulderIdx = b;
+    else if (/rightshoulder|shoulder.*r\b/i.test(n)) rShoulderIdx = b;
+    else if (/upperchest/i.test(n)) upperChestIdx = b;
+    else if (/chest/i.test(n)) chestIdx = b;
+    else if (/leftupperarm|upperarm.*l\b/i.test(n)) lUpArmIdx = b;
+    else if (/rightupperarm|upperarm.*r\b/i.test(n)) rUpArmIdx = b;
   }
 
   const cellSize = grid.cellSize;
@@ -1649,15 +1668,50 @@ export function transferSkinWeightsFromBody(
 
       // Clearance curve: smooth taper from +0.014m / +0.020m down to +0.008m at neck/cuffs/ankles
       let boundaryScore = 0;
+      let pelvisScore = 0;
+      let elbowScore = 0;
+      let chestW = 0;
+      let lArmW = 0;
+      let rArmW = 0;
+
       for (let k = 0; k < topCount; k++) {
         const bIdx = sorted[k][0];
         const bWeight = sorted[k][1] * normW;
-        if (isBoundaryBone[bIdx]) {
-          boundaryScore += bWeight;
-        }
+        if (isBoundaryBone[bIdx]) boundaryScore += bWeight;
+        if (isPelvisBone[bIdx]) pelvisScore += bWeight;
+        if (isElbowBone[bIdx]) elbowScore += bWeight;
+
+        if (bIdx === upperChestIdx || bIdx === chestIdx) chestW += bWeight;
+        if (bIdx === lUpArmIdx) lArmW += bWeight;
+        if (bIdx === rUpArmIdx) rArmW += bWeight;
       }
+
+      // Deltoid transition smoothing (upperChest <-> shoulder <-> upperArm)
+      // When both torso chest and upper arm exert strong pull, ensure shoulder bone participates smoothly
+      if (lShoulderIdx >= 0 && chestW > 0.15 && lArmW > 0.15 && !accumWeights.has(lShoulderIdx)) {
+        const share = Math.min(chestW, lArmW) * 0.35;
+        accumWeights.set(lShoulderIdx, share);
+        accumWeights.set(upperChestIdx >= 0 ? upperChestIdx : chestIdx, Math.max(0, chestW - share * 0.5));
+        accumWeights.set(lUpArmIdx, Math.max(0, lArmW - share * 0.5));
+      } else if (rShoulderIdx >= 0 && chestW > 0.15 && rArmW > 0.15 && !accumWeights.has(rShoulderIdx)) {
+        const share = Math.min(chestW, rArmW) * 0.35;
+        accumWeights.set(rShoulderIdx, share);
+        accumWeights.set(upperChestIdx >= 0 ? upperChestIdx : chestIdx, Math.max(0, chestW - share * 0.5));
+        accumWeights.set(rUpArmIdx, Math.max(0, rArmW - share * 0.5));
+      }
+
       const edgeFactor = THREE.MathUtils.clamp(boundaryScore, 0, 1);
-      const clearance = THREE.MathUtils.lerp(baseClearance, minClearance, edgeFactor);
+      let clearance = THREE.MathUtils.lerp(baseClearance, minClearance, edgeFactor);
+
+      // Pelvis / glute outward clearance boost (+0.005m -> ~0.019m total clearance)
+      if (pelvisScore > 0.20) {
+        clearance += 0.005 * pelvisScore;
+      }
+
+      // Inner elbow joint clearance boost (+0.004m) to eliminate inner elbow pinch during bent arm poses
+      if (elbowScore > 0.25) {
+        clearance += 0.004 * elbowScore;
+      }
 
       // Displace outward along interpolated body normal
       const dispX = bestClosestX + _wtNorm.x * clearance;
@@ -1670,6 +1724,9 @@ export function transferSkinWeightsFromBody(
       gSkinW.setXYZW(i, w0, w1, w2, w3);
     }
   }
+
+  // Recompute vertex normals after displacement so all displaced contours shade silky smooth (zero faceting)
+  garmentGeometry.computeVertexNormals();
 
   gPos.needsUpdate = true;
   gNorm.needsUpdate = true;
@@ -2071,8 +2128,13 @@ function buildBodyClonedSkinnedGarment(params: {
           }
         } else {
           // torso_sleeveless / torso_short_sleeve / torso_long_sleeve
-          const effectiveNeckY =
-            cz * fwdSign < lm.chest.z * fwdSign ? yNapeLimit : yNeckLimit;
+          // Smooth angular / depth collar-to-nape interpolation (eliminates height spikes on collar sides)
+          const napeFactor = THREE.MathUtils.clamp(
+            (lm.chest.z * fwdSign - cz * fwdSign) / Math.max(0.04, 0.08 * unitScale) + 0.5,
+            0,
+            1
+          );
+          const effectiveNeckY = THREE.MathUtils.lerp(yNeckLimit, yNapeLimit, napeFactor);
           if (
             (domR === REGION_TORSO || domR === REGION_PELVIS || domR === REGION_NECK) &&
             cy >= yTorsoBottom - 0.014 * unitScale &&
@@ -2238,8 +2300,13 @@ function buildBodyClonedSkinnedGarment(params: {
           domR === REGION_IGNORE
         ) {
           // Clamp ALL torso, pelvis, hip-border leg, and nape-border neck vertices onto straight tailored hems!
-          const effectiveNeckY =
-            vz * fwdSign < lm.chest.z * fwdSign ? yNapeLimit : yNeckLimit;
+          // Smooth angular neckline interpolation eliminates step spikes across collar sides & nape
+          const napeFactor = THREE.MathUtils.clamp(
+            (lm.chest.z * fwdSign - vz * fwdSign) / Math.max(0.04, 0.08 * unitScale) + 0.5,
+            0,
+            1
+          );
+          const effectiveNeckY = THREE.MathUtils.lerp(yNeckLimit, yNapeLimit, napeFactor);
           vy = THREE.MathUtils.clamp(vy, yTorsoBottom, effectiveNeckY);
         } else if (zone === 'torso_short_sleeve') {
           if (domR === REGION_ARM_L_UP) {
@@ -2257,13 +2324,18 @@ function buildBodyClonedSkinnedGarment(params: {
       }
 
       // Extrude smoothly along welded anatomical vertex normal so skin NEVER pokes mottled patches through!
-      // Add smooth outward clearance over the chest/bust/shoulder bend zone (+3.2mm) and waist/hips overlap (+3.8mm)
-      // so forward dining/desk arm reaches & seated torso flexion NEVER cause coplanar skin bleed-through!
+      // Add smooth outward clearance over chest/bust/shoulder bend zone (+3.2mm), waist/hips overlap (+3.8mm),
+      // and pelvic/glute region (+5.0mm) so seated postures, forward lean & arm reaches never clip glutes or skin!
+      const isPelvicGlute =
+        domR === REGION_PELVIS ||
+        (domR === REGION_TORSO && vy < yWaistTop + 0.02 * unitScale) ||
+        ((domR === REGION_LEG_L_UP || domR === REGION_LEG_R_UP) && vy > yHipJoint - 0.04 * unitScale);
+      const hipGluteEase = isPelvicGlute ? 0.0050 * unitScale : 0;
       const waistEase =
         isTorsoZone && vy < yWaistTop + 0.035 * unitScale ? 0.0038 * unitScale : 0;
       const chestBendEase =
         isTorsoZone && vy >= lm.chest.y - 0.035 * unitScale ? 0.0032 * unitScale : 0;
-      const vertInflate = scaledInflate + Math.max(waistEase, chestBendEase);
+      const vertInflate = scaledInflate + Math.max(waistEase, chestBendEase) + hipGluteEase;
       const ox = vx + nx * vertInflate;
       const oy = vy + ny * vertInflate;
       const oz = vz + nz * vertInflate;
@@ -2653,12 +2725,12 @@ function addLegPants(params: {
   } = params;
 
   // Primary path: True body-fitted SkinnedMesh pants/leggings/shorts cloned directly from the VRM's real
-  // sculpted hips, thighs, knees, and calves with slim +2.8mm..+4.0mm normal extrusion!
+  // sculpted hips, thighs, knees, and calves with generous +4.2mm..+6.0mm normal extrusion (+5.0mm glute boost)!
   const inflate = shortsOnly
-    ? 0.0040
+    ? 0.0050
     : looseFactor <= 1.0
-    ? 0.0032
-    : THREE.MathUtils.clamp(0.0034 + (looseFactor - 1.0) * 0.008, 0.0032, 0.0045);
+    ? 0.0042
+    : THREE.MathUtils.clamp(0.0042 + (looseFactor - 1.0) * 0.008, 0.0042, 0.0060);
   const pantsCov = { isSolid: false, hasPelvisCoverage: false };
   const clonedTris = buildBodyClonedSkinnedGarment({
     vrm,
