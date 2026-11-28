@@ -7,6 +7,7 @@ import type {
   VoiceGender,
 } from '../types/studio';
 import { parseDialogueResponse } from '../services/dialogueParser';
+import { CANONICAL_MAKEUP_PRESETS } from '../stage/makeupRig';
 
 export const MOOD_META: Record<
   MoodType,
@@ -353,6 +354,7 @@ export function createSeedPersonas(): Persona[] {
           modelVaultId: null,
           meshVisibility: {},
           materialMods: {},
+          makeup: CANONICAL_MAKEUP_PRESETS.natural_idol,
           createdAt: now,
         },
         {
@@ -463,6 +465,7 @@ export function createSeedPersonas(): Persona[] {
           modelVaultId: null,
           meshVisibility: {},
           materialMods: {},
+          makeup: CANONICAL_MAKEUP_PRESETS.gothic_diva,
           createdAt: now,
         },
         {
@@ -573,6 +576,7 @@ export function createSeedPersonas(): Persona[] {
           modelVaultId: null,
           meshVisibility: {},
           materialMods: {},
+          makeup: CANONICAL_MAKEUP_PRESETS.jrock_stoic,
           createdAt: now,
         },
         {

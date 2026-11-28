@@ -26,10 +26,13 @@ import {
 } from 'lucide-react';
 import type {
   AccessoryAttachTarget,
+  AiMakeupConfig,
+  BeautyMarkKind,
   ClothingCategory,
   EquippedAccessory,
   GarmentStyleId,
   HairStyleId,
+  MakeupArchetype,
   MeshDescriptor,
   OutfitSlot,
   Persona,
@@ -57,6 +60,10 @@ import {
   GARMENT_STYLE_META,
   GARMENT_STYLE_ORDER,
 } from '../stage/garmentRig';
+import {
+  CANONICAL_MAKEUP_PRESETS,
+  getDefaultMakeupForCharacter,
+} from '../stage/makeupRig';
 import {
   formatWardrobeSummaryText,
   retrieveWardrobeInventory,
@@ -139,6 +146,9 @@ interface WardrobeDrawerProps {
   onSelectHairColor?: (hairColorHex: string | null, hairHighlightHex?: string | null) => void;
   onAiPickHairStyle?: (prompt?: string) => Promise<void> | void;
   integrityReport?: OutfitIntegrityReport | null;
+  onUpdateMakeup?: (makeup: AiMakeupConfig | null) => void;
+  onAiGenerateMakeup?: () => Promise<void> | void;
+  isGeneratingMakeup?: boolean;
 }
 
 type WardrobeTab =
@@ -195,6 +205,9 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onSelectHairColor,
   onAiPickHairStyle,
   integrityReport,
+  onUpdateMakeup,
+  onAiGenerateMakeup,
+  isGeneratingMakeup = false,
 }) => {
   const [tab, setTab] = useState<WardrobeTab>('full_outfits');
   const [aiOutfitPrompt, setAiOutfitPrompt] = useState('');
@@ -1227,6 +1240,144 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                           })}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* AI Makeup & Facial Styling Studio */}
+                  {onUpdateMakeup && (
+                    <div className="border-t border-white/[0.07] pt-2.5 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-rose-200/90">
+                          <span>💄</span> AI Makeup &amp; Facial Styling
+                        </div>
+                        {onAiGenerateMakeup && (
+                          <button
+                            type="button"
+                            disabled={isGeneratingMakeup || isGeneratingAiOutfit}
+                            onClick={() => void onAiGenerateMakeup()}
+                            className="flex items-center gap-1 rounded-lg border border-rose-400/40 bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-500/35 disabled:opacity-45"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            <span>Style for {persona.name}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Active Makeup Summary Pill & Controls */}
+                      {(() => {
+                        const currentMakeup =
+                          activeSlot.makeup ||
+                          getDefaultMakeupForCharacter(persona, { slotName: activeSlot.name });
+                        const beautyMarkLabels: Record<BeautyMarkKind, string> = {
+                          none: 'None',
+                          heart_under_eye: '❤️ Heart Under Eye',
+                          star_cheek: '⭐ Star Cheek',
+                          teardrop: '💧 Teardrop Gem',
+                          classic_mole: '• Classic Mole',
+                          cross_cheek: '✖ Gothic Cross',
+                        };
+
+                        return (
+                          <div className="space-y-2">
+                            <div className="rounded-xl border border-rose-500/20 bg-rose-950/20 p-2 text-[10px] space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-rose-200">
+                                  {currentMakeup.label}
+                                </span>
+                                <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[9px] text-zinc-300 font-mono">
+                                  {beautyMarkLabels[currentMakeup.beautyMark || 'none']}
+                                </span>
+                              </div>
+                              <div className="text-[9px] text-zinc-400 leading-tight">
+                                {currentMakeup.reason ||
+                                  'Character-tailored makeup matching vocal archetype & scene.'}
+                              </div>
+                            </div>
+
+                            {/* Archetype Quick Switch */}
+                            <div className="space-y-1">
+                              <div className="text-[9px] font-medium text-zinc-400">
+                                Makeup Archetypes:
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {(
+                                  [
+                                    'gothic_diva',
+                                    'natural_idol',
+                                    'jrock_stoic',
+                                    'cyber_neon',
+                                    'pastel_fairy',
+                                    'gyaru_glam',
+                                    'bare_natural',
+                                  ] as MakeupArchetype[]
+                                ).map((archId) => {
+                                  const preset = CANONICAL_MAKEUP_PRESETS[archId];
+                                  const isSelected =
+                                    (currentMakeup.styleId || 'natural_idol') === archId;
+                                  return (
+                                    <button
+                                      key={archId}
+                                      type="button"
+                                      onClick={() => onUpdateMakeup({ ...preset })}
+                                      className={`rounded-lg border px-2 py-0.5 text-[9.5px] transition ${
+                                        isSelected
+                                          ? 'border-rose-400 bg-rose-500/25 text-rose-100 font-semibold'
+                                          : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                                      }`}
+                                    >
+                                      {preset.label.split(' ')[0]} {preset.label.split(' ')[1] || ''}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Under-Eye Beauty Mark / Decal Selector */}
+                            <div className="space-y-1">
+                              <div className="text-[9px] font-medium text-zinc-400">
+                                Beauty Mark &amp; Decal:
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {(
+                                  [
+                                    'heart_under_eye',
+                                    'star_cheek',
+                                    'teardrop',
+                                    'classic_mole',
+                                    'none',
+                                  ] as BeautyMarkKind[]
+                                ).map((markKind) => {
+                                  const isSelected =
+                                    (currentMakeup.beautyMark || 'none') === markKind;
+                                  return (
+                                    <button
+                                      key={markKind}
+                                      type="button"
+                                      onClick={() =>
+                                        onUpdateMakeup({
+                                          ...currentMakeup,
+                                          beautyMark: markKind,
+                                          beautyMarkColorHex:
+                                            markKind === 'heart_under_eye'
+                                              ? '#9f1239'
+                                              : currentMakeup.beautyMarkColorHex,
+                                        })
+                                      }
+                                      className={`rounded-lg border px-2 py-0.5 text-[9.5px] transition ${
+                                        isSelected
+                                          ? 'border-pink-400 bg-pink-500/25 text-pink-100 font-semibold'
+                                          : 'border-white/10 bg-[#10101e] text-zinc-400 hover:border-white/20 hover:text-zinc-200'
+                                      }`}
+                                    >
+                                      {beautyMarkLabels[markKind]}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

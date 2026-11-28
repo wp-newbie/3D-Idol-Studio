@@ -75,6 +75,7 @@ import {
   type OutfitIntegrityReport,
 } from '../stage/outfitIntegrityChecker';
 import { applyVrmAppearanceVariant } from '../stage/vrmMorphRig';
+import { applyMakeupToVrm } from '../stage/makeupRig';
 import {
   syncActivityHandPropsToVrm,
   updateActivityHandProps,
@@ -2154,6 +2155,15 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             variant: activeSlot.vrmVariant ?? null,
           });
 
+          applyMakeupToVrm({
+            vrm: currentVrmRef.current,
+            avatarRoot,
+            persona,
+            makeup: activeSlot.makeup ?? null,
+            mood: persona.mood,
+            affinity: persona.affinity,
+          });
+
           syncProceduralHairStyleToVrm({
             vrm: currentVrmRef.current,
             avatarRoot,
@@ -2535,6 +2545,27 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       variant: activeSlot.vrmVariant ?? null,
     });
   }, [activeSlot.vrmVariant, activeSlot.id, isLoadingModel]);
+
+  // 3f. Apply live character-dependent AI makeup (eyeliner, eyeshadow, blush, lips & under-eye beauty mark decals)
+  useEffect(() => {
+    const avatarRoot = avatarRootRef.current;
+    if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
+    applyMakeupToVrm({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      persona,
+      makeup: activeSlot.makeup ?? null,
+      mood: persona.mood,
+      affinity: persona.affinity,
+    });
+  }, [
+    activeSlot.makeup,
+    activeSlot.id,
+    persona.mood,
+    persona.affinity,
+    persona.id,
+    isLoadingModel,
+  ]);
 
   // 3b. Sync LLM-generated / user-toggled procedural 3D bone-tracked accessories
   useEffect(() => {

@@ -1,9 +1,12 @@
 import type {
   ActiveLifeScene,
+  AiMakeupConfig,
+  BeautyMarkKind,
   CircadianPhase,
   FabricPatternId,
   GarmentStyleId,
   HairStyleId,
+  MakeupArchetype,
   MaterialMod,
   MeshDescriptor,
   Persona,
@@ -20,6 +23,7 @@ import { HAIR_STYLE_META, HAIR_STYLE_ORDER } from '../stage/hairStyleRig';
 import { GARMENT_STYLE_META, GARMENT_STYLE_ORDER } from '../stage/garmentRig';
 import { queryDualLmStudioJsonText } from './localLlmOrchestrator';
 import { saveTextureToVault } from '../storage/modelVault';
+import { getDefaultMakeupForCharacter } from '../stage/makeupRig';
 
 export type OutfitEngineSource = 'local-llm' | 'gemini-llm' | 'offline-stylist';
 
@@ -51,6 +55,7 @@ export interface AiOutfitPlan {
   accessories: ProceduralAccessoryId[];
   clearanceBoost?: boolean;
   seatedFriendly?: boolean;
+  makeup?: AiMakeupConfig | null;
   source: OutfitEngineSource;
   modelUsed?: string;
 }
@@ -75,6 +80,7 @@ export interface GeneratedOutfitPayload {
     bottomTextureDataUrl?: string | null;
   };
   preferredExistingSlot: string | null;
+  makeup?: AiMakeupConfig | null;
 }
 
 export interface AiHairStylePlan {
@@ -572,8 +578,15 @@ function normalizeGarmentStyle(
   return fallback;
 }
 
-function buildOfflineOutfitPlan(prompt: string, occasionLabel = 'Custom Look'): AiOutfitPlan {
+function buildOfflineOutfitPlan(
+  prompt: string,
+  occasionLabel = 'Custom Look',
+  persona?: Persona
+): AiOutfitPlan {
   const p = `${prompt} ${occasionLabel}`.toLowerCase();
+  const characterMakeup = persona
+    ? getDefaultMakeupForCharacter(persona, { occasion: occasionLabel, slotName: prompt })
+    : null;
   if (/bath.?wrap|bath.?towel|shower|bathroom|spa.?robe/i.test(p)) {
     return {
       outfitName: 'Fluffy Spa Bath Wrap',
@@ -590,6 +603,7 @@ function buildOfflineOutfitPlan(prompt: string, occasionLabel = 'Custom Look'): 
       accessoryHex: '#f472b6',
       hairStyle: 'twin_buns',
       accessories: ['spa_towel'],
+      makeup: characterMakeup,
       source: 'offline-stylist',
     };
   }
@@ -609,6 +623,7 @@ function buildOfflineOutfitPlan(prompt: string, occasionLabel = 'Custom Look'): 
       accessoryHex: '#f472b6',
       hairStyle: 'high_ponytail',
       accessories: ['ribbon_bow'],
+      makeup: characterMakeup,
       source: 'offline-stylist',
     };
   }
@@ -936,6 +951,7 @@ function parseOutfitPlanJson(
         typeof parsed.seatedFriendly === 'boolean'
           ? parsed.seatedFriendly
           : fallback.seatedFriendly,
+      makeup: fallback.makeup,
       source,
       modelUsed,
     };
@@ -1005,7 +1021,7 @@ async function requestLlmOutfitPlan(params: {
   }
   const liveSceneSummary = sceneContextParts.join(' | ');
 
-  const fallback = buildOfflineOutfitPlan(`${prompt} ${liveSceneSummary}`, occasionLabel);
+  const fallback = buildOfflineOutfitPlan(`${prompt} ${liveSceneSummary}`, occasionLabel, persona);
 
   // Enforce mandatory scene-appropriate garment silhouette (bath -> bath_wrap, beach -> beach_swimsuit, etc.)
   // while still letting Gemma / Qwen freely design the colors, patterns, hair, accessories & style note!
@@ -1386,6 +1402,7 @@ async function materializeOutfitPlan(
       bottomTextureDataUrl: bottomTexRecord?.dataUrl || null,
     },
     preferredExistingSlot: plan.preferredExistingSlot || null,
+    makeup: plan.makeup || null,
   };
 }
 
@@ -2149,3 +2166,131 @@ Output ONLY the JSON object.`;
     modelUsed,
   };
 }
+
+/**
+ * Autonomously designs or re-rolls a character-dependent AI makeup plan
+ * (eyeliner style, smoky/pastel eyeshadow, reactive cheek blush, lip tint, and under-eye beauty mark decals).
+ */
+export async function generateCharacterMakeup(params: {
+  persona: Persona;
+  prompt?: string;
+  occasion?: string;
+  settings?: StudioSettings;
+}): Promise<AiMakeupConfig> {
+  const { persona, prompt = '', occasion = '' } = params;
+  const fallback = getDefaultMakeupForCharacter(persona, { occasion, slotName: prompt });
+  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
+
+  const systemPrompt = `You are a professional Anime & Virtual Idol Makeup Stylist.
+Design a character-tailored AI makeup look that reflects the idol's personality, vocal archetype, gender, mood, and occasion.
+Return ONLY valid raw JSON (no markdown fences, no extra commentary):
+{
+  "styleId": "gothic_diva|natural_idol|jrock_stoic|cyber_neon|pastel_fairy|gyaru_glam|vampire_nocturne|bare_natural",
+  "label": "short stylish makeup title",
+  "eyelinerColorHex": "#RRGGBB",
+  "eyelinerStyle": "subtle|winged_cat|dramatic_gothic|cyber_sharp|none",
+  "eyeshadowColorHex": "#RRGGBB",
+  "eyeshadowIntensity": 0.0 to 1.0,
+  "blushColorHex": "#RRGGBB",
+  "blushStyle": "apple_cheeks|under_eye_tsundere|subtle_glow|high_flush",
+  "blushIntensity": 0.0 to 1.0,
+  "lipColorHex": "#RRGGBB",
+  "lipFinish": "matte|gloss|gradient_tint|natural",
+  "lipIntensity": 0.0 to 1.0,
+  "beautyMark": "none|heart_under_eye|star_cheek|teardrop|classic_mole|cross_cheek",
+  "beautyMarkColorHex": "#RRGGBB",
+  "reason": "1-sentence reason why this makeup fits this specific character's identity"
+}
+Rules:
+- Hatsune Miku / Gothic Vampire Divas: bold dramatic winged eyeliner, crimson/wine eyeshadow, cute heart beauty mark under left eye ("heart_under_eye"), berry lip tint.
+- Tachibana Yoshiko / Tsundere Idols: soft natural brown liner, peach under-eye flush ("under_eye_tsundere"), fresh gradient lip, minimal decal.
+- Kurogane Ren / J-Rock Male Idols: sharp tightline liner, zero heavy blush (0.05-0.10), natural matte lips, no decals.
+- Sleeping / Pajamas / Bath: "bare_natural" clean fresh-faced look.`;
+
+  const userText = `Character: ${persona.name} (${persona.title})
+Gender: ${persona.gender}
+Personality & Traits: ${persona.traits}
+Current Mood: ${persona.mood}
+Occasion / Request: ${occasion || prompt || 'Signature Character Makeup'}
+Design the ideal makeup JSON for this character.`;
+
+  try {
+    const localResult = await queryDualLmStudioJsonText({
+      systemPrompt,
+      userPrompt: userText,
+      taskKind: 'wardrobe',
+      mood: persona.mood,
+    });
+    if (localResult?.text) {
+      const jsonMatch = /\{[\s\S]*\}/.exec(localResult.text);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as Partial<AiMakeupConfig>;
+        const validStyleIds: MakeupArchetype[] = [
+          'gothic_diva',
+          'natural_idol',
+          'jrock_stoic',
+          'cyber_neon',
+          'pastel_fairy',
+          'gyaru_glam',
+          'vampire_nocturne',
+          'bare_natural',
+        ];
+        const styleId = validStyleIds.includes(parsed.styleId as MakeupArchetype)
+          ? (parsed.styleId as MakeupArchetype)
+          : fallback.styleId;
+        const validMarks: BeautyMarkKind[] = [
+          'none',
+          'heart_under_eye',
+          'star_cheek',
+          'teardrop',
+          'classic_mole',
+          'cross_cheek',
+        ];
+        const beautyMark = validMarks.includes(parsed.beautyMark as BeautyMarkKind)
+          ? (parsed.beautyMark as BeautyMarkKind)
+          : fallback.beautyMark;
+
+        return {
+          styleId,
+          label:
+            typeof parsed.label === 'string' && parsed.label.trim()
+              ? parsed.label.trim().slice(0, 40)
+              : fallback.label,
+          eyelinerColorHex: normalizeHex(parsed.eyelinerColorHex, fallback.eyelinerColorHex || '#08080f'),
+          eyelinerStyle: parsed.eyelinerStyle || fallback.eyelinerStyle,
+          eyeshadowColorHex: normalizeHex(parsed.eyeshadowColorHex, fallback.eyeshadowColorHex || '#881337'),
+          eyeshadowIntensity:
+            typeof parsed.eyeshadowIntensity === 'number'
+              ? clamp(parsed.eyeshadowIntensity, 0, 1)
+              : fallback.eyeshadowIntensity,
+          blushColorHex: normalizeHex(parsed.blushColorHex, fallback.blushColorHex || '#fb7185'),
+          blushStyle: parsed.blushStyle || fallback.blushStyle,
+          blushIntensity:
+            typeof parsed.blushIntensity === 'number'
+              ? clamp(parsed.blushIntensity, 0, 1)
+              : fallback.blushIntensity,
+          lipColorHex: normalizeHex(parsed.lipColorHex, fallback.lipColorHex || '#f43f5e'),
+          lipFinish: parsed.lipFinish || fallback.lipFinish,
+          lipIntensity:
+            typeof parsed.lipIntensity === 'number'
+              ? clamp(parsed.lipIntensity, 0, 1)
+              : fallback.lipIntensity,
+          beautyMark,
+          beautyMarkColorHex: normalizeHex(
+            parsed.beautyMarkColorHex,
+            fallback.beautyMarkColorHex || '#9f1239'
+          ),
+          reason:
+            typeof parsed.reason === 'string' && parsed.reason.trim()
+              ? parsed.reason.trim().slice(0, 140)
+              : fallback.reason,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[AI Makeup] LM Studio query failed, using character archetype fallback:', err);
+  }
+
+  return fallback;
+}
+

@@ -3,6 +3,7 @@ import { AlertTriangle, Sparkles, X } from 'lucide-react';
 import type {
   AccessoryAttachTarget,
   ActiveLifeScene,
+  AiMakeupConfig,
   AutonomousNeedTrigger,
   AutonomousToolLocation,
   AvatarPosture,
@@ -84,6 +85,7 @@ import {
   generateAiHairstyle,
   generateAiOutfit,
   generateAiVrmVariant,
+  generateCharacterMakeup,
   generateTimeOccasionOutfit,
   getVrmMoodTimeDayContext,
   listAvailableVrmModels,
@@ -3615,6 +3617,7 @@ export const App: React.FC = () => {
                     garmentStyle: generated.garmentStyle,
                     garmentPalette: generated.garmentPalette,
                     aiStyleNote: generated.plan.styleNote,
+                    makeup: generated.makeup ?? null,
                   }
                 : s
             ),
@@ -3639,6 +3642,7 @@ export const App: React.FC = () => {
           garmentStyle: generated.garmentStyle,
           garmentPalette: generated.garmentPalette,
           aiStyleNote: generated.plan.styleNote,
+          makeup: generated.makeup ?? null,
           createdAt: now,
         };
         return {
@@ -3672,6 +3676,7 @@ export const App: React.FC = () => {
           garmentStyle: generated.garmentStyle,
           garmentPalette: generated.garmentPalette,
           aiStyleNote: generated.plan.styleNote,
+          makeup: generated.makeup ?? null,
           createdAt: now,
         };
         return {
@@ -3694,7 +3699,44 @@ export const App: React.FC = () => {
         garmentStyle: generated.garmentStyle,
         garmentPalette: generated.garmentPalette,
         aiStyleNote: generated.plan.styleNote,
+        makeup: generated.makeup ?? null,
       }));
+    }
+  };
+
+  const handleUpdateActiveSlotMakeup = (makeup: AiMakeupConfig | null) => {
+    updateActiveSlot((slot) => ({
+      ...slot,
+      makeup,
+    }));
+  };
+
+  const handleAiGenerateMakeup = async () => {
+    if (isGeneratingAiOutfitRef.current) return;
+    isGeneratingAiOutfitRef.current = true;
+    setIsGeneratingAiOutfit(true);
+    try {
+      const currentStudio = studioRef.current;
+      const currentPersona =
+        currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
+        currentStudio.personas[0];
+      const currentSlot =
+        currentPersona.outfitSlots.find((s) => s.id === currentPersona.activeOutfitSlotId) ||
+        currentPersona.outfitSlots[0];
+      const styledMakeup = await generateCharacterMakeup({
+        persona: currentPersona,
+        prompt: currentSlot.name,
+        occasion: currentSlot.name,
+        settings: currentStudio.settings,
+      });
+      handleUpdateActiveSlotMakeup(styledMakeup);
+      setAutonomousActionToast(`💄 Styled ${styledMakeup.label} for ${currentPersona.name}`);
+      window.setTimeout(() => setAutonomousActionToast(null), 3500);
+    } catch (err) {
+      console.error('[AI Makeup] Generation failed:', err);
+    } finally {
+      isGeneratingAiOutfitRef.current = false;
+      setIsGeneratingAiOutfit(false);
     }
   };
 
@@ -5180,6 +5222,9 @@ export const App: React.FC = () => {
               onSelectHairColor={handleSelectHairColor}
               onAiPickHairStyle={(prompt) => void handleAiPickHairStyle(prompt)}
               integrityReport={latestIntegrityReport}
+              onUpdateMakeup={handleUpdateActiveSlotMakeup}
+              onAiGenerateMakeup={handleAiGenerateMakeup}
+              isGeneratingMakeup={isGeneratingAiOutfit}
             />
           )}
         </section>

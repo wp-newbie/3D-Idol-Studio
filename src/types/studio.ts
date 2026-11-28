@@ -373,12 +373,55 @@ export interface MaterialMod {
   textureFileName?: string;
 }
 
+export type MakeupArchetype =
+  | 'gothic_diva'
+  | 'natural_idol'
+  | 'jrock_stoic'
+  | 'cyber_neon'
+  | 'pastel_fairy'
+  | 'gyaru_glam'
+  | 'vampire_nocturne'
+  | 'bare_natural';
+
+export type BeautyMarkKind =
+  | 'none'
+  | 'heart_under_eye'
+  | 'star_cheek'
+  | 'teardrop'
+  | 'classic_mole'
+  | 'cross_cheek';
+
+export interface AiMakeupConfig {
+  styleId: MakeupArchetype;
+  label: string;
+  /** Primary eyeliner intensity and color (default '#08080f') */
+  eyelinerColorHex?: string;
+  eyelinerStyle?: 'subtle' | 'winged_cat' | 'dramatic_gothic' | 'cyber_sharp' | 'none';
+  /** Eyeshadow tint, blend & intensity */
+  eyeshadowColorHex?: string;
+  eyeshadowIntensity?: number; // 0.0 - 1.0
+  /** Blush tone, placement & strength (scales dynamically with persona mood & affinity!) */
+  blushColorHex?: string;
+  blushIntensity?: number; // 0.0 - 1.0
+  blushStyle?: 'apple_cheeks' | 'under_eye_tsundere' | 'subtle_glow' | 'high_flush';
+  /** Lip tint / lipstick */
+  lipColorHex?: string;
+  lipFinish?: 'matte' | 'gloss' | 'gradient_tint' | 'natural';
+  lipIntensity?: number; // 0.0 - 1.0
+  /** Facial decal / beauty mark (e.g. the iconic heart under eye seen on Hatsune Miku) */
+  beautyMark?: BeautyMarkKind;
+  beautyMarkColorHex?: string;
+  /** Character/Archetype reason from the AI Stylist */
+  reason?: string;
+}
+
 export interface VrmAppearanceVariant {
   variantName: string;
   bodyScale: number;
   headScale: number;
   eyeColorHex?: string | null;
   skinToneShift?: 'default' | 'fair_porcelain' | 'warm_peach' | 'sun_kissed';
+  makeup?: AiMakeupConfig | null;
   reason?: string;
 }
 
@@ -418,6 +461,8 @@ export interface OutfitSlot {
   };
   /** Short AI stylist summary for generated outfits */
   aiStyleNote?: string;
+  /** Character-tailored AI makeup, eyeliner, blush, lip tint & face decals */
+  makeup?: AiMakeupConfig | null;
   /** Optional AI-generated VRM appearance morphing (height/head proportions, eye iris color, skin warmth) */
   vrmVariant?: VrmAppearanceVariant | null;
   createdAt: number;
