@@ -2997,6 +2997,7 @@ export const App: React.FC = () => {
       });
 
       // Equip folded anime bath towel on head during shower / towel-dry, remove for toothbrushing
+      // And set appropriate garment style (bath_wrap for towel-dry, stripped/default for shower)
       updateActiveSlot((slot) => {
         const current = slot.proceduralAccessories || [];
         const withoutTowel = current.filter((id) => id !== 'spa_towel');
@@ -3005,6 +3006,12 @@ export const App: React.FC = () => {
           proceduralAccessories: res.wearHeadTowel
             ? [...withoutTowel, 'spa_towel']
             : withoutTowel,
+          garmentStyle:
+            res.routine === 'towel_dry'
+              ? 'bath_wrap'
+              : res.routine === 'shower'
+              ? 'default'
+              : slot.garmentStyle,
         };
       });
 
@@ -3072,7 +3079,11 @@ export const App: React.FC = () => {
     const st = studioRef.current;
     const p = st.personas.find((x) => x.id === st.activePersonaId) || st.personas[0];
     const activeSl = p?.outfitSlots.find((s) => s.id === p.activeOutfitSlotId);
-    if (activeSl?.garmentStyle === 'bath_wrap') {
+    const wasInBath =
+      activeSl?.garmentStyle === 'bath_wrap' ||
+      lifeSceneRef.current?.hobby?.hobbyKind === 'showering' ||
+      lifeSceneRef.current?.hobby?.hobbyKind === 'towel_dry';
+    if (wasInBath) {
       designTimeOccasionRef.current(
         'Fresh comfortable everyday clothes after finishing in the bathroom',
         { reuseDailySlot: false, silentReaction: true }

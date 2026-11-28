@@ -1463,17 +1463,16 @@ function buildHobbyDiorama(hobby: ActiveHobbyScene): {
       animatedNodes.push(drop);
     }
 
-    // Fluffy Anime Steam Cloud Censorship Band + Floating Soap Bubbles
+    // Ambient Warm Steam Puffs rising gently within the shower booth
     const steamMat = new THREE.MeshBasicMaterial({
       color: '#ffffff',
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.32,
     });
-    for (let i = 0; i < 9; i++) {
-      const puff = new THREE.Mesh(new THREE.SphereGeometry(0.14 + (i % 3) * 0.04, 14, 12), steamMat);
-      puff.position.set(-0.46 + i * 0.115, 1.24 + (i % 2) * 0.06, 0.42 + (i % 3) * 0.03);
-      puff.userData.baseY = puff.position.y;
-      puff.userData.phase = i * 0.85;
+    for (let i = 0; i < 8; i++) {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(0.09 + (i % 3) * 0.03, 10, 8), steamMat);
+      puff.position.set(-0.32 + (i % 4) * 0.21, 0.55 + (i % 3) * 0.42, -0.15 + (i % 2) * 0.30);
+      puff.userData.waterFall = { baseY: puff.position.y, phase: i * 0.85 };
       root.add(puff);
       animatedNodes.push(puff);
     }

@@ -124,7 +124,7 @@ function disposeTree(root: THREE.Object3D): void {
   });
 }
 
-function clearExistingGarments(root: THREE.Object3D): void {
+export function clearExistingGarments(root: THREE.Object3D): void {
   const toRemove: THREE.Object3D[] = [];
   root.traverse((obj) => {
     if (obj.userData?.[GARMENT_TAG]) {
@@ -2712,6 +2712,356 @@ function addExposedSkinUnderlay(params: {
       }
     }
   }
+
+  // 4. Watertight Torso & Midriff Bridge (prevents severed waist on culled-skin models)
+  const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
+  if (culling.hasCulledTorso && metrics.chest) {
+    const torsoBridge = attachGroup(metrics.chest, 'GarmentSkinTorsoBridge');
+    if (torsoBridge) {
+      const yBot = -(metrics.yChestFromSpine + metrics.ySpineFromHips * 0.92);
+      const rChest = metrics.chestHalfW * 0.98;
+      const rWaist = metrics.spineHalfW * 0.95;
+      const rHips = metrics.hipsHalfW * 0.98;
+      const torsoGeo = createContouredTorsoLathe({
+        profile: [
+          [rHips, yBot],
+          [rWaist, -metrics.yChestFromSpine * 0.55],
+          [rChest, 0.0],
+          [metrics.upperChestHalfW * 0.96, metrics.yNeckFromChest * 0.85],
+        ],
+        scaleX: 1.0,
+        scaleZ: THREE.MathUtils.clamp((metrics.chestHalfD / Math.max(0.06, rChest)) * 0.85, 0.70, 0.88),
+        bustCenterY: 0,
+        bustBoost: 0.004,
+        fwdSign,
+        segments: 24,
+      });
+      torsoBridge.add(new THREE.Mesh(torsoGeo, skinMat));
+    }
+  }
+
+  // 5. Watertight Pelvis & Upper Hip Bridge
+  if (culling.hasCulledThighs && metrics.hips) {
+    const pelvisBridge = attachGroup(metrics.hips, 'GarmentSkinPelvisBridge');
+    if (pelvisBridge) {
+      const rHips = metrics.hipsHalfW * 0.98;
+      const rWaist = metrics.spineHalfW * 0.95;
+      const waistTopY = Math.max(0.065, metrics.ySpineFromHips * 0.88);
+      const pelvisGeo = createContouredTorsoLathe({
+        profile: [
+          [rHips * 0.86, -0.045],
+          [rHips * 0.96, -0.015],
+          [THREE.MathUtils.lerp(rHips, rWaist, 0.5), waistTopY * 0.5],
+          [rWaist, waistTopY],
+        ],
+        scaleX: 1.0,
+        scaleZ: THREE.MathUtils.clamp((metrics.hipsHalfD / Math.max(0.06, rHips)) * 0.85, 0.70, 0.88),
+        bustBoost: 0,
+        frontBellyBoost: 0,
+        fwdSign,
+        segments: 24,
+      });
+      pelvisBridge.add(new THREE.Mesh(pelvisGeo, skinMat));
+    }
+  }
+}
+
+export const SHOWER_CENSOR_TAG = '__zeta_shower_censor__';
+export const SHOWER_UNDERLAY_TAG = '__zeta_shower_underlay__';
+
+export function clearShowerCensors(avatarRoot: THREE.Object3D): void {
+  const toRemove: THREE.Object3D[] = [];
+  avatarRoot.traverse((obj) => {
+    if (obj.userData?.[SHOWER_CENSOR_TAG]) toRemove.push(obj);
+  });
+  for (const o of toRemove) {
+    o.parent?.remove(o);
+    if (o instanceof THREE.Mesh) {
+      o.geometry?.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => m?.dispose());
+    }
+  }
+}
+
+export function clearShowerSkinUnderlay(avatarRoot: THREE.Object3D): void {
+  const toRemove: THREE.Object3D[] = [];
+  avatarRoot.traverse((obj) => {
+    if (obj.userData?.[SHOWER_UNDERLAY_TAG]) toRemove.push(obj);
+  });
+  for (const o of toRemove) {
+    o.parent?.remove(o);
+    if (o instanceof THREE.Mesh) {
+      o.geometry?.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => m?.dispose());
+    }
+  }
+}
+
+/**
+ * Spawns a watertight, bone-tracked MToon skin-toned body underlay on models with culled skin
+ * (VRoid models exported with "Delete Transparent Meshes") so bare shoulders, arms, back, and thighs
+ * render with zero see-through holes when clothes are stripped in the shower.
+ */
+export function ensureWatertightBodySkinUnderlay(params: {
+  vrm: VRM;
+  avatarRoot: THREE.Object3D;
+  skinHex?: string;
+}): void {
+  const { vrm, avatarRoot } = params;
+  clearShowerSkinUnderlay(avatarRoot);
+
+  const coverage = inspectVrmBodySkinCoverage(vrm, avatarRoot);
+  const culling = inspectVrmBodySkinCulling(vrm, avatarRoot);
+  const isCulled =
+    culling.isPreCulled ||
+    culling.hasCulledTorso ||
+    culling.hasCulledArms ||
+    culling.hasCulledThighs ||
+    !coverage.hasUpperArmSkin;
+
+  if (!isCulled) return;
+
+  const skinHex = params.skinHex || sampleAvatarSkinColorHex(avatarRoot);
+  const fwdSign = vrm.meta?.metaVersion === '0' ? -1 : 1;
+  const metrics = measureTorsoMetrics(vrm, avatarRoot, fwdSign);
+
+  const skinMat = makeAnimeSkinMaterial(skinHex);
+  skinMat.polygonOffset = true;
+  skinMat.polygonOffsetFactor = -1.5;
+  skinMat.polygonOffsetUnits = -1.5;
+
+  // 1. Torso & Upper Back Cloned SkinnedMesh
+  buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat: skinMat,
+    zone: 'torso_sleeveless',
+    inflate: -0.002,
+  });
+
+  // 2. Arms (Full shoulders, upper arms, elbows, forearms)
+  buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat: skinMat,
+    zone: 'skin_arms_full',
+    inflate: -0.002,
+  });
+
+  // 3. Collarbone bridge
+  buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat: skinMat,
+    zone: 'skin_collarbone',
+    inflate: -0.002,
+  });
+
+  // 4. Pelvis & upper thighs
+  buildBodyClonedSkinnedGarment({
+    vrm,
+    avatarRoot,
+    mat: skinMat,
+    zone: 'shorts',
+    inflate: -0.002,
+  });
+
+  // Bone-anchored underlay fallback for any bone with sparse source topology
+  addExposedSkinUnderlay({
+    vrm,
+    avatarRoot,
+    metrics,
+    skinHex,
+    armMode: 'full',
+    collarboneBridge: true,
+    upperThighs: true,
+    fwdSign,
+    coverage,
+  });
+
+  // Mark all created underlay meshes so they can be tracked and cleared
+  avatarRoot.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && obj.userData?.[GARMENT_TAG] && !obj.userData?.[SHOWER_CENSOR_TAG]) {
+      obj.userData[SHOWER_UNDERLAY_TAG] = true;
+      obj.frustumCulled = false;
+    }
+  });
+}
+
+/**
+ * Dedicated SFW Bone-Tracked Private-Area Censorship:
+ * Mounts dense, multi-layered anime soap-foam & steam cloud censor puffs directly onto the
+ * character's `chest`/`upperChest` bone and `hips` bone.
+ * Moves in 100% lockstep with her body during washing, turning, and breathing animations.
+ * Provides 360-degree coverage across front, side, and 3/4 angles.
+ */
+export function syncShowerCensorsToVrm(params: {
+  vrm: VRM | null;
+  avatarRoot: THREE.Object3D;
+  isShowering: boolean;
+  accentHex?: string;
+}): void {
+  const { vrm, avatarRoot, isShowering, accentHex = '#f472b6' } = params;
+  clearShowerCensors(avatarRoot);
+  if (!isShowering || !vrm?.humanoid) return;
+
+  const fwdSign = vrm.meta?.metaVersion === '0' ? -1 : 1;
+  const metrics = measureTorsoMetrics(vrm, avatarRoot, fwdSign);
+
+  const chestNode =
+    vrm.humanoid.getRawBoneNode('upperChest') ||
+    vrm.humanoid.getRawBoneNode('chest') ||
+    vrm.humanoid.getNormalizedBoneNode('upperChest') ||
+    vrm.humanoid.getNormalizedBoneNode('chest');
+  const hipsNode =
+    vrm.humanoid.getRawBoneNode('hips') ||
+    vrm.humanoid.getNormalizedBoneNode('hips');
+
+  if (!chestNode || !hipsNode) return;
+
+  // 1. Soft creamy anime foam lather (hugged flush to anatomy with zero opaque bowling ball look)
+  const coreFoamMat = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    emissive: '#fce7f3',
+    emissiveIntensity: 0.18,
+    roughness: 0.92,
+    metalness: 0.02,
+    transparent: true,
+    opacity: 0.88,
+    depthWrite: true,
+  });
+
+  // 2. Soft translucent iridescent suds micro-bubble layer
+  const bubbleMat = new THREE.MeshStandardMaterial({
+    color: '#f8fafc',
+    emissive: new THREE.Color(accentHex).multiplyScalar(0.24),
+    emissiveIntensity: 0.28,
+    roughness: 0.22,
+    metalness: 0.18,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: true,
+  });
+
+  const wChest = Math.max(0.11, metrics.chestHalfW * 1.18);
+  const dChest = Math.max(0.08, metrics.chestHalfD * 1.15);
+  const zChestFront = dChest * 0.40 * fwdSign;
+
+  // --- 1. CHEST / UPPER CHEST BUST FOAM CLUSTER ---
+  const chestGroup = new THREE.Group();
+  chestGroup.name = 'Zeta_ShowerCensor_Chest';
+  chestGroup.userData[SHOWER_CENSOR_TAG] = true;
+  chestGroup.userData.__zeta_procedural_garment__ = true;
+  chestGroup.frustumCulled = false;
+
+  // Center bust lather pad (anatomically contoured, hugs the cleavage smoothly)
+  const centerPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), coreFoamMat);
+  centerPuff.position.set(0, 0, zChestFront);
+  centerPuff.scale.set(1.25, 0.94, 0.58);
+  chestGroup.add(centerPuff);
+
+  // Left & right bust lather puffs with lateral rib wrap
+  for (const side of [-1, 1]) {
+    const bustPuff = new THREE.Mesh(new THREE.SphereGeometry(0.048, 14, 12), coreFoamMat);
+    bustPuff.position.set(side * wChest * 0.38, 0, zChestFront * 0.94);
+    bustPuff.scale.set(1.12, 0.92, 0.56);
+
+    // Lateral wrap around the ribs/underarm so side profile is 100% covered!
+    const sideWrap = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), coreFoamMat);
+    sideWrap.position.set(side * wChest * 0.64, -0.012, zChestFront * 0.48);
+    sideWrap.scale.set(0.96, 0.88, 0.52);
+
+    // Sparkling suds bubbles
+    const dab1 = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), bubbleMat);
+    dab1.position.set(side * wChest * 0.34, 0.038, zChestFront * 1.02);
+
+    const dab2 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), bubbleMat);
+    dab2.position.set(side * wChest * 0.56, -0.030, zChestFront * 0.82);
+
+    chestGroup.add(bustPuff, sideWrap, dab1, dab2);
+  }
+
+  // Upper collarbone suds rim & lower sternum suds rim
+  const upperCollarPuff = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), coreFoamMat);
+  upperCollarPuff.position.set(0, 0.042, zChestFront * 0.82);
+  upperCollarPuff.scale.set(1.15, 0.82, 0.52);
+
+  const lowerSternumPuff = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), coreFoamMat);
+  lowerSternumPuff.position.set(0, -0.042, zChestFront * 0.82);
+  lowerSternumPuff.scale.set(1.15, 0.82, 0.52);
+
+  // Surface bubble clusters
+  for (let i = 0; i < 5; i++) {
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.011 + (i % 3) * 0.004, 8, 8), bubbleMat);
+    bub.position.set(-0.045 + i * 0.022, 0.008 + (i % 2) * 0.024, zChestFront * 1.05);
+    chestGroup.add(bub);
+  }
+
+  chestGroup.add(upperCollarPuff, lowerSternumPuff);
+  chestNode.add(chestGroup);
+
+  // --- 2. HIPS / PELVIS & GLUTE FOAM CLUSTER ---
+  const hipsGroup = new THREE.Group();
+  hipsGroup.name = 'Zeta_ShowerCensor_Hips';
+  hipsGroup.userData[SHOWER_CENSOR_TAG] = true;
+  hipsGroup.userData.__zeta_procedural_garment__ = true;
+  hipsGroup.frustumCulled = false;
+
+  const wHips = Math.max(0.12, metrics.hipsHalfW * 1.18);
+  const dHips = Math.max(0.10, metrics.hipsHalfD * 1.22);
+  const zHipsFront = dHips * 0.40 * fwdSign;
+  const zHipsBack = -dHips * 0.40 * fwdSign;
+
+  // Front central pelvic lather pad
+  const frontPelvis = new THREE.Mesh(new THREE.SphereGeometry(0.058, 14, 12), coreFoamMat);
+  frontPelvis.position.set(0, -0.010, zHipsFront);
+  frontPelvis.scale.set(1.24, 0.96, 0.58);
+  hipsGroup.add(frontPelvis);
+
+  // Left & right groin, outer hip, and glute wraps
+  for (const side of [-1, 1]) {
+    const groinPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), coreFoamMat);
+    groinPuff.position.set(side * wHips * 0.42, -0.016, zHipsFront * 0.88);
+    groinPuff.scale.set(1.12, 0.92, 0.56);
+
+    const outerHipWrap = new THREE.Mesh(new THREE.SphereGeometry(0.048, 12, 10), coreFoamMat);
+    outerHipWrap.position.set(side * wHips * 0.68, -0.008, 0);
+    outerHipWrap.scale.set(0.96, 0.92, 0.55);
+
+    const glutePuff = new THREE.Mesh(new THREE.SphereGeometry(0.055, 14, 12), coreFoamMat);
+    glutePuff.position.set(side * wHips * 0.38, -0.015, zHipsBack * 0.92);
+    glutePuff.scale.set(1.15, 0.95, 0.58);
+
+    const hipDab1 = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 8), bubbleMat);
+    hipDab1.position.set(side * wHips * 0.42, 0.035, zHipsFront * 0.96);
+
+    const hipDab2 = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), bubbleMat);
+    hipDab2.position.set(side * wHips * 0.62, -0.038, zHipsFront * 0.65);
+
+    hipsGroup.add(groinPuff, outerHipWrap, glutePuff, hipDab1, hipDab2);
+  }
+
+  // Under-pelvic perineal / thigh gap seal
+  const bottomSealPuff = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10), coreFoamMat);
+  bottomSealPuff.position.set(0, -0.068, 0);
+  bottomSealPuff.scale.set(1.0, 0.78, 1.15);
+
+  // Waistband top foam ring
+  const waistTopPuff = new THREE.Mesh(new THREE.SphereGeometry(0.046, 12, 10), coreFoamMat);
+  waistTopPuff.position.set(0, 0.045, zHipsFront * 0.75);
+  waistTopPuff.scale.set(1.15, 0.82, 0.55);
+
+  // Surface bubbles
+  for (let i = 0; i < 6; i++) {
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.011 + (i % 3) * 0.004, 8, 8), bubbleMat);
+    bub.position.set(-0.06 + i * 0.024, 0.008 + (i % 2) * 0.026, zHipsFront * 1.02);
+    hipsGroup.add(bub);
+  }
+
+  hipsGroup.add(bottomSealPuff, waistTopPuff);
+  hipsNode.add(hipsGroup);
 }
 
 function addLegPants(params: {
@@ -3184,7 +3534,7 @@ function addSculptedTorso(params: {
       outCoverage: torsoCoverage,
     });
   }
-  const usedSkinnedTorso = clonedTorsoTris >= 80 && torsoCoverage.isSolid;
+  const usedSkinnedTorso = clonedTorsoTris >= 80;
   const needsRigidLathe = !usedSkinnedTorso || (closedOuterwear && !preferSkinnedBody);
 
   // Only add contoured lathe shell when SkinnedMesh torso is incomplete OR for structured tailored coats/blazers

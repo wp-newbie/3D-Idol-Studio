@@ -7,6 +7,7 @@ import {
   computeVisibleBoneCoverage,
   isBoneCoverageSatisfied,
 } from './outfitIntegrityChecker';
+import { ensureWatertightBodySkinUnderlay } from './garmentRig';
 
 export const CLOTHING_CATEGORY_ORDER: ClothingCategory[] = [
   'Tops',
@@ -744,6 +745,7 @@ export function applyOutfitModsToScene(params: {
   garmentStyle?: string | null;
   cullingReport?: VrmBodyCullingReport | null;
   onTextureLoaded?: () => void;
+  isBathOrShower?: boolean;
 }): void {
   const {
     root,
@@ -758,8 +760,14 @@ export function applyOutfitModsToScene(params: {
     fallbackRecolorPalette = null,
     cullingReport = null,
     onTextureLoaded,
+    isBathOrShower = false,
   } = params;
   const loader = new THREE.TextureLoader();
+
+  // In shower or bath: immediately mount watertight skin underlay on culled models before stripping street clothes!
+  if (isBathOrShower && vrm) {
+    ensureWatertightBodySkinUnderlay({ vrm, avatarRoot: root });
+  }
 
   const isCulledOrUnreplaced = Boolean(
     cullingReport?.isPreCulled ||
@@ -825,13 +833,13 @@ export function applyOutfitModsToScene(params: {
     // tops, bottoms, footwear, underwear, and accessories so zero native meshes peek through.
     // (NEVER hide a merged Body mesh containing skin, nor hide native clothing on pre-culled VRMs!)
     const origVisible = snapshotOriginalVisible(obj);
-    if (preserveNativeClothingForPreCulled || isCulledOrUnreplaced) {
+    if ((preserveNativeClothingForPreCulled || isCulledOrUnreplaced) && !isBathOrShower) {
       obj.visible = origVisible;
-    } else if (hideNativeGarment && !isProtectedBodyOrHairMesh) {
+    } else if ((hideNativeGarment || isBathOrShower) && !isProtectedBodyOrHairMesh) {
       // Bone-Zone Vertex Occupancy Audit: verify that hiding this mesh does not cause
       // any critical bone (neck, torso, shoulders, arms, legs) to drop below safe vertex counts!
       obj.visible = false;
-      if (vrm) {
+      if (vrm && !isBathOrShower) {
         const testCov = computeVisibleBoneCoverage(vrm, root);
         const check = isBoneCoverageSatisfied(testCov);
         if (!check.satisfied) {
@@ -885,26 +893,36 @@ export function applyOutfitModsToScene(params: {
         transparent?: boolean;
         opacity?: number;
         depthWrite?: boolean;
+        colorWrite?: boolean;
         needsUpdate: boolean;
       };
 
-      if (
-        hideNativeGarment &&
-        !isCulledOrUnreplaced &&
-        !preserveNativeClothingForPreCulled &&
-        isNativeOutfitSlot &&
-        obj.visible === false
-      ) {
+      // Check explicit meshVisibility toggles (works on both separate meshes and multi-material merged mesh slots)
+      const isSlotExplicitlyHidden =
+        (mat.name && meshVisibility[mat.name] === false) ||
+        (matCategory && meshVisibility[matCategory] === false) ||
+        (mats.length === 1 && meshVisibility[name] === false);
+
+      const shouldHideNativeGarmentSlot =
+        isSlotExplicitlyHidden ||
+        ((hideNativeGarment || isBathOrShower) &&
+          (!isCulledOrUnreplaced || isBathOrShower) &&
+          !preserveNativeClothingForPreCulled);
+
+      if (shouldHideNativeGarmentSlot && isNativeOutfitSlot) {
         mat.visible = false;
         anyMat.transparent = true;
         anyMat.opacity = 0;
         anyMat.depthWrite = false;
+        anyMat.colorWrite = false;
+        anyMat.needsUpdate = true;
         continue;
       } else {
         mat.visible = true;
         anyMat.transparent = false;
         anyMat.opacity = 1;
         anyMat.depthWrite = true;
+        anyMat.colorWrite = true;
       }
 
       // On pre-culled legacy VRMs or unreplaced wardrobe, fall back to clean material/texture recoloring over native clothing!
@@ -947,7 +965,7 @@ export function applyOutfitModsToScene(params: {
           anyMat.opacity = 1;
           anyMat.depthWrite = true;
 
-          if (cyclingShorts && snap.map) {
+          if (cyclingShorts && !isBathOrShower && snap.map) {
             const shortsTex = getCyclingShortsTexture(snap.map);
             if (shortsTex) {
               anyMat.map = shortsTex;

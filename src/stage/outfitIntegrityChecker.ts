@@ -50,6 +50,7 @@ export interface OutfitIntegrityContext {
   garmentStyle?: string | null;
   slot?: OutfitSlot | null;
   cullingReport?: VrmBodyCullingReport | null;
+  isBathOrShower?: boolean;
 }
 
 const PROTECTED_SKIN_HAIR_REGEX =
@@ -595,7 +596,7 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     latestBoneCoverage = computeVisibleBoneCoverage(vrm, avatarRoot);
     const coverageCheck = isBoneCoverageSatisfied(latestBoneCoverage);
 
-    if (isProceduralActive) {
+    if (isProceduralActive && !context.isBathOrShower) {
       const safeToHide = canSafelyHideNativeWardrobe(avatarRoot, cullingReport, vrm) && coverageCheck.satisfied;
 
       if (!safeToHide) {

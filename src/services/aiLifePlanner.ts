@@ -91,7 +91,7 @@ export interface PlannedHygieneResult {
   hobby: ActiveHobbyScene;
   destination: ActiveDestinationScene;
   wearHeadTowel: boolean;
-  bathOutfitPrompt: string;
+  bathOutfitPrompt: string | null;
   afterOutfitPrompt: string | null;
   source: LifeEngineSource;
   modelUsed?: string;
@@ -850,7 +850,9 @@ export async function planAiHygieneRoutine(params: {
       bathOutfitPrompt:
         resolvedRoutine === 'brush_teeth'
           ? 'Soft pastel cozy pajama shirt and lounge pants for brushing teeth at the bathroom sink'
-          : `Fluffy pastel bath towel wrap bath cloth for ${resolvedRoutine === 'shower' ? 'warm censored shower' : 'drying off after shower'} with ${scentName}`,
+          : resolvedRoutine === 'towel_dry'
+          ? `Fluffy pastel bath towel wrap bath cloth for drying off after shower with ${scentName}`
+          : null,
       afterOutfitPrompt:
         resolvedRoutine === 'towel_dry'
           ? 'Soft pastel fresh after-shower cozy loungewear and sleepwear'

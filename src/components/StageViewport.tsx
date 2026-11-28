@@ -59,9 +59,14 @@ import {
   updateProceduralHairSway,
 } from '../stage/hairStyleRig';
 import {
+  clearExistingGarments,
+  clearShowerCensors,
+  clearShowerSkinUnderlay,
+  ensureWatertightBodySkinUnderlay,
   inspectVrmBodySkinCulling,
   syncProceduralGarmentToVrm,
   syncSeatSpringBoneColliders,
+  syncShowerCensorsToVrm,
   updateProceduralGarmentSway,
 } from '../stage/garmentRig';
 import { auditOutfitIntegrity } from '../stage/outfitIntegrityChecker';
@@ -2125,6 +2130,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
               : null,
             garmentStyle: activeSlot.garmentStyle,
             cullingReport: loadedCulling,
+            isBathOrShower: Boolean(lifeSceneRef.current?.hobby?.hobbyKind === 'showering'),
           });
 
           syncProceduralAccessoriesToVrm({
@@ -2470,6 +2476,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     );
     const preserveForPreCulled = Boolean(wantsProceduralGarment && isCulledModel);
 
+    const isShowering = lifeScene?.hobby?.hobbyKind === 'showering';
     applyOutfitModsToScene({
       root: avatarRoot,
       vrm: currentVrmRef.current,
@@ -2492,6 +2499,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         : null,
       garmentStyle: activeSlot.garmentStyle,
       cullingReport: culling,
+      isBathOrShower: isShowering,
     });
 
     onMeshesDetectedRef.current(
@@ -2506,6 +2514,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     activeSlot.garmentPalette,
     activeSlot.accessoryColorHex,
     isLoadingModel,
+    lifeScene?.hobby?.hobbyKind,
   ]);
 
   // 3e. Apply live AI-generated VRM appearance morphing (body scale, head proportions, eye iris color, skin warmth)
@@ -2559,25 +2568,50 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     isLoadingModel,
   ]);
 
-  // 3d. Sync AI-chosen 3D Garment Silhouette (hoodies, sundresses, shorts, pants, kimono, pajamas, gowns, blazers, trench coats)
+  // 3d. Sync AI-chosen 3D Garment Silhouette or Shower Censorship & Skin Underlay
   useEffect(() => {
     const avatarRoot = avatarRootRef.current;
     if (!avatarRoot || avatarRoot.children.length === 0 || isLoadingModel) return;
-    syncProceduralGarmentToVrm({
-      vrm: currentVrmRef.current,
-      avatarRoot,
-      garmentStyle: activeSlot.garmentStyle || 'default',
-      topHex: activeSlot.garmentPalette?.topHex,
-      topAccentHex: activeSlot.garmentPalette?.topAccentHex,
-      bottomHex: activeSlot.garmentPalette?.bottomHex,
-      bottomAccentHex: activeSlot.garmentPalette?.bottomAccentHex,
-      accessoryHex:
-        activeSlot.garmentPalette?.accessoryHex ||
-        activeSlot.accessoryColorHex ||
-        persona.accentColor,
-      topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
-      bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
-    });
+
+    const isShowering = lifeScene?.hobby?.hobbyKind === 'showering';
+    if (isShowering) {
+      // Strip procedural street garments inside the shower
+      clearExistingGarments(avatarRoot);
+
+      // Mount watertight MToon skin underlay for culled VRM models & dedicated bone-tracked foam censors
+      if (currentVrmRef.current) {
+        ensureWatertightBodySkinUnderlay({
+          vrm: currentVrmRef.current,
+          avatarRoot,
+        });
+        syncShowerCensorsToVrm({
+          vrm: currentVrmRef.current,
+          avatarRoot,
+          isShowering: true,
+          accentHex: persona.accentColor,
+        });
+      }
+    } else {
+      // Clear shower foam censors and shower underlays when not in the shower
+      clearShowerCensors(avatarRoot);
+      clearShowerSkinUnderlay(avatarRoot);
+
+      syncProceduralGarmentToVrm({
+        vrm: currentVrmRef.current,
+        avatarRoot,
+        garmentStyle: activeSlot.garmentStyle || 'default',
+        topHex: activeSlot.garmentPalette?.topHex,
+        topAccentHex: activeSlot.garmentPalette?.topAccentHex,
+        bottomHex: activeSlot.garmentPalette?.bottomHex,
+        bottomAccentHex: activeSlot.garmentPalette?.bottomAccentHex,
+        accessoryHex:
+          activeSlot.garmentPalette?.accessoryHex ||
+          activeSlot.accessoryColorHex ||
+          persona.accentColor,
+        topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
+        bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+      });
+    }
 
     // 350ms quick-change vertical sparkle/shimmer burst on outfit swap
     if (
@@ -2602,9 +2636,10 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     auditOutfitIntegrity({
       vrm: currentVrmRef.current,
       avatarRoot,
-      garmentStyle: activeSlot.garmentStyle,
+      garmentStyle: isShowering ? 'default' : activeSlot.garmentStyle,
       slot: activeSlot,
       cullingReport: culling,
+      isBathOrShower: isShowering,
     });
   }, [
     activeSlot.garmentStyle,
@@ -2616,6 +2651,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     isLoadingModel,
     posture,
     lifeScene?.dining,
+    lifeScene?.hobby?.hobbyKind,
   ]);
 
   // 3e. Sync real 3D hand-held activity props (teacup, chopsticks, pen, toothbrush, towel, palette, brush, whisk, book, camera)
