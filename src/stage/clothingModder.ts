@@ -764,8 +764,15 @@ export function applyOutfitModsToScene(params: {
   } = params;
   const loader = new THREE.TextureLoader();
 
-  // In shower or bath OR when hiding native clothes on culled models: mount watertight skin underlay!
-  if (vrm && (isBathOrShower || (hideNativeGarment && (cullingReport?.isPreCulled || cullingReport?.hasCulledTorso || cullingReport?.hasCulledArms || cullingReport?.hasCulledThighs)))) {
+  // In shower or bath OR when model has culled torso/arms/thighs: always mount watertight skin underlay!
+  if (
+    vrm &&
+    (isBathOrShower ||
+      cullingReport?.isPreCulled ||
+      cullingReport?.hasCulledTorso ||
+      cullingReport?.hasCulledArms ||
+      cullingReport?.hasCulledThighs)
+  ) {
     ensureWatertightBodySkinUnderlay({ vrm, avatarRoot: root });
   }
 
@@ -903,7 +910,7 @@ export function applyOutfitModsToScene(params: {
         (matCategory && meshVisibility[matCategory] === false) ||
         (mats.length === 1 && meshVisibility[name] === false);
 
-      const isCollarOrFlap = /collar|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|vest|flap|badge|brooch|cuff|armband/i.test(mat.name || '');
+      const isCollarOrFlap = /collar|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|vest|flap|badge|brooch/i.test(mat.name || '');
 
       const shouldHideNativeGarmentSlot =
         isSlotExplicitlyHidden ||
@@ -918,6 +925,25 @@ export function applyOutfitModsToScene(params: {
         anyMat.depthWrite = false;
         anyMat.colorWrite = false;
         anyMat.needsUpdate = true;
+
+        // Bone Occupancy Hard Veto: verify that hiding this material slot does not cause
+        // any critical bone (neck, torso, shoulders, arms, legs) to drop below safe vertex counts!
+        if (vrm && !isBathOrShower) {
+          const testCov = computeVisibleBoneCoverage(vrm, root);
+          const check = isBoneCoverageSatisfied(testCov);
+          if (!check.satisfied) {
+            mat.visible = true;
+            anyMat.transparent = false;
+            anyMat.opacity = 1;
+            anyMat.depthWrite = true;
+            anyMat.colorWrite = true;
+            anyMat.needsUpdate = true;
+            console.warn(
+              `[OutfitIntegrity] VETOED hiding native material slot "${mat.name}": would cause critical bone vertex deficit`,
+              check.deficitBones
+            );
+          }
+        }
         continue;
       } else {
         mat.visible = true;

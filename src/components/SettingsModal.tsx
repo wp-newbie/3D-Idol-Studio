@@ -44,6 +44,7 @@ interface SettingsModalProps {
   personaCount: number;
   connectionMode: 'live' | 'demo' | 'error';
   lastApiError: string | null;
+  onDismissError?: () => void;
   isValidatingKey?: boolean;
   validationMessage?: string | null;
   hasAiStudioBridge?: boolean;
@@ -70,6 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   personaCount,
   connectionMode,
   lastApiError,
+  onDismissError,
   isValidatingKey = false,
   validationMessage = null,
   hasAiStudioBridge = false,
@@ -195,7 +197,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setErrorDismissed(true)}
+                onClick={() => {
+                  setErrorDismissed(true);
+                  onDismissError?.();
+                }}
                 className="rounded-lg p-1 text-rose-300 hover:bg-white/10"
                 title="Dismiss warning"
               >
@@ -276,8 +281,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onChange={(e) => {
                       const enabled = e.target.checked;
                       onUpdateSettings({ enableGeminiCloud: enabled });
-                      if (!enabled && onValidateApiKey) {
-                        void onValidateApiKey('local');
+                      if (!enabled) {
+                        setErrorDismissed(true);
+                        onDismissError?.();
+                        if (onValidateApiKey) {
+                          void onValidateApiKey('local');
+                        }
                       }
                     }}
                     className="peer sr-only"
@@ -311,8 +320,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onChange={(e) => {
                       const enabled = e.target.checked;
                       onUpdateSettings({ preferLocalAi: enabled });
-                      if (enabled && onValidateApiKey) {
-                        void onValidateApiKey('local');
+                      if (enabled) {
+                        setErrorDismissed(true);
+                        onDismissError?.();
+                        if (onValidateApiKey) {
+                          void onValidateApiKey('local');
+                        }
                       }
                     }}
                     className="peer sr-only"

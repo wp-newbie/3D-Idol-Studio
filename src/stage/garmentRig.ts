@@ -127,7 +127,11 @@ function disposeTree(root: THREE.Object3D): void {
 export function clearExistingGarments(root: THREE.Object3D): void {
   const toRemove: THREE.Object3D[] = [];
   root.traverse((obj) => {
-    if (obj.userData?.[GARMENT_TAG]) {
+    if (
+      obj.userData?.[GARMENT_TAG] &&
+      !obj.userData?.[SHOWER_UNDERLAY_TAG] &&
+      !obj.userData?.[SHOWER_CENSOR_TAG]
+    ) {
       toRemove.push(obj);
     }
   });
@@ -587,11 +591,13 @@ function createSculptedSkirtGeometry(params: {
     const curvedR = THREE.MathUtils.lerp(topRadius, bottomRadius, Math.pow(t, flarePower));
     const pleat =
       pleatCount > 0 ? Math.sin(theta * pleatCount) * pleatDepth * Math.pow(t, 1.15) : 0;
-    // Extra outward rear pelvic / glute clearance (+0.014m rear clearance boost) so fabric drapes cleanly over glutes
+    // Tailored back rise: raise the rear waistband by +0.035m at t=0 so sitting/bending forward NEVER exposes lower back/glutes!
     const backAngleWeight = Math.max(0, -Math.cos(theta) * fwdSign);
-    const rearClearance = 0.014 * backAngleWeight;
+    const rearRise = 0.035 * backAngleWeight * (1 - t * 0.85);
+    // Extra outward rear pelvic / glute clearance (+0.020m total rear clearance) so fabric drapes cleanly over glutes in all postures
+    const rearClearance = (0.020 + (1 - t) * 0.008) * backAngleWeight;
     const r = Math.max(0.02, curvedR + pleat + rearClearance);
-    pos.setXYZ(i, Math.sin(theta) * r * scaleX, y, Math.cos(theta) * r * scaleZ);
+    pos.setXYZ(i, Math.sin(theta) * r * scaleX, y + rearRise, Math.cos(theta) * r * scaleZ);
   }
   geo.computeVertexNormals();
   return geo;
@@ -2623,7 +2629,13 @@ function addExposedSkinUnderlay(params: {
       });
     }
 
-    if (clonedArmTris < 50 && (needsUpper || needsForearm)) {
+    const needsBoneArmTubes =
+      clonedArmTris < 50 ||
+      !cov.hasUpperArmSkin ||
+      culling.hasCulledArms ||
+      culling.isPreCulled;
+
+    if (needsBoneArmTubes && (needsUpper || needsForearm)) {
       const sides: Array<{
         upper: VRMHumanBoneName;
         lower: VRMHumanBoneName;
@@ -3541,7 +3553,7 @@ function addSculptedTorso(params: {
       outCoverage: torsoCoverage,
     });
   }
-  const usedSkinnedTorso = clonedTorsoTris >= 80;
+  const usedSkinnedTorso = clonedTorsoTris >= 80 && torsoCoverage.isSolid;
   const needsRigidLathe = !usedSkinnedTorso || (closedOuterwear && !preferSkinnedBody);
 
   // Only add contoured lathe shell when SkinnedMesh torso is incomplete OR for structured tailored coats/blazers
@@ -3571,11 +3583,11 @@ function addSculptedTorso(params: {
   }
 
   // Interlocking `spine` bone bridge sleeve: articulates seamlessly between `hips` and `chest` when seated
-  // or leaning forward so NO dark side/waist V-notch can ever open between pelvis and torso!
-  if (needsRigidLathe && spineGroup) {
-    const linerScale = usedSkinnedTorso ? 0.95 : 0.985;
-    const ySpineBot = -metrics.ySpineFromHips * 0.72;
-    const ySpineTop = metrics.yChestFromSpine * 0.94;
+  // or leaning forward so NO dark side/waist V-notch or severed midriff can ever open between pelvis and torso!
+  if (spineGroup) {
+    const linerScale = usedSkinnedTorso ? 0.96 : 0.985;
+    const ySpineBot = -metrics.ySpineFromHips * 0.92;
+    const ySpineTop = metrics.yChestFromSpine * 1.05;
     const spineBridgeGeo = createContouredTorsoLathe({
       profile: [
         [THREE.MathUtils.lerp(rHips, rSpine, 0.35) * linerScale, ySpineBot],
@@ -3588,7 +3600,7 @@ function addSculptedTorso(params: {
       bustBoost: 0,
       frontBellyBoost: 0,
       rearGluteY: ySpineBot,
-      rearGluteBoost: 0.003,
+      rearGluteBoost: 0.008,
       fwdSign,
       segments: 28,
     });
@@ -4751,8 +4763,8 @@ export function updateProceduralGarmentSway(
 
         // Posterior skirt drapes over the seated glutes and cushions cleanly onto the seat plane
         // (pushed rearward along -Z and lifted upward along +Y so glute skin NEVER pokes through fabric!)
-        const rearGlutePush = Math.min(0.048, 0.042 * backWeight * effectiveThighPitch);
-        const rearGluteLift = Math.min(0.038, 0.032 * backWeight * effectiveThighPitch);
+        const rearGlutePush = Math.min(0.056, 0.048 * backWeight * effectiveThighPitch);
+        const rearGluteLift = Math.min(0.044, 0.038 * backWeight * effectiveThighPitch);
         nz -= fwd * rearGlutePush;
         ny += rearGluteLift;
 

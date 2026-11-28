@@ -37,6 +37,7 @@ import type {
   VaultAccessoryMeta,
   VaultModelMeta,
 } from '../types/studio';
+import type { OutfitIntegrityReport } from '../stage/outfitIntegrityChecker';
 import { WARDROBE_SWATCHES } from '../data/presets';
 import { formatBytes } from '../storage/modelVault';
 import {
@@ -137,6 +138,7 @@ interface WardrobeDrawerProps {
   onSelectHairStyle?: (hairStyle: HairStyleId) => void;
   onSelectHairColor?: (hairColorHex: string | null, hairHighlightHex?: string | null) => void;
   onAiPickHairStyle?: (prompt?: string) => Promise<void> | void;
+  integrityReport?: OutfitIntegrityReport | null;
 }
 
 type WardrobeTab =
@@ -192,6 +194,7 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
   onSelectHairStyle,
   onSelectHairColor,
   onAiPickHairStyle,
+  integrityReport,
 }) => {
   const [tab, setTab] = useState<WardrobeTab>('full_outfits');
   const [aiOutfitPrompt, setAiOutfitPrompt] = useState('');
@@ -464,6 +467,68 @@ export const WardrobeDrawer: React.FC<WardrobeDrawerProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* 3D Outfit Integrity Audit & AI Vision Critic Card */}
+            {integrityReport && (
+              <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-[#131124] to-[#1a1730] p-3.5 shadow-glass space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>🛡️</span> Outfit Integrity &amp; Vision Critic
+                    </span>
+                    <span
+                      className={`rounded-md border px-1.5 py-0.5 text-[9px] font-mono font-bold ${
+                        integrityReport.score >= 90
+                          ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-300'
+                          : integrityReport.score >= 70
+                          ? 'border-amber-400/40 bg-amber-500/20 text-amber-300'
+                          : 'border-rose-400/40 bg-rose-500/20 text-rose-300'
+                      }`}
+                    >
+                      {integrityReport.score}/100
+                    </span>
+                  </div>
+                  {integrityReport.aiCritic && (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                        integrityReport.aiCritic.status === 'verified_clean'
+                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                          : integrityReport.aiCritic.status === 'auto_repaired'
+                          ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                          : 'border-zinc-600/40 bg-zinc-700/20 text-zinc-400'
+                      }`}
+                    >
+                      {integrityReport.aiCritic.status === 'verified_clean'
+                        ? 'AI Vision: Verified Clean'
+                        : integrityReport.aiCritic.status === 'auto_repaired'
+                        ? `AI Vision: Auto-Repaired (${integrityReport.aiCritic.issues?.length || 1})`
+                        : 'AI Vision: Skipped'}
+                    </span>
+                  )}
+                </div>
+
+                {integrityReport.aiCritic?.notes && (
+                  <p className="text-[11px] leading-snug text-zinc-300/90 font-mono bg-black/25 rounded-lg p-2 border border-white/5">
+                    {integrityReport.aiCritic.notes}
+                  </p>
+                )}
+
+                {integrityReport.repairsApplied && integrityReport.repairsApplied.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                      Active Protection &amp; Repairs
+                    </span>
+                    <ul className="text-[10.5px] text-zinc-300 space-y-0.5 list-disc list-inside">
+                      {integrityReport.repairsApplied.slice(0, 3).map((r, idx) => (
+                        <li key={idx} className="truncate">
+                          {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Search & Copy Actions Header */}
             <div className="space-y-2">

@@ -1723,7 +1723,7 @@ async function generatePersonaReplyOnce(params: {
     const friendlyErr = parseFriendlyError(err, endpointLabel);
     console.warn('[Gemini] Live API call failed, attempting graceful fallback:', friendlyErr.message);
 
-    // Rule 7 / Seamless Local AI Fallback: Attempt local LM Studio before failing
+    // Rule 3 & Rule 7: Seamless Local AI Fallback: Always attempt local LM Studio before failing
     try {
       if (await isLocalLmStudioAvailable()) {
         const localRes = await callLocalLmStudioRestApi({
@@ -1745,12 +1745,19 @@ async function generatePersonaReplyOnce(params: {
       console.warn('[LM Studio] Graceful fallback to local LM Studio also failed:', localErr);
     }
 
-    // If local AI or demo fallback is suitable, fall back to offline demo response
-    if (Boolean(settings.preferLocalAi)) {
+    // If local AI or demo fallback is suitable (or auth failed), fall back to offline demo response
+    const isAuthFailure =
+      friendlyErr.statusCode === 401 ||
+      friendlyErr.statusCode === 403 ||
+      /API key not valid|API_KEY_INVALID|UNAUTHENTICATED/i.test(friendlyErr.message);
+
+    if (Boolean(settings.preferLocalAi) || isAuthFailure) {
       return {
         rawText: pickContextualOfflineReply(persona, userPrompt),
         isFallback: true,
-        providerNote: 'Offline Demo Mode (Local Fallback)',
+        providerNote: isAuthFailure
+          ? 'Offline Demo Mode (Local Fallback · Gemini Key Invalid)'
+          : 'Offline Demo Mode (Local Fallback)',
         toolEvents: [],
       };
     }

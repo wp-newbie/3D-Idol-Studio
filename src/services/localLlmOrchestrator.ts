@@ -47,7 +47,7 @@ export interface CharacterChatResult {
   choiceReason: string;
 }
 
-const LM_STUDIO_HOSTS = ['http://127.0.0.1:1234', 'http://localhost:1234'];
+export const LM_STUDIO_HOSTS = ['http://127.0.0.1:1234', 'http://localhost:1234'];
 
 let cachedModels: { ids: string[]; at: number } = { ids: [], at: 0 };
 

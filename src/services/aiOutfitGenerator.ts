@@ -23,6 +23,13 @@ import { saveTextureToVault } from '../storage/modelVault';
 
 export type OutfitEngineSource = 'local-llm' | 'gemini-llm' | 'offline-stylist';
 
+export interface VrmStructuralSummary {
+  hasCulledTorsoSkin: boolean;
+  hasCulledLegSkin: boolean;
+  activePosture: 'standing' | 'seated_table' | 'active_arms';
+  nativeOutfitSlots: string[];
+}
+
 export interface AiOutfitPlan {
   outfitName: string;
   styleNote: string;
@@ -42,6 +49,8 @@ export interface AiOutfitPlan {
   hideOuterLayers?: boolean;
   preferredExistingSlot?: string | null;
   accessories: ProceduralAccessoryId[];
+  clearanceBoost?: boolean;
+  seatedFriendly?: boolean;
   source: OutfitEngineSource;
   modelUsed?: string;
 }
@@ -919,6 +928,14 @@ function parseOutfitPlanJson(
           ? parsed.preferredExistingSlot.trim()
           : null,
       accessories,
+      clearanceBoost:
+        typeof parsed.clearanceBoost === 'boolean'
+          ? parsed.clearanceBoost
+          : fallback.clearanceBoost,
+      seatedFriendly:
+        typeof parsed.seatedFriendly === 'boolean'
+          ? parsed.seatedFriendly
+          : fallback.seatedFriendly,
       source,
       modelUsed,
     };
@@ -959,6 +976,7 @@ async function requestLlmOutfitPlan(params: {
   activeLifeScene?: ActiveLifeScene | null;
   allowWholeOutfitSwitch?: boolean;
   preferLocalFirst?: boolean;
+  structuralSummary?: VrmStructuralSummary | null;
 }): Promise<AiOutfitPlan> {
   const {
     prompt,
@@ -970,6 +988,7 @@ async function requestLlmOutfitPlan(params: {
     activeLifeScene = null,
     allowWholeOutfitSwitch = false,
     preferLocalFirst = true,
+    structuralSummary = null,
   } = params;
 
   const activeSlot = persona.outfitSlots.find((s) => s.id === persona.activeOutfitSlotId);
@@ -1144,7 +1163,9 @@ Return ONLY a valid raw JSON object (no markdown fences, no commentary) with thi
   "hairHighlightHex": null,
   "hideOuterLayers": false,
   "preferredExistingSlot": null,
-  "accessories": []
+  "accessories": [],
+  "clearanceBoost": false,
+  "seatedFriendly": false
 }
 MANDATORY Scene-Appropriate Wardrobe Rules (ALWAYS match the scene!):
 - "bath_wrap": REQUIRED for bathroom / shower / towel-dry / bath care (fluffy SFW bath towel wrap)
@@ -1161,6 +1182,8 @@ MANDATORY Scene-Appropriate Wardrobe Rules (ALWAYS match the scene!):
 - NEVER lock her into her VRM model's default skirt & long sleeves: always pick the best 3D clothing silhouette above for the time, mood, and live scene!
 - Pick a matching "hairStyle" and 0 to 2 tasteful accessories from ONLY: "cat_ears", "halo", "ribbon_bow", "cyber_visor", "choker", "fairy_wings", "idol_crown".
 - Keep hairTintHex & hairHighlightHex as null unless explicitly asked to dye hair.
+${structuralSummary?.hasCulledTorsoSkin ? '- STRUCTURAL GUARD: This VRM has culled/deleted skin underneath clothes. Prefer full-coverage silhouettes (onepiece, cozy_pajamas, cozy_hoodie_pants, school_blazer) or set "clearanceBoost": true. Avoid micro-crop tops.' : ''}
+${structuralSummary?.activePosture === 'seated_table' ? '- SEATED GUARD: The idol is currently seated at a table. Set "seatedFriendly": true to apply rear-glute skirt deflection and avoid stiff floor-length hems.' : ''}
 ${wholeOutfitRule}`;
 
   const userText = `Character: ${persona.name} (${persona.title})
@@ -1168,6 +1191,7 @@ Personality: ${persona.traits}
 Current Mood: ${persona.mood}
 Previous Garment Type: ${previousGarmentStyle} (prefer choosing a fresh clothing type that fits the time, mood & scene!)
 ${liveSceneSummary ? `Current Live Scene / Activity: ${liveSceneSummary}` : ''}
+${structuralSummary ? `VRM Structure: Torso Skin ${structuralSummary.hasCulledTorsoSkin ? 'Culled' : 'Intact'}, Posture ${structuralSummary.activePosture}, Native slots [${structuralSummary.nativeOutfitSlots.join(', ')}]` : ''}
 Available clothing meshes: ${meshSummary || 'Tops, Bottoms, Footwear, Hair'}
 Fashion Brief / Request: ${prompt}
 Output ONLY the JSON object.`;
@@ -1376,6 +1400,7 @@ export async function generateAiOutfit(params: {
   vaultModels?: VaultModelMeta[];
   activeLifeScene?: ActiveLifeScene | null;
   occasionLabel?: string;
+  structuralSummary?: VrmStructuralSummary | null;
 }): Promise<GeneratedOutfitPayload> {
   const plan = await requestLlmOutfitPlan({
     prompt: params.prompt,
@@ -1387,6 +1412,7 @@ export async function generateAiOutfit(params: {
     activeLifeScene: params.activeLifeScene,
     allowWholeOutfitSwitch: params.settings.autoSwitchVrmModels !== false,
     preferLocalFirst: true,
+    structuralSummary: params.structuralSummary,
   });
   return materializeOutfitPlan(plan, params.detectedMeshes);
 }
@@ -1403,6 +1429,7 @@ export async function generateTimeOccasionOutfit(params: {
   activeLifeScene?: ActiveLifeScene | null;
   occasionOverride?: string;
   allowWholeOutfitSwitch?: boolean;
+  structuralSummary?: VrmStructuralSummary | null;
 }): Promise<{ payload: GeneratedOutfitPayload; brief: TimeOccasionBrief }> {
   const brief = buildTimeOccasionBrief({
     persona: params.persona,
@@ -1419,6 +1446,7 @@ export async function generateTimeOccasionOutfit(params: {
     allowWholeOutfitSwitch:
       params.allowWholeOutfitSwitch ?? (params.settings.autoSwitchVrmModels !== false),
     preferLocalFirst: true,
+    structuralSummary: params.structuralSummary,
   });
   const payload = await materializeOutfitPlan(plan, params.detectedMeshes);
   return { payload, brief };

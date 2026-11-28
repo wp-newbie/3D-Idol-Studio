@@ -69,7 +69,11 @@ import {
   syncShowerCensorsToVrm,
   updateProceduralGarmentSway,
 } from '../stage/garmentRig';
-import { auditOutfitIntegrity } from '../stage/outfitIntegrityChecker';
+import {
+  auditOutfitIntegrity,
+  runAiVisualOutfitCritic,
+  type OutfitIntegrityReport,
+} from '../stage/outfitIntegrityChecker';
 import { applyVrmAppearanceVariant } from '../stage/vrmMorphRig';
 import {
   syncActivityHandPropsToVrm,
@@ -143,6 +147,7 @@ interface StageViewportProps {
   onWidgetAvatarDropped?: () => void;
   onCharacterHoverChange?: (isHoveringAvatar: boolean) => void;
   onMeshesDetected: (meshes: MeshDescriptor[]) => void;
+  onOutfitIntegrityReport?: (report: OutfitIntegrityReport) => void;
   onImportModelFile: (file: File) => void;
   onImportAccessoryFile?: (file: File) => void;
   onImportVrmaFile: (file: File) => Promise<VaultVrmaMeta | null>;
@@ -556,6 +561,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onWidgetAvatarDropped,
   onCharacterHoverChange,
   onMeshesDetected,
+  onOutfitIntegrityReport,
   onImportModelFile,
   onImportAccessoryFile,
   onImportVrmaFile,
@@ -688,6 +694,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onWidgetAvatarDroppedRef.current = onWidgetAvatarDropped;
   const onCharacterHoverChangeRef = useRef(onCharacterHoverChange);
   onCharacterHoverChangeRef.current = onCharacterHoverChange;
+  const onOutfitIntegrityReportRef = useRef(onOutfitIntegrityReport);
+  onOutfitIntegrityReportRef.current = onOutfitIntegrityReport;
   const widgetDragRef = useRef<{
     startX: number;
     startY: number;
@@ -2633,13 +2641,22 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     const culling = currentVrmRef.current
       ? inspectVrmBodySkinCulling(currentVrmRef.current, avatarRoot)
       : null;
-    auditOutfitIntegrity({
+    const report = auditOutfitIntegrity({
       vrm: currentVrmRef.current,
       avatarRoot,
       garmentStyle: isShowering ? 'default' : activeSlot.garmentStyle,
       slot: activeSlot,
       cullingReport: culling,
       isBathOrShower: isShowering,
+    });
+    const canvas = rendererRef.current?.domElement || null;
+    void runAiVisualOutfitCritic({
+      canvas,
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      report,
+    }).then(() => {
+      onOutfitIntegrityReportRef.current?.(report);
     });
   }, [
     activeSlot.garmentStyle,

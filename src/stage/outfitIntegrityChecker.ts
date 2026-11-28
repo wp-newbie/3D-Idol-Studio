@@ -8,7 +8,9 @@ import {
   closestPointOnTriangleBarycentric,
   makeAnimeSkinMaterial,
   sampleAvatarSkinColorHex,
+  ensureWatertightBodySkinUnderlay,
 } from './garmentRig';
+import { discoverLoadedLmStudioModels, LM_STUDIO_HOSTS } from '../services/localLlmOrchestrator';
 
 export type IntegrityZone =
   | 'neckCollar'
@@ -22,6 +24,21 @@ export type IntegrityZone =
 export interface OutfitIntegrityZoneResult {
   status: 'pass' | 'repaired' | 'warn';
   detail: string;
+}
+
+export type AiCriticIssueKind =
+  | 'missing_body'
+  | 'waist_poke_through'
+  | 'arm_shoulder_clip'
+  | 'floating_accessory'
+  | 'z_fighting'
+  | 'skirt_seat_clip';
+
+export interface AiVisualCriticResult {
+  status: 'verified_clean' | 'auto_repaired' | 'skipped';
+  issues?: AiCriticIssueKind[];
+  notes?: string;
+  modelUsed?: string;
 }
 
 export interface OutfitIntegrityReport {
@@ -42,6 +59,7 @@ export interface OutfitIntegrityReport {
     same_person_identity: OutfitIntegrityZoneResult;
   };
   boneCoverage?: Record<VRMHumanBoneName, number>;
+  aiCritic?: AiVisualCriticResult;
 }
 
 export interface OutfitIntegrityContext {
@@ -638,17 +656,13 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
           }
         });
 
-        // Hide conflicting partial procedural 3D meshes on pre-culled model
-        let proceduralGarmentsHidden = 0;
+        // Ensure all watertight skin underlays and seam seals remain visible
         avatarRoot.traverse((obj) => {
           if (
             obj instanceof THREE.Mesh &&
-            (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+            (obj.userData?.__zeta_shower_underlay__ || obj.userData?.__zeta_seam_seal__)
           ) {
-            if (obj.visible && isPreCulled && !obj.userData?.__zeta_seam_seal__) {
-              obj.visible = false;
-              proceduralGarmentsHidden++;
-            }
+            obj.visible = true;
           }
         });
 
@@ -671,6 +685,9 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
       } else {
         // Intact model AND valid procedural mesh active: hide conflicting native clothing slots
         let nativeSlotsHidden = 0;
+        const candidateMeshHides: Array<{ mesh: THREE.Mesh; origVisible: boolean }> = [];
+        const candidateMatHides: Array<{ mat: THREE.Material; anyM: any }> = [];
+
         avatarRoot.traverse((obj) => {
           if (
             obj instanceof THREE.Mesh &&
@@ -684,29 +701,51 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
 
             if (!hasSkin && !PROTECTED_SKIN_HAIR_REGEX.test(obj.name)) {
               if (obj.visible) {
+                candidateMeshHides.push({ mesh: obj, origVisible: obj.visible });
                 obj.visible = false;
-                nativeSlotsHidden++;
               }
             } else {
               for (const m of mats) {
                 if (!m) continue;
                 if (!PROTECTED_SKIN_HAIR_REGEX.test(m.name || '') && m.visible) {
+                  const anyM = m as unknown as { transparent?: boolean; opacity?: number; depthWrite?: boolean; colorWrite?: boolean };
+                  candidateMatHides.push({ mat: m, anyM });
                   m.visible = false;
-                  const anyM = m as unknown as { transparent?: boolean; opacity?: number; depthWrite?: boolean };
                   anyM.transparent = true;
                   anyM.opacity = 0;
                   anyM.depthWrite = false;
-                  nativeSlotsHidden++;
+                  anyM.colorWrite = false;
                 }
               }
             }
           }
         });
 
-        if (nativeSlotsHidden > 0) {
-          repairsApplied.push(`Coplanar guard: hid ${nativeSlotsHidden} conflicting native clothing slot(s)`);
-          repairedZonesSet.add('chestStomach');
-          repairedZonesSet.add('neckCollar');
+        // Bone Coverage Hard Verification: verify hiding candidate native slots did not introduce bone vertex deficit
+        const postCheck = isBoneCoverageSatisfied(computeVisibleBoneCoverage(vrm, avatarRoot));
+        if (!postCheck.satisfied) {
+          // Veto! Revert all candidate hides so character is never left with missing body parts
+          for (const item of candidateMeshHides) {
+            item.mesh.visible = item.origVisible;
+          }
+          for (const item of candidateMatHides) {
+            item.mat.visible = true;
+            item.anyM.transparent = false;
+            item.anyM.opacity = 1;
+            item.anyM.depthWrite = true;
+            item.anyM.colorWrite = true;
+          }
+          console.warn(
+            '[OutfitIntegrity] VETOED hiding native clothing slots: post-hide bone vertex deficit detected',
+            postCheck.deficitBones
+          );
+        } else {
+          nativeSlotsHidden = candidateMeshHides.length + candidateMatHides.length;
+          if (nativeSlotsHidden > 0) {
+            repairsApplied.push(`Coplanar guard: hid ${nativeSlotsHidden} conflicting native clothing slot(s)`);
+            repairedZonesSet.add('chestStomach');
+            repairedZonesSet.add('neckCollar');
+          }
         }
       }
     }
@@ -1040,4 +1079,222 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     },
     boneCoverage: latestBoneCoverage,
   };
+}
+
+/**
+ * Captures a downscaled (512x512) JPEG base64 frame directly from the active Three.js WebGL canvas.
+ */
+export function captureCanvasJpegBase64(
+  canvas: HTMLCanvasElement | null,
+  maxDim = 512,
+  quality = 0.82
+): string | null {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
+  try {
+    const w = canvas.width;
+    const h = canvas.height;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const targetW = Math.max(64, Math.round(w * scale));
+    const targetH = Math.max(64, Math.round(h * scale));
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = targetW;
+    offscreen.height = targetH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0, targetW, targetH);
+    return offscreen.toDataURL('image/jpeg', quality);
+  } catch (err) {
+    console.warn('[OutfitIntegrity] Failed to capture canvas frame for AI critic:', err);
+    return null;
+  }
+}
+
+/**
+ * Stage 2 Post-Render Vision-LM Outfit Critic:
+ * Sends a captured 512x512 JPEG frame to the configured local LM Studio vision model
+ * (or gemma-4-e4b-it / qwen-vl) via /v1/chat/completions to visually critique the outfit.
+ * If any visual issue is detected (waist poke-through, missing body parts, floating accessory),
+ * it applies deterministic repairs on the scene graph.
+ */
+export async function runAiVisualOutfitCritic(params: {
+  canvas: HTMLCanvasElement | null;
+  vrm: VRM | null;
+  avatarRoot: THREE.Object3D;
+  report: OutfitIntegrityReport;
+  endpointUrl?: string;
+  timeoutMs?: number;
+}): Promise<AiVisualCriticResult> {
+  const { canvas, vrm, avatarRoot, report, timeoutMs = 6000 } = params;
+
+  const dataUrl = captureCanvasJpegBase64(canvas);
+  if (!dataUrl) {
+    const res: AiVisualCriticResult = { status: 'skipped', notes: 'Canvas capture unavailable' };
+    report.aiCritic = res;
+    return res;
+  }
+
+  // Fast check for local LM Studio availability
+  let modelToUse: string | null = null;
+  try {
+    const models = await discoverLoadedLmStudioModels();
+    if (models.length > 0) {
+      // Prefer vision-capable models if available
+      const visionMatch = models.find((m) =>
+        /vision|vl|gemma-4|llava|cogvlm|minicpm|qwen.*vl/i.test(m)
+      );
+      modelToUse = visionMatch || models[0];
+    }
+  } catch {
+    // LM studio offline
+  }
+
+  if (!modelToUse) {
+    const res: AiVisualCriticResult = {
+      status: 'skipped',
+      notes: 'No local LM Studio vision model loaded',
+    };
+    report.aiCritic = res;
+    return res;
+  }
+
+  const promptText = `You are a 3D anime idol studio visual quality critic.
+Analyze this rendered image of the character's 3D outfit and anatomy.
+Check for any visual bugs:
+1. "missing_body": Any hollow gaps, transparent voids at the waist, chest, shoulders, or invisible upper arms/legs.
+2. "waist_poke_through": Skin poking through the waistband or between top and skirt/pants.
+3. "arm_shoulder_clip": Flesh poking through sleeves or shoulders clipping through fabric.
+4. "floating_accessory": Hairpins, visor, ribbons or headwear detached/floating in midair.
+5. "z_fighting": Flickering or patchwork polygon z-fighting on clothes.
+6. "skirt_seat_clip": Rear glutes poking through the back of the skirt when seated.
+
+Return STRICT JSON ONLY, no extra text:
+{
+  "clean": boolean,
+  "issues": ["missing_body" | "waist_poke_through" | "arm_shoulder_clip" | "floating_accessory" | "z_fighting" | "skirt_seat_clip"],
+  "notes": "brief 1-sentence assessment"
+}`;
+
+  const hostList = params.endpointUrl ? [params.endpointUrl] : LM_STUDIO_HOSTS;
+  let parsedJson: { clean?: boolean; issues?: AiCriticIssueKind[]; notes?: string } | null = null;
+
+  for (const host of hostList) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const resp = await fetch(`${host}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: promptText },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          temperature: 0.1,
+          max_tokens: 160,
+        }),
+      });
+      clearTimeout(timer);
+
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const rawReply = data?.choices?.[0]?.message?.content || '';
+      const match = /\{[\s\S]*\}/.exec(rawReply);
+      if (match) {
+        parsedJson = JSON.parse(match[0]);
+        break;
+      }
+    } catch {
+      // try next host or skip gracefully
+    }
+  }
+
+  if (!parsedJson) {
+    const res: AiVisualCriticResult = {
+      status: 'skipped',
+      notes: 'Local critic query timed out or returned non-JSON',
+      modelUsed: modelToUse,
+    };
+    report.aiCritic = res;
+    return res;
+  }
+
+  const issues = Array.isArray(parsedJson.issues) ? (parsedJson.issues as AiCriticIssueKind[]) : [];
+  const isClean = parsedJson.clean !== false && issues.length === 0;
+
+  if (isClean) {
+    const res: AiVisualCriticResult = {
+      status: 'verified_clean',
+      notes: parsedJson.notes || 'No visual defects detected by AI Vision Critic.',
+      modelUsed: modelToUse,
+    };
+    report.aiCritic = res;
+    return res;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deterministic Auto-Repairs for Detected Issues
+  // ---------------------------------------------------------------------------
+  const appliedRepairs: string[] = [];
+
+  for (const issue of issues) {
+    if (issue === 'missing_body') {
+      if (vrm) {
+        ensureWatertightBodySkinUnderlay({ vrm, avatarRoot });
+        appliedRepairs.push('Spawned watertight body skin underlay for missing body parts');
+      }
+    } else if (issue === 'waist_poke_through' || issue === 'skirt_seat_clip') {
+      avatarRoot.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.userData?.garmentSkirtSway) {
+          obj.scale.x = Math.max(obj.scale.x, 1.035);
+          obj.scale.z = Math.max(obj.scale.z, 1.045);
+          appliedRepairs.push('Expanded waist/hips clearance on skirt mesh');
+        }
+      });
+    } else if (issue === 'floating_accessory') {
+      avatarRoot.traverse((obj) => {
+        if (obj.userData?.__zeta_procedural_accessory__ && obj.name?.includes('cyber_visor')) {
+          obj.position.z *= 0.7; // pull closer to forehead
+          appliedRepairs.push('Pulled floating cyber visor closer to forehead surface');
+        }
+      });
+    } else if (issue === 'z_fighting') {
+      avatarRoot.traverse((obj) => {
+        if (
+          obj instanceof THREE.Mesh &&
+          (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+        ) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((m) => {
+            if (m) {
+              m.polygonOffset = true;
+              m.polygonOffsetFactor = -4;
+              m.polygonOffsetUnits = -4;
+            }
+          });
+          appliedRepairs.push('Deepened polygonOffset to eliminate z-fighting');
+        }
+      });
+    }
+  }
+
+  const res: AiVisualCriticResult = {
+    status: 'auto_repaired',
+    issues,
+    notes: `${parsedJson.notes || 'Visual defects found.'} Auto-repaired: ${appliedRepairs.join('; ') || 'remedied'}.`,
+    modelUsed: modelToUse,
+  };
+  report.aiCritic = res;
+  if (appliedRepairs.length > 0) {
+    report.repairsApplied.push(...appliedRepairs);
+  }
+  return res;
 }

@@ -56,7 +56,8 @@ function clearExistingAccessories(root: THREE.Object3D): void {
 
 function buildAccessoryGroup(
   id: ProceduralAccessoryId,
-  accentHex: string
+  accentHex: string,
+  vrm?: VRM | null
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = `ProceduralAccessory_${id}`;
@@ -64,6 +65,8 @@ function buildAccessoryGroup(
 
   const primaryColor = new THREE.Color(accentHex || '#c084fc');
   const darkBase = new THREE.Color('#161324');
+  const isVrm0 = vrm?.meta?.metaVersion === '0';
+  const fwdSign = isVrm0 ? -1 : 1;
 
   if (id === 'cat_ears') {
     const outerMat = new THREE.MeshStandardMaterial({
@@ -165,11 +168,11 @@ function buildAccessoryGroup(
     const glassMat = new THREE.MeshStandardMaterial({
       color: primaryColor,
       emissive: primaryColor,
-      emissiveIntensity: 0.55,
+      emissiveIntensity: 0.65,
       roughness: 0.1,
       metalness: 0.85,
       transparent: true,
-      opacity: 0.52,
+      opacity: 0.68,
       side: THREE.DoubleSide,
     });
     const frameMat = new THREE.MeshStandardMaterial({
@@ -178,19 +181,41 @@ function buildAccessoryGroup(
       metalness: 0.9,
     });
 
-    const visor = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.088, 0.085, 0.038, 28, 1, true, -Math.PI * 0.35, Math.PI * 0.70),
-      glassMat
+    // Sleek anime cyber visor fitted flush across the brow/forehead (zero floating forward gap):
+    // Radius ~0.076m, height ~0.024m, nestled flush against bangs/forehead
+    const visorGeo = new THREE.CylinderGeometry(
+      0.076,
+      0.074,
+      0.024,
+      28,
+      1,
+      true,
+      -Math.PI * 0.32,
+      Math.PI * 0.64
     );
-    visor.position.set(0, 0.048, 0.050);
+    const visor = new THREE.Mesh(visorGeo, glassMat);
+    visor.position.set(0, 0.038, 0.015 * fwdSign);
+    if (fwdSign < 0) {
+      visor.rotation.y = Math.PI;
+    }
     group.add(visor);
 
     const browBar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.090, 0.090, 0.008, 28, 1, true, -Math.PI * 0.36, Math.PI * 0.72),
+      new THREE.CylinderGeometry(0.077, 0.077, 0.005, 28, 1, true, -Math.PI * 0.33, Math.PI * 0.66),
       frameMat
     );
-    browBar.position.set(0, 0.068, 0.050);
+    browBar.position.set(0, 0.050, 0.015 * fwdSign);
+    if (fwdSign < 0) {
+      browBar.rotation.y = Math.PI;
+    }
     group.add(browBar);
+
+    // Sleek side temples hugging the skull back toward ears
+    for (const side of [-1, 1]) {
+      const temple = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.006, 0.065), frameMat);
+      temple.position.set(side * 0.074, 0.046, -0.018 * fwdSign);
+      group.add(temple);
+    }
   } else if (id === 'choker') {
     const strapMat = new THREE.MeshStandardMaterial({
       color: '#12101c',
@@ -350,19 +375,15 @@ export function syncProceduralAccessoriesToVrm(params: {
   const getBoneParent = (bone: 'head' | 'neck' | 'chest'): THREE.Object3D | null => {
     if (bone === 'chest') {
       return (
+        vrm.humanoid.getNormalizedBoneNode('upperChest') ||
         vrm.humanoid.getRawBoneNode('upperChest') ||
+        vrm.humanoid.getNormalizedBoneNode('chest') ||
         vrm.humanoid.getRawBoneNode('chest') ||
         vrm.humanoid.getRawBoneNode('spine')
       );
     }
-    return vrm.humanoid.getRawBoneNode(bone);
+    return vrm.humanoid.getNormalizedBoneNode(bone) || vrm.humanoid.getRawBoneNode(bone);
   };
-
-  // Compute inverse world rotation of raw bone at bind/current relative to vrm.scene so accessories
-  // always point upright (+Y) and forward (+Z) regardless of baked bone roll/pitch in custom VRM rigs.
-  vrm.scene.updateMatrixWorld(true);
-  const sceneWorldQuat = new THREE.Quaternion();
-  vrm.scene.getWorldQuaternion(sceneWorldQuat);
 
   const uniqueIds = Array.from(new Set(accessories));
   for (const id of uniqueIds) {
@@ -371,15 +392,11 @@ export function syncProceduralAccessoriesToVrm(params: {
     const boneNode = getBoneParent(meta.bone);
     if (!boneNode) continue;
 
-    // Wrap inside an orientation-normalized sub-group so local +Y is strictly UP and local +Z is forward
     const anchor = new THREE.Group();
+    anchor.name = `AccessoryAnchor_${id}`;
     anchor.userData[ACCESSORY_GROUP_TAG] = true;
-    const boneWorldQuat = new THREE.Quaternion();
-    boneNode.getWorldQuaternion(boneWorldQuat);
-    // Align anchor to vrm.scene's upright axes at current pose
-    anchor.quaternion.copy(boneWorldQuat).invert().multiply(sceneWorldQuat);
 
-    const meshGroup = buildAccessoryGroup(id, accentHex);
+    const meshGroup = buildAccessoryGroup(id, accentHex, vrm);
     anchor.add(meshGroup);
     boneNode.add(anchor);
   }

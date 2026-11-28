@@ -90,7 +90,9 @@ import {
   planAiVrmModelSwitch,
   type GeneratedOutfitPayload,
   type OutfitEngineSource,
+  type VrmStructuralSummary,
 } from './services/aiOutfitGenerator';
+import type { OutfitIntegrityReport } from './stage/outfitIntegrityChecker';
 import { HAIR_STYLE_META } from './stage/hairStyleRig';
 import { GARMENT_STYLE_META } from './stage/garmentRig';
 import {
@@ -269,6 +271,7 @@ export const App: React.FC = () => {
   const [connectionMode, setConnectionMode] = useState<'live' | 'demo' | 'error'>('demo');
   const [hasAiStudioBridge, setHasAiStudioBridge] = useState(false);
   const [apiErrorToast, setApiErrorToast] = useState<string | null>(null);
+  const [latestIntegrityReport, setLatestIntegrityReport] = useState<OutfitIntegrityReport | null>(null);
   const [isValidatingKey, setIsValidatingKey] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
   const [providerStatus, setProviderStatus] = useState(
@@ -3709,6 +3712,17 @@ export const App: React.FC = () => {
         currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
         currentStudio.personas[0];
 
+      const activePosture =
+        lifeSceneRef.current?.dining || currentStudio.settings.defaultPosture === 'seated'
+          ? 'seated_table'
+          : 'standing';
+      const structuralSummary: VrmStructuralSummary = {
+        hasCulledTorsoSkin: true,
+        hasCulledLegSkin: false,
+        activePosture,
+        nativeOutfitSlots: (detectedMeshesRef.current || []).map((m) => m.name),
+      };
+
       const generated = await generateAiOutfit({
         prompt,
         persona: currentPersona,
@@ -3717,6 +3731,7 @@ export const App: React.FC = () => {
         vaultModels: vaultModelsRef.current,
         activeLifeScene: lifeSceneRef.current,
         occasionLabel: options?.occasionLabel,
+        structuralSummary,
       });
 
       // If AI chose to switch to another VRM model type (e.g. a matching swimsuit/school/casual .vrm)!
@@ -3777,6 +3792,17 @@ export const App: React.FC = () => {
         currentStudio.personas.find((p) => p.id === currentStudio.activePersonaId) ||
         currentStudio.personas[0];
 
+      const activePosture =
+        lifeSceneRef.current?.dining || currentStudio.settings.defaultPosture === 'seated'
+          ? 'seated_table'
+          : 'standing';
+      const structuralSummary: VrmStructuralSummary = {
+        hasCulledTorsoSkin: true,
+        hasCulledLegSkin: false,
+        activePosture,
+        nativeOutfitSlots: (detectedMeshesRef.current || []).map((m) => m.name),
+      };
+
       const { payload, brief } = await generateTimeOccasionOutfit({
         persona: currentPersona,
         detectedMeshes: detectedMeshesRef.current,
@@ -3785,6 +3811,7 @@ export const App: React.FC = () => {
         activeLifeScene: lifeSceneRef.current,
         occasionOverride,
         allowWholeOutfitSwitch: currentStudio.settings.autoSwitchVrmModels !== false,
+        structuralSummary,
       });
 
       // If LM Studio decided she wants to switch into another 3D VRM avatar model type!
@@ -5047,6 +5074,7 @@ export const App: React.FC = () => {
             onUpdateYawOffset={handleUpdateSlotYawOffset}
             onUpdateEquippedAccessory={handleUpdateEquippedAccessory}
             lifeScene={lifeScene}
+            onOutfitIntegrityReport={setLatestIntegrityReport}
           />
 
           {!desktopRoamMode && (
@@ -5151,6 +5179,7 @@ export const App: React.FC = () => {
               onSelectHairStyle={handleSelectHairStyle}
               onSelectHairColor={handleSelectHairColor}
               onAiPickHairStyle={(prompt) => void handleAiPickHairStyle(prompt)}
+              integrityReport={latestIntegrityReport}
             />
           )}
         </section>
@@ -5246,6 +5275,7 @@ export const App: React.FC = () => {
         personaCount={studio.personas.length}
         connectionMode={connectionMode}
         lastApiError={studio.settings.enableGeminiCloud !== false ? apiErrorToast : null}
+        onDismissError={() => setApiErrorToast(null)}
         isValidatingKey={isValidatingKey}
         validationMessage={validationMessage}
         hasAiStudioBridge={hasAiStudioBridge}
