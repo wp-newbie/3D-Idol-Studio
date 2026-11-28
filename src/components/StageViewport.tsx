@@ -64,6 +64,7 @@ import {
   syncSeatSpringBoneColliders,
   updateProceduralGarmentSway,
 } from '../stage/garmentRig';
+import { auditOutfitIntegrity } from '../stage/outfitIntegrityChecker';
 import { applyVrmAppearanceVariant } from '../stage/vrmMorphRig';
 import {
   syncActivityHandPropsToVrm,
@@ -298,6 +299,85 @@ function classifyRaycasterHit(
     return 'poke';
   }
   return 'outfit_tap';
+}
+
+function triggerOutfitSparkleBurst(
+  scene: THREE.Scene,
+  position: THREE.Vector3,
+  accentColorHex: string
+): void {
+  const group = new THREE.Group();
+  group.position.copy(position);
+
+  // 1. Rising anime light ring
+  const ringGeo = new THREE.TorusGeometry(0.38, 0.016, 12, 36);
+  ringGeo.rotateX(Math.PI / 2);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(accentColorHex || '#f472b6'),
+    transparent: true,
+    opacity: 0.95,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.position.y = 0.05;
+  group.add(ring);
+
+  // 2. Rising magical sparkle particles
+  const particleCount = 28;
+  const pGeo = new THREE.BufferGeometry();
+  const positions = new Float32Array(particleCount * 3);
+  const vels: Array<{ vy: number; r: number; angle: number }> = [];
+  for (let i = 0; i < particleCount; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = 0.22 + Math.random() * 0.28;
+    positions[i * 3] = Math.cos(angle) * r;
+    positions[i * 3 + 1] = Math.random() * 0.3;
+    positions[i * 3 + 2] = Math.sin(angle) * r;
+    vels.push({ vy: 2.8 + Math.random() * 1.5, r, angle: angle + (Math.random() - 0.5) * 0.5 });
+  }
+  pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const pMat = new THREE.PointsMaterial({
+    color: '#ffffff',
+    size: 0.045,
+    transparent: true,
+    opacity: 0.95,
+  });
+  const points = new THREE.Points(pGeo, pMat);
+  group.add(points);
+
+  scene.add(group);
+
+  const startTime = performance.now();
+  const duration = 350; // 350ms quick-change burst
+
+  const animate = () => {
+    const elapsed = performance.now() - startTime;
+    const progress = Math.min(1, elapsed / duration);
+    const ease = 1 - Math.pow(1 - progress, 3);
+
+    ring.position.y = ease * 1.65;
+    ring.scale.setScalar(1 + ease * 0.35);
+    ringMat.opacity = (1 - progress) * 0.95;
+
+    const pos = pGeo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < particleCount; i++) {
+      const v = vels[i];
+      v.angle += 0.04;
+      pos.setXYZ(i, Math.cos(v.angle) * v.r, ease * 1.5 + Math.sin(progress * Math.PI) * 0.2, Math.sin(v.angle) * v.r);
+    }
+    pos.needsUpdate = true;
+    pMat.opacity = (1 - progress) * 0.95;
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      scene.remove(group);
+      ringGeo.dispose();
+      ringMat.dispose();
+      pGeo.dispose();
+      pMat.dispose();
+    }
+  };
+  requestAnimationFrame(animate);
 }
 
 function applyPoseAndMicroReactions(params: {
@@ -638,6 +718,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     typeof activeSlot.yawOffset === 'number' && Number.isFinite(activeSlot.yawOffset)
       ? activeSlot.yawOffset
       : 0;
+  const prevSlotIdRef = useRef<string>(activeSlot.id);
+  const prevGarmentRef = useRef<string>(activeSlot.garmentStyle || '');
   const currentVrmRef = useRef<VRM | null>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const activeVrmaActionRef = useRef<THREE.AnimationAction | null>(null);
@@ -1518,6 +1600,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             isSeated: isPhysicallySeated,
             seatSurfaceWorldY: avatarContainer.position.y + STUDIO_SEAT_HEIGHT,
             torsoForwardLeanRad: poseControllerRef.current.getTorsoForwardLeanRad(vrm),
+            thighPitch: poseControllerRef.current.getThighPitchRad(vrm),
           });
           syncSeatSpringBoneColliders(
             vrm,
@@ -2033,6 +2116,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
                   bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
                 }
               : null,
+            garmentStyle: activeSlot.garmentStyle,
+            cullingReport: loadedCulling,
           });
 
           syncProceduralAccessoriesToVrm({
@@ -2391,6 +2476,8 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
           }
         : null,
+      garmentStyle: activeSlot.garmentStyle,
+      cullingReport: culling,
     });
 
     onMeshesDetectedRef.current(
@@ -2476,6 +2563,34 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         persona.accentColor,
       topTextureDataUrl: activeSlot.garmentPalette?.topTextureDataUrl ?? null,
       bottomTextureDataUrl: activeSlot.garmentPalette?.bottomTextureDataUrl ?? null,
+    });
+
+    // 350ms quick-change vertical sparkle/shimmer burst on outfit swap
+    if (
+      sceneRef.current &&
+      avatarContainerRef.current &&
+      (prevSlotIdRef.current !== activeSlot.id ||
+        prevGarmentRef.current !== (activeSlot.garmentStyle || 'default'))
+    ) {
+      triggerOutfitSparkleBurst(
+        sceneRef.current,
+        avatarContainerRef.current.position,
+        activeSlot.accessoryColorHex || persona.accentColor
+      );
+      prevSlotIdRef.current = activeSlot.id;
+      prevGarmentRef.current = activeSlot.garmentStyle || 'default';
+    }
+
+    // Run Head-to-Toe Outfit Integrity Audit & Auto-Repair
+    const culling = currentVrmRef.current
+      ? inspectVrmBodySkinCulling(currentVrmRef.current, avatarRoot)
+      : null;
+    auditOutfitIntegrity({
+      vrm: currentVrmRef.current,
+      avatarRoot,
+      garmentStyle: activeSlot.garmentStyle,
+      slot: activeSlot,
+      cullingReport: culling,
     });
   }, [
     activeSlot.garmentStyle,

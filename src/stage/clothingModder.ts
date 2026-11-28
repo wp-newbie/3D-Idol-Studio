@@ -100,6 +100,18 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
       /halo/i,
       /belt/i,
       /bag/i,
+      /badge/i,
+      /tag/i,
+      /brooch/i,
+      /pin/i,
+      /cuff/i,
+      /armband/i,
+      /strap/i,
+      /hanging/i,
+      /buckle/i,
+      /chain/i,
+      /ornament/i,
+      /decor/i,
     ],
   },
   {
@@ -174,7 +186,7 @@ const CATEGORY_MATCHERS: { category: ClothingCategory; patterns: RegExp[] }[] = 
 // Comprehensive base-VRM outfit/underwear/footwear/accessory matcher hidden whenever a non-native
 // 3D garment silhouette is active (and cleanly restored when switching back to native).
 const NATIVE_OUTFIT_HIDE_REGEX =
-  /cloth|top|shirt|blouse|sweater|hoodie|skirt|dress|onepiece|one[_\-\s]?piece|gown|pants|trouser|shorts|legging|jeans|jacket|coat|blazer|cardigan|vest|underwear|inner|panties|lingerie|(^|[_\-\s])bra([_\-\s\d]|$)|shoe|boot|heel|loafer|sneaker|sandal|footwear|sock|stocking|tights|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|collar|strap|lanyard|pendant|necklace|scarf|belt|wristband|bracelet|watch|glove|acc(essory|essories)?([_\-\s\d]|$)/i;
+  /cloth|top|shirt|blouse|sweater|hoodie|skirt|dress|onepiece|one[_\-\s]?piece|gown|pants|trouser|shorts|legging|jeans|jacket|coat|blazer|cardigan|vest|underwear|inner|panties|lingerie|(^|[_\-\s])bra([_\-\s\d]|$)|shoe|boot|heel|loafer|sneaker|sandal|footwear|sock|stocking|tights|ribbon|necktie|(^|[_\-\s])tie([_\-\s\d]|$)|choker|collar|strap|lanyard|pendant|necklace|scarf|belt|wristband|bracelet|watch|glove|badge|tag|brooch|pin|cuff|armband|hanging|buckle|chain|ornament|decor|prop|acc(essory|essories)?([_\-\s\d]|$)/i;
 
 // Core body, face, and hair materials that MUST always stay visible when hiding native outfits.
 const PROTECTED_BODY_FACE_HAIR_REGEX =
@@ -503,6 +515,188 @@ export function getCyclingShortsTexture(
   return canvasTex;
 }
 
+export interface VrmBodyCullingReport {
+  isPreCulled: boolean;
+  hasCulledTorso: boolean;
+  hasCulledThighs: boolean;
+  hasCulledArms: boolean;
+}
+
+export interface GarmentCoverageFlags {
+  coversTorso: boolean;
+  coversUpperArms: boolean;
+  coversForearms: boolean;
+  coversThighs: boolean;
+  coversCalves: boolean;
+}
+
+export function getGarmentCoverageFlags(garmentStyle?: string | null): GarmentCoverageFlags {
+  if (
+    !garmentStyle ||
+    garmentStyle === 'default' ||
+    garmentStyle === 'bath_wrap' ||
+    garmentStyle === 'beach_swimsuit'
+  ) {
+    return {
+      coversTorso: false,
+      coversUpperArms: false,
+      coversForearms: false,
+      coversThighs: false,
+      coversCalves: false,
+    };
+  }
+  switch (garmentStyle) {
+    case 'cozy_pajamas':
+    case 'cozy_hoodie_pants':
+    case 'trench_coat_pants':
+    case 'kimono_yukata':
+      return {
+        coversTorso: true,
+        coversUpperArms: true,
+        coversForearms: true,
+        coversThighs: true,
+        coversCalves: true,
+      };
+    case 'sporty_tee_leggings':
+      return {
+        coversTorso: true,
+        coversUpperArms: true,
+        coversForearms: false,
+        coversThighs: true,
+        coversCalves: true,
+      };
+    case 'streetwear_jacket_shorts':
+      return {
+        coversTorso: true,
+        coversUpperArms: true,
+        coversForearms: true,
+        coversThighs: true,
+        coversCalves: false,
+      };
+    case 'school_blazer':
+      return {
+        coversTorso: true,
+        coversUpperArms: true,
+        coversForearms: true,
+        coversThighs: false,
+        coversCalves: false,
+      };
+    case 'summer_sundress':
+      return {
+        coversTorso: true,
+        coversUpperArms: false,
+        coversForearms: false,
+        coversThighs: false,
+        coversCalves: false,
+      };
+    case 'evening_gown':
+      return {
+        coversTorso: true,
+        coversUpperArms: false,
+        coversForearms: false,
+        coversThighs: true,
+        coversCalves: true,
+      };
+    default:
+      return {
+        coversTorso: false,
+        coversUpperArms: false,
+        coversForearms: false,
+        coversThighs: false,
+        coversCalves: false,
+      };
+  }
+}
+
+export function hasValidBodyUVs(mesh: THREE.Mesh): boolean {
+  const uv = mesh.geometry?.getAttribute('uv');
+  if (!uv || uv.count < 3) return false;
+  const step = Math.max(1, Math.floor(uv.count / 16));
+  let validCount = 0;
+  for (let i = 0; i < uv.count; i += step) {
+    const u = uv.getX(i);
+    const v = uv.getY(i);
+    if (!Number.isNaN(u) && !Number.isNaN(v) && u >= -0.05 && u <= 1.05 && v >= -0.05 && v <= 1.05) {
+      validCount++;
+    }
+  }
+  return validCount >= 4;
+}
+
+const bodyAlphaMaskCache = new Map<string, THREE.CanvasTexture>();
+
+export function getBodyAlphaMaskTexture(flags: GarmentCoverageFlags): THREE.CanvasTexture {
+  const key = `${flags.coversTorso}_${flags.coversUpperArms}_${flags.coversForearms}_${flags.coversThighs}_${flags.coversCalves}`;
+  const existing = bodyAlphaMaskCache.get(key);
+  if (existing) return existing;
+
+  const w = 128;
+  const h = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const fallbackTex = new THREE.CanvasTexture(canvas);
+    bodyAlphaMaskCache.set(key, fallbackTex);
+    return fallbackTex;
+  }
+
+  // 1. Default: 100% white (alpha = 1.0, fully opaque skin)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. Black (alpha = 0.0, culled by alphaTest = 0.5) for regions covered by garments,
+  // leaving ~1.5cm safety margin inside garment openings (collar, cuffs, waist, ankles)
+  ctx.fillStyle = '#000000';
+
+  if (flags.coversTorso) {
+    // Torso: center region U in [0.28, 0.72], V in [0.33, 0.57]
+    const tx = Math.floor(w * 0.28);
+    const tw = Math.ceil(w * 0.44);
+    const ty = Math.floor(h * 0.33);
+    const th = Math.ceil(h * 0.24);
+    ctx.fillRect(tx, ty, tw, th);
+  }
+
+  if (flags.coversUpperArms) {
+    const ly = Math.floor(h * 0.11);
+    const lh = Math.ceil(h * 0.13);
+    ctx.fillRect(Math.floor(w * 0.77), ly, Math.ceil(w * 0.22), lh);
+    ctx.fillRect(Math.floor(w * 0.01), ly, Math.ceil(w * 0.22), lh);
+  }
+
+  if (flags.coversForearms) {
+    const fy = Math.floor(h * 0.24);
+    const fh = Math.ceil(h * 0.16);
+    ctx.fillRect(Math.floor(w * 0.77), fy, Math.ceil(w * 0.22), fh);
+    ctx.fillRect(Math.floor(w * 0.01), fy, Math.ceil(w * 0.22), fh);
+  }
+
+  if (flags.coversThighs) {
+    const py = Math.floor(h * 0.53);
+    const ph = Math.ceil(h * 0.15);
+    ctx.fillRect(Math.floor(w * 0.77), py, Math.ceil(w * 0.22), ph);
+    ctx.fillRect(Math.floor(w * 0.01), py, Math.ceil(w * 0.22), ph);
+  }
+
+  if (flags.coversCalves) {
+    const cy = Math.floor(h * 0.68);
+    const ch = Math.ceil(h * 0.16);
+    ctx.fillRect(Math.floor(w * 0.77), cy, Math.ceil(w * 0.22), ch);
+    ctx.fillRect(Math.floor(w * 0.01), cy, Math.ceil(w * 0.22), ch);
+  }
+
+  const canvasTex = new THREE.CanvasTexture(canvas);
+  canvasTex.colorSpace = THREE.SRGBColorSpace;
+  canvasTex.wrapS = THREE.RepeatWrapping;
+  canvasTex.wrapT = THREE.RepeatWrapping;
+  canvasTex.needsUpdate = true;
+
+  bodyAlphaMaskCache.set(key, canvasTex);
+  return canvasTex;
+}
+
 function isProceduralOverlayObject(obj: THREE.Object3D): boolean {
   let cur: THREE.Object3D | null = obj;
   while (cur) {
@@ -536,6 +730,8 @@ export function applyOutfitModsToScene(params: {
     topTextureDataUrl?: string | null;
     bottomTextureDataUrl?: string | null;
   } | null;
+  garmentStyle?: string | null;
+  cullingReport?: VrmBodyCullingReport | null;
   onTextureLoaded?: () => void;
 }): void {
   const {
@@ -548,6 +744,8 @@ export function applyOutfitModsToScene(params: {
     hideNativeGarment = false,
     preserveNativeClothingForPreCulled = false,
     fallbackRecolorPalette = null,
+    garmentStyle = null,
+    cullingReport = null,
     onTextureLoaded,
   } = params;
   const loader = new THREE.TextureLoader();
@@ -595,9 +793,25 @@ export function applyOutfitModsToScene(params: {
     );
 
     // 1. Visibility toggle (NEVER hide a merged Body mesh with skin, nor hide native clothing on pre-culled VRMs!)
+    const allMatsAreNativeOutfit =
+      !hasSkinMat &&
+      mats.every((m) => {
+        if (!m) return false;
+        const cat = classifyName(m.name) || classifyName(name);
+        return (
+          cat === 'Tops' ||
+          cat === 'Bottoms' ||
+          cat === 'Footwear' ||
+          cat === 'Accessories' ||
+          NATIVE_OUTFIT_HIDE_REGEX.test(`${m.name || ''} ${name}`)
+        );
+      });
+
     const origVisible = snapshotOriginalVisible(obj);
     if (preserveNativeClothingForPreCulled) {
       obj.visible = origVisible;
+    } else if (hideNativeGarment && allMatsAreNativeOutfit) {
+      obj.visible = false;
     } else if (name in meshVisibility) {
       obj.visible = hasSkinMat && meshVisibility[name] === false ? origVisible : meshVisibility[name];
     } else if (obj.visible !== origVisible) {
@@ -632,11 +846,33 @@ export function applyOutfitModsToScene(params: {
           matCategory === 'Accessories' ||
           NATIVE_OUTFIT_HIDE_REGEX.test(matTargetName));
 
+      const anyMat = mat as unknown as {
+        color?: THREE.Color;
+        shadeColorFactor?: THREE.Color;
+        uniforms?: {
+          litFactor?: { value?: THREE.Color };
+          shadeColorFactor?: { value?: THREE.Color };
+        };
+        map?: THREE.Texture | null;
+        alphaMap?: THREE.Texture | null;
+        alphaTest?: number;
+        transparent?: boolean;
+        opacity?: number;
+        depthWrite?: boolean;
+        needsUpdate: boolean;
+      };
+
       if (hideNativeGarment && !preserveNativeClothingForPreCulled && isNativeOutfitSlot) {
         mat.visible = false;
+        anyMat.transparent = true;
+        anyMat.opacity = 0;
+        anyMat.depthWrite = false;
         continue;
       } else if (!mat.visible) {
         mat.visible = true;
+        anyMat.transparent = false;
+        anyMat.opacity = 1;
+        anyMat.depthWrite = true;
       }
 
       // On pre-culled legacy VRMs, fall back to clean material/texture recoloring over native clothing!
@@ -654,16 +890,6 @@ export function applyOutfitModsToScene(params: {
           effectiveMod = { colorHex: fallbackRecolorPalette.accessoryHex };
         }
       }
-      const anyMat = mat as unknown as {
-        color?: THREE.Color;
-        shadeColorFactor?: THREE.Color;
-        uniforms?: {
-          litFactor?: { value?: THREE.Color };
-          shadeColorFactor?: { value?: THREE.Color };
-        };
-        map?: THREE.Texture | null;
-        needsUpdate: boolean;
-      };
 
       // NEVER apply outfit recoloring or clothing textures to core skin, face, eyes, brows, lashes,
       // mouth, teeth, or hair slots (keeps outfit/pajama tints strictly off skin, face & hair!)
@@ -674,24 +900,58 @@ export function applyOutfitModsToScene(params: {
         );
       if (isAnySkinFaceEyeOrHair && !isNativeOutfitSlot) {
         const isSkinMat = isBodySkinMaterial(mat.name || obj.name);
-        if (isSkinMat && cyclingShorts && snap.map) {
-          const shortsTex = getCyclingShortsTexture(snap.map);
-          if (shortsTex) {
-            anyMat.map = shortsTex;
+        if (isSkinMat) {
+          const canAlphaMask =
+            hideNativeGarment &&
+            !preserveNativeClothingForPreCulled &&
+            (!cullingReport || !cullingReport.isPreCulled) &&
+            hasValidBodyUVs(obj);
+          if (canAlphaMask) {
+            const cov = getGarmentCoverageFlags(garmentStyle);
+            if (
+              cov.coversTorso ||
+              cov.coversUpperArms ||
+              cov.coversForearms ||
+              cov.coversThighs ||
+              cov.coversCalves
+            ) {
+              const alphaMask = getBodyAlphaMaskTexture(cov);
+              anyMat.alphaMap = alphaMask;
+              anyMat.alphaTest = 0.5;
+              anyMat.needsUpdate = true;
+            } else if (anyMat.alphaMap) {
+              anyMat.alphaMap = null;
+              anyMat.alphaTest = 0;
+              anyMat.needsUpdate = true;
+            }
+          } else if (anyMat.alphaMap) {
+            anyMat.alphaMap = null;
+            anyMat.alphaTest = 0;
             anyMat.needsUpdate = true;
-          } else if (snap.map.image instanceof HTMLImageElement && !snap.map.image.complete) {
-            snap.map.image.addEventListener(
-              'load',
-              () => {
-                const loadedTex = getCyclingShortsTexture(snap.map!);
-                if (loadedTex) {
-                  anyMat.map = loadedTex;
-                  anyMat.needsUpdate = true;
-                  onTextureLoaded?.();
-                }
-              },
-              { once: true }
-            );
+          }
+
+          if (cyclingShorts && snap.map) {
+            const shortsTex = getCyclingShortsTexture(snap.map);
+            if (shortsTex) {
+              anyMat.map = shortsTex;
+              anyMat.needsUpdate = true;
+            } else if (snap.map.image instanceof HTMLImageElement && !snap.map.image.complete) {
+              snap.map.image.addEventListener(
+                'load',
+                () => {
+                  const loadedTex = getCyclingShortsTexture(snap.map!);
+                  if (loadedTex) {
+                    anyMat.map = loadedTex;
+                    anyMat.needsUpdate = true;
+                    onTextureLoaded?.();
+                  }
+                },
+                { once: true }
+              );
+            }
+          } else if (anyMat.map !== snap.map) {
+            anyMat.map = snap.map;
+            anyMat.needsUpdate = true;
           }
         } else if (isSkinOrFace && anyMat.map !== snap.map) {
           anyMat.map = snap.map;

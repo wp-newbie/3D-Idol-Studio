@@ -161,7 +161,7 @@ function makeAnimeFabricMaterial(
     shadeColorFactor: shade,
     shadingToonyFactor: 0.72,
     shadingShiftFactor: -0.06,
-    side: options?.doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+    side: options?.doubleSide !== false ? THREE.DoubleSide : THREE.FrontSide,
     transparent: options?.transparent ?? false,
     opacity: options?.opacity ?? 1.0,
     depthWrite: options?.transparent ? false : true,
@@ -831,6 +831,7 @@ const REGION_ARM_L_LOW = 8;
 const REGION_ARM_R_UP = 9;
 const REGION_ARM_R_LOW = 10;
 const REGION_HAND = 11;
+const REGION_NECK = 12;
 
 type SkinnedGarmentZone =
   | 'pants'
@@ -880,8 +881,8 @@ function classifySkeletonBoneRegions(
   reg('upperChest', REGION_TORSO);
   reg('leftShoulder', REGION_TORSO);
   reg('rightShoulder', REGION_TORSO);
-  reg('neck', REGION_IGNORE);
-  reg('head', REGION_IGNORE);
+  reg('neck', REGION_NECK);
+  reg('head', REGION_NECK);
   reg('leftUpperLeg', REGION_LEG_L_UP);
   reg('leftLowerLeg', REGION_LEG_L_LOW);
   reg('leftFoot', REGION_LEG_L_LOW);
@@ -1299,6 +1300,436 @@ export function inspectVrmBodySkinCulling(
   };
 }
 
+const _wtA = new THREE.Vector3();
+const _wtB = new THREE.Vector3();
+const _wtC = new THREE.Vector3();
+const _wtNA = new THREE.Vector3();
+const _wtNB = new THREE.Vector3();
+const _wtNC = new THREE.Vector3();
+const _wtNorm = new THREE.Vector3();
+const _wtClosest = new THREE.Vector3();
+const _wtBary = new THREE.Vector3();
+const _wtQuery = new THREE.Vector3();
+
+const _wtAB = new THREE.Vector3();
+const _wtAC = new THREE.Vector3();
+const _wtAP = new THREE.Vector3();
+const _wtBP = new THREE.Vector3();
+const _wtCP = new THREE.Vector3();
+const _wtBC = new THREE.Vector3();
+
+function closestPointOnTriangleBarycentric(
+  p: THREE.Vector3,
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  c: THREE.Vector3,
+  outClosest: THREE.Vector3,
+  outBary: THREE.Vector3
+): number {
+  const ab = _wtAB.subVectors(b, a);
+  const ac = _wtAC.subVectors(c, a);
+  const ap = _wtAP.subVectors(p, a);
+  const d1 = ab.dot(ap);
+  const d2 = ac.dot(ap);
+  if (d1 <= 0 && d2 <= 0) {
+    outClosest.copy(a);
+    outBary.set(1, 0, 0);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const bp = _wtBP.subVectors(p, b);
+  const d3 = ab.dot(bp);
+  const d4 = ac.dot(bp);
+  if (d3 >= 0 && d4 <= d3) {
+    outClosest.copy(b);
+    outBary.set(0, 1, 0);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 - d3 > 1e-8 ? d1 / (d1 - d3) : 0;
+    outClosest.copy(a).addScaledVector(ab, v);
+    outBary.set(1 - v, v, 0);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const cp = _wtCP.subVectors(p, c);
+  const d5 = ab.dot(cp);
+  const d6 = ac.dot(cp);
+  if (d6 >= 0 && d5 <= d6) {
+    outClosest.copy(c);
+    outBary.set(0, 0, 1);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 - d6 > 1e-8 ? d2 / (d2 - d6) : 0;
+    outClosest.copy(a).addScaledVector(ac, w);
+    outBary.set(1 - w, 0, w);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const denomBC = d4 - d3 + (d5 - d6);
+    const w = denomBC > 1e-8 ? (d4 - d3) / denomBC : 0;
+    const bc = _wtBC.subVectors(c, b);
+    outClosest.copy(b).addScaledVector(bc, w);
+    outBary.set(0, 1 - w, w);
+    return outClosest.distanceToSquared(p);
+  }
+
+  const denom = 1 / Math.max(1e-8, va + vb + vc);
+  const v = vb * denom;
+  const w = vc * denom;
+  const u = Math.max(0, 1 - v - w);
+  outClosest.copy(a).addScaledVector(ab, v).addScaledVector(ac, w);
+  outBary.set(u, v, w);
+  return outClosest.distanceToSquared(p);
+}
+
+interface BodySpatialGrid {
+  cellSize: number;
+  cells: Map<string, number[]>;
+  triangles: Array<[number, number, number]>;
+}
+
+function getOrBuildBodySpatialGrid(bodyGeo: THREE.BufferGeometry): BodySpatialGrid | null {
+  const existing = (bodyGeo.userData as Record<string, unknown>)?.__zeta_body_spatial_grid__;
+  if (existing) {
+    return existing as BodySpatialGrid;
+  }
+  const pos = bodyGeo.attributes.position;
+  if (!pos || pos.count < 3) return null;
+  const idx = bodyGeo.index;
+  const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(pos.count / 3);
+  if (triCount === 0) return null;
+
+  const cellSize = 0.055;
+  const cells = new Map<string, number[]>();
+  const triangles: Array<[number, number, number]> = new Array(triCount);
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = idx ? idx.getX(t * 3) : t * 3;
+    const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+    triangles[t] = [i0, i1, i2];
+
+    const x0 = pos.getX(i0); const y0 = pos.getY(i0); const z0 = pos.getZ(i0);
+    const x1 = pos.getX(i1); const y1 = pos.getY(i1); const z1 = pos.getZ(i1);
+    const x2 = pos.getX(i2); const y2 = pos.getY(i2); const z2 = pos.getZ(i2);
+
+    const minX = Math.floor(Math.min(x0, x1, x2) / cellSize);
+    const maxX = Math.floor(Math.max(x0, x1, x2) / cellSize);
+    const minY = Math.floor(Math.min(y0, y1, y2) / cellSize);
+    const maxY = Math.floor(Math.max(y0, y1, y2) / cellSize);
+    const minZ = Math.floor(Math.min(z0, z1, z2) / cellSize);
+    const maxZ = Math.floor(Math.max(z0, z1, z2) / cellSize);
+
+    for (let cx = minX; cx <= maxX; cx++) {
+      for (let cy = minY; cy <= maxY; cy++) {
+        for (let cz = minZ; cz <= maxZ; cz++) {
+          const k = `${cx}_${cy}_${cz}`;
+          let list = cells.get(k);
+          if (!list) {
+            list = [];
+            cells.set(k, list);
+          }
+          list.push(t);
+        }
+      }
+    }
+  }
+
+  const grid: BodySpatialGrid = { cellSize, cells, triangles };
+  if (!bodyGeo.userData) bodyGeo.userData = {};
+  bodyGeo.userData.__zeta_body_spatial_grid__ = grid;
+  return grid;
+}
+
+export interface SkinWeightTransferOptions {
+  isOuterwear?: boolean;
+  baseClearance?: number;
+  minClearance?: number;
+  maxClearance?: number;
+}
+
+export function transferSkinWeightsFromBody(
+  garmentGeometry: THREE.BufferGeometry,
+  bodyMesh: THREE.SkinnedMesh,
+  options?: SkinWeightTransferOptions
+): THREE.BufferGeometry {
+  const bodyGeo = bodyMesh.geometry;
+  const bodyPos = bodyGeo.attributes.position;
+  const bodyNorm = bodyGeo.attributes.normal;
+  const bodySkinIdx = bodyGeo.attributes.skinIndex;
+  const bodySkinW = bodyGeo.attributes.skinWeight;
+
+  if (!bodyPos || !bodySkinIdx || !bodySkinW || !bodyMesh.skeleton) {
+    return garmentGeometry;
+  }
+
+  const grid = getOrBuildBodySpatialGrid(bodyGeo);
+  if (!grid) return garmentGeometry;
+
+  const gPos = garmentGeometry.attributes.position;
+  if (!gPos) return garmentGeometry;
+  const vCount = gPos.count;
+
+  if (!garmentGeometry.attributes.normal || garmentGeometry.attributes.normal.count !== vCount) {
+    garmentGeometry.computeVertexNormals();
+  }
+  const gNorm = garmentGeometry.attributes.normal;
+
+  if (!garmentGeometry.attributes.skinIndex || garmentGeometry.attributes.skinIndex.count !== vCount) {
+    garmentGeometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(vCount * 4), 4));
+  }
+  if (!garmentGeometry.attributes.skinWeight || garmentGeometry.attributes.skinWeight.count !== vCount) {
+    garmentGeometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Float32Array(vCount * 4), 4));
+  }
+  const gSkinIdx = garmentGeometry.attributes.skinIndex;
+  const gSkinW = garmentGeometry.attributes.skinWeight;
+
+  const isOuterwear = options?.isOuterwear ?? false;
+  const baseClearance = isOuterwear ? (options?.maxClearance ?? 0.020) : (options?.baseClearance ?? 0.014);
+  const minClearance = options?.minClearance ?? 0.008;
+
+  // Pre-classify bones for edge / boundary taper (neck, hands, feet)
+  const bones = bodyMesh.skeleton.bones;
+  const isBoundaryBone = new Uint8Array(bones.length);
+  for (let b = 0; b < bones.length; b++) {
+    const n = (bones[b]?.name || '').toLowerCase();
+    if (/neck|head/i.test(n)) isBoundaryBone[b] = 1;
+    else if (/hand|wrist|finger|thumb/i.test(n)) isBoundaryBone[b] = 2;
+    else if (/foot|toe|ankle/i.test(n)) isBoundaryBone[b] = 3;
+  }
+
+  const cellSize = grid.cellSize;
+  const cells = grid.cells;
+  const triangles = grid.triangles;
+  const testedTris = new Set<number>();
+  const accumWeights = new Map<number, number>();
+
+  for (let i = 0; i < vCount; i++) {
+    const qx = gPos.getX(i);
+    const qy = gPos.getY(i);
+    const qz = gPos.getZ(i);
+    _wtQuery.set(qx, qy, qz);
+
+    const cx = Math.floor(qx / cellSize);
+    const cy = Math.floor(qy / cellSize);
+    const cz = Math.floor(qz / cellSize);
+
+    let bestDistSq = Infinity;
+    let bestTri = -1;
+    let bestClosestX = qx;
+    let bestClosestY = qy;
+    let bestClosestZ = qz;
+    let bestBaryX = 1;
+    let bestBaryY = 0;
+    let bestBaryZ = 0;
+
+    // Search query cell and expanding neighbor radius
+    for (let r = 1; r <= 3 && bestTri === -1; r++) {
+      testedTris.clear();
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dz = -r; dz <= r; dz++) {
+            const list = cells.get(`${cx + dx}_${cy + dy}_${cz + dz}`);
+            if (!list) continue;
+            for (let k = 0; k < list.length; k++) {
+              const tIdx = list[k];
+              if (testedTris.has(tIdx)) continue;
+              testedTris.add(tIdx);
+
+              const tri = triangles[tIdx];
+              _wtA.fromBufferAttribute(bodyPos, tri[0]);
+              _wtB.fromBufferAttribute(bodyPos, tri[1]);
+              _wtC.fromBufferAttribute(bodyPos, tri[2]);
+
+              const dSq = closestPointOnTriangleBarycentric(_wtQuery, _wtA, _wtB, _wtC, _wtClosest, _wtBary);
+              if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestTri = tIdx;
+                bestClosestX = _wtClosest.x;
+                bestClosestY = _wtClosest.y;
+                bestClosestZ = _wtClosest.z;
+                bestBaryX = _wtBary.x;
+                bestBaryY = _wtBary.y;
+                bestBaryZ = _wtBary.z;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback if geometry vertex is outside grid neighborhood
+    if (bestTri === -1 && triangles.length > 0) {
+      const step = Math.max(1, Math.floor(triangles.length / 80));
+      for (let t = 0; t < triangles.length; t += step) {
+        const tri = triangles[t];
+        _wtA.fromBufferAttribute(bodyPos, tri[0]);
+        _wtB.fromBufferAttribute(bodyPos, tri[1]);
+        _wtC.fromBufferAttribute(bodyPos, tri[2]);
+        const dSq = closestPointOnTriangleBarycentric(_wtQuery, _wtA, _wtB, _wtC, _wtClosest, _wtBary);
+        if (dSq < bestDistSq) {
+          bestDistSq = dSq;
+          bestTri = t;
+          bestClosestX = _wtClosest.x;
+          bestClosestY = _wtClosest.y;
+          bestClosestZ = _wtClosest.z;
+          bestBaryX = _wtBary.x;
+          bestBaryY = _wtBary.y;
+          bestBaryZ = _wtBary.z;
+        }
+      }
+    }
+
+    if (bestTri !== -1) {
+      const tri = triangles[bestTri];
+      const u = bestBaryX;
+      const v = bestBaryY;
+      const w = bestBaryZ;
+
+      // Barycentrically interpolate normal
+      if (bodyNorm) {
+        _wtNA.fromBufferAttribute(bodyNorm, tri[0]);
+        _wtNB.fromBufferAttribute(bodyNorm, tri[1]);
+        _wtNC.fromBufferAttribute(bodyNorm, tri[2]);
+        _wtNorm.set(
+          _wtNA.x * u + _wtNB.x * v + _wtNC.x * w,
+          _wtNA.y * u + _wtNB.y * v + _wtNC.y * w,
+          _wtNA.z * u + _wtNB.z * v + _wtNC.z * w
+        );
+        if (_wtNorm.lengthSq() > 1e-6) {
+          _wtNorm.normalize();
+        } else {
+          _wtNorm.set(0, 1, 0);
+        }
+      } else {
+        _wtNorm.set(0, 1, 0);
+      }
+
+      // Barycentrically interpolate exact skinIndex and skinWeight
+      accumWeights.clear();
+      const vertIdxs = [tri[0], tri[1], tri[2]];
+      const barys = [u, v, w];
+
+      for (let vi = 0; vi < 3; vi++) {
+        const bWeight = barys[vi];
+        if (bWeight <= 1e-5) continue;
+        const vIdx = vertIdxs[vi];
+        for (let c = 0; c < 4; c++) {
+          const sw = bodySkinW.getComponent(vIdx, c);
+          if (sw > 1e-4) {
+            const si = Math.round(bodySkinIdx.getComponent(vIdx, c));
+            accumWeights.set(si, (accumWeights.get(si) || 0) + sw * bWeight);
+          }
+        }
+      }
+
+      // Sort and take top 4 weights
+      const sorted = Array.from(accumWeights.entries()).sort((a, b) => b[1] - a[1]);
+      let totalW = 0;
+      const topCount = Math.min(4, sorted.length);
+      for (let k = 0; k < topCount; k++) totalW += sorted[k][1];
+      const normW = totalW > 1e-5 ? 1 / totalW : 1;
+
+      const idx0 = sorted[0] ? sorted[0][0] : 0;
+      const w0 = sorted[0] ? sorted[0][1] * normW : 1;
+      const idx1 = sorted[1] ? sorted[1][0] : 0;
+      const w1 = sorted[1] ? sorted[1][1] * normW : 0;
+      const idx2 = sorted[2] ? sorted[2][0] : 0;
+      const w2 = sorted[2] ? sorted[2][1] * normW : 0;
+      const idx3 = sorted[3] ? sorted[3][0] : 0;
+      const w3 = sorted[3] ? sorted[3][1] * normW : 0;
+
+      // Clearance curve: smooth taper from +0.014m / +0.020m down to +0.008m at neck/cuffs/ankles
+      let boundaryScore = 0;
+      for (let k = 0; k < topCount; k++) {
+        const bIdx = sorted[k][0];
+        const bWeight = sorted[k][1] * normW;
+        if (isBoundaryBone[bIdx]) {
+          boundaryScore += bWeight;
+        }
+      }
+      const edgeFactor = THREE.MathUtils.clamp(boundaryScore, 0, 1);
+      const clearance = THREE.MathUtils.lerp(baseClearance, minClearance, edgeFactor);
+
+      // Displace outward along interpolated body normal
+      const dispX = bestClosestX + _wtNorm.x * clearance;
+      const dispY = bestClosestY + _wtNorm.y * clearance;
+      const dispZ = bestClosestZ + _wtNorm.z * clearance;
+
+      gPos.setXYZ(i, dispX, dispY, dispZ);
+      gNorm.setXYZ(i, _wtNorm.x, _wtNorm.y, _wtNorm.z);
+      gSkinIdx.setXYZW(i, idx0, idx1, idx2, idx3);
+      gSkinW.setXYZW(i, w0, w1, w2, w3);
+    }
+  }
+
+  gPos.needsUpdate = true;
+  gNorm.needsUpdate = true;
+  gSkinIdx.needsUpdate = true;
+  gSkinW.needsUpdate = true;
+
+  return garmentGeometry;
+}
+
+export function findPrimaryBodyMesh(avatarRoot: THREE.Object3D): THREE.SkinnedMesh | null {
+  let primarySkin: THREE.SkinnedMesh | null = null;
+  let primaryFallback: THREE.SkinnedMesh | null = null;
+  let maxSkinVerts = 0;
+  let maxFallbackVerts = 0;
+
+  avatarRoot.traverse((obj) => {
+    if (obj instanceof THREE.SkinnedMesh && !obj.userData?.[GARMENT_TAG]) {
+      const geo = obj.geometry;
+      if (geo.attributes.position && geo.attributes.skinIndex && geo.attributes.skinWeight && obj.skeleton) {
+        const name = (obj.name || '').toLowerCase();
+        const mats = (Array.isArray(obj.material) ? obj.material : [obj.material])
+          .map((m) => (m?.name || '').toLowerCase())
+          .join(' ');
+        const count = geo.attributes.position.count;
+        const isSkin = /skin|body/i.test(name) || /skin|body/i.test(mats);
+        if (isSkin && count > maxSkinVerts) {
+          primarySkin = obj;
+          maxSkinVerts = count;
+        } else if (count > maxFallbackVerts) {
+          primaryFallback = obj;
+          maxFallbackVerts = count;
+        }
+      }
+    }
+  });
+
+  return primarySkin || primaryFallback;
+}
+
+export function createSkinnedGarmentFromBodyWeights(params: {
+  geometry: THREE.BufferGeometry;
+  bodyMesh: THREE.SkinnedMesh;
+  material: THREE.Material;
+  name: string;
+  isOuterwear?: boolean;
+  baseClearance?: number;
+  renderOrder?: number;
+}): THREE.SkinnedMesh {
+  const { geometry, bodyMesh, material, name, isOuterwear, baseClearance, renderOrder = 2 } = params;
+  transferSkinWeightsFromBody(geometry, bodyMesh, { isOuterwear, baseClearance });
+  const skinned = new THREE.SkinnedMesh(geometry, material);
+  skinned.name = name;
+  skinned.userData[GARMENT_TAG] = true;
+  skinned.frustumCulled = false;
+  skinned.renderOrder = renderOrder;
+  skinned.bind(bodyMesh.skeleton, bodyMesh.bindMatrix);
+  bodyMesh.parent?.add(skinned);
+  return skinned;
+}
+
 /**
  * Clones REAL sculpted triangles directly from the VRM's own `SkinnedMesh` body/torso topology,
  * extrudes them smoothly outward along position-welded vertex normals (`inflate` meters),
@@ -1643,7 +2074,7 @@ function buildBodyClonedSkinnedGarment(params: {
           const effectiveNeckY =
             cz * fwdSign < lm.chest.z * fwdSign ? yNapeLimit : yNeckLimit;
           if (
-            (domR === REGION_TORSO || domR === REGION_PELVIS) &&
+            (domR === REGION_TORSO || domR === REGION_PELVIS || domR === REGION_NECK) &&
             cy >= yTorsoBottom - 0.014 * unitScale &&
             cy <= effectiveNeckY + 0.014 * unitScale
           ) {
@@ -1801,6 +2232,7 @@ function buildBodyClonedSkinnedGarment(params: {
         if (
           domR === REGION_TORSO ||
           domR === REGION_PELVIS ||
+          domR === REGION_NECK ||
           domR === REGION_LEG_L_UP ||
           domR === REGION_LEG_R_UP ||
           domR === REGION_IGNORE
@@ -2243,31 +2675,30 @@ function addLegPants(params: {
     if (!pantsCov.hasPelvisCoverage && metrics.hips) {
       const hipsG = attachGroup(metrics.hips, 'GarmentPantsWaist');
       if (hipsG) {
-        const clr = metrics.garmentClearance * THREE.MathUtils.clamp(looseFactor, 0.95, 1.12);
+        const clr = Math.min(0.0035, metrics.garmentClearance);
         const hipR = metrics.hipsHalfW + clr;
-        const waistR = metrics.spineHalfW + clr * 0.92;
+        const waistR = metrics.spineHalfW + clr * 0.90;
         const zRatio = THREE.MathUtils.clamp(
           (metrics.hipsHalfD + clr) / Math.max(0.06, hipR),
-          0.74,
-          0.98
+          0.72,
+          0.88
         );
         const waistTopY = Math.max(0.065, metrics.ySpineFromHips * 0.92);
         const pelvisGeo = createContouredTorsoLathe({
           profile: [
-            [hipR * 0.62, -0.090],
-            [hipR * 0.94, -0.055],
-            [hipR * 1.01, -0.010],
-            [THREE.MathUtils.lerp(hipR, waistR, 0.45), waistTopY * 0.5],
+            [hipR * 0.88, -0.040],
+            [hipR * 0.98, -0.010],
+            [THREE.MathUtils.lerp(hipR, waistR, 0.52), waistTopY * 0.5],
             [waistR, waistTopY],
           ],
           scaleX: 1.0,
           scaleZ: zRatio,
           bustBoost: 0,
-          frontBellyBoost: 0.003,
-          rearGluteY: -0.02,
-          rearGluteBoost: 0.008,
+          frontBellyBoost: 0,
+          rearGluteY: -0.01,
+          rearGluteBoost: 0.001,
           fwdSign,
-          segments: 28,
+          segments: 24,
         });
         hipsG.add(new THREE.Mesh(pelvisGeo, mat));
       }
@@ -2921,6 +3352,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     });
     const {
       chestGroup,
+      spineGroup,
       hipsGroup,
       topNeckY,
       waistYInChest,
@@ -2946,23 +3378,33 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'cap', looseFactor: 0.96 });
     }
 
-    if (chestGroup) {
-      // Flush contoured waist ribbon hugging measured spine radius (+0.004m)
-      const belt = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.008, 10, 28), accMat);
-      belt.rotation.x = Math.PI / 2;
-      belt.scale.set(waistSurfaceHalfW + 0.004, waistSurfaceHalfD + 0.004, 1);
-      belt.position.set(0, waistYInChest, 0);
-      const bow = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 10), accMat);
-      bow.scale.set(1.6, 0.75, 0.45);
-      bow.position.set(0, waistYInChest, (waistSurfaceFrontZ + 0.004) * fwdSign);
-      chestGroup.add(belt, bow);
+    const targetWaist = spineGroup || chestGroup;
+    if (targetWaist) {
+      // Flush contoured waist ribbon hugging measured spine radius (+0.002m)
+      const belt = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          waistSurfaceHalfW + 0.002,
+          waistSurfaceHalfW + 0.002,
+          0.016,
+          24,
+          1,
+          true
+        ),
+        accMat
+      );
+      belt.scale.set(1, 1, Math.min(0.92, (waistSurfaceHalfD + 0.002) / Math.max(0.06, waistSurfaceHalfW + 0.002)));
+      belt.position.set(0, spineGroup ? 0 : waistYInChest, 0);
+      const bow = new THREE.Mesh(new THREE.SphereGeometry(0.014, 12, 10), accMat);
+      bow.scale.set(1.4, 0.7, 0.4);
+      bow.position.set(0, spineGroup ? 0 : waistYInChest, (waistSurfaceFrontZ + 0.002) * fwdSign);
+      targetWaist.add(belt, bow);
+    }
 
-      if (!usedSkinnedTorso) {
-        for (const sx of [-metrics.upperChestHalfW * 0.65, metrics.upperChestHalfW * 0.65]) {
-          const strap = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.082, metrics.upperChestHalfD * 1.45), topAccentMat);
-          strap.position.set(sx, topNeckY + 0.030, 0);
-          chestGroup.add(strap);
-        }
+    if (chestGroup && !usedSkinnedTorso) {
+      for (const sx of [-metrics.upperChestHalfW * 0.65, metrics.upperChestHalfW * 0.65]) {
+        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.082, metrics.upperChestHalfD * 1.45), topAccentMat);
+        strap.position.set(sx, topNeckY + 0.030, 0);
+        chestGroup.add(strap);
       }
     }
     if (hipsGroup) {
@@ -3013,6 +3455,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     });
     const {
       chestGroup,
+      spineGroup,
       hipsGroup,
       topNeckY,
       waistYInChest,
@@ -3020,6 +3463,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       waistSurfaceHalfW,
       waistSurfaceHalfD,
       waistSurfaceFrontZ,
+      usedSkinnedTorso,
     } = addSculptedTorso({
       vrm,
       avatarRoot,
@@ -3068,19 +3512,31 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
         chestGroup.add(zip);
       }
 
-      const collar = new THREE.Mesh(new THREE.TorusGeometry(metrics.upperChestHalfW * 0.72, 0.010, 10, 24), topAccentMat);
-      collar.rotation.x = Math.PI / 2;
-      collar.position.set(0, topNeckY, -0.004 * fwdSign);
-      chestGroup.add(collar);
+      if (!usedSkinnedTorso) {
+        const collar = new THREE.Mesh(
+          new THREE.CylinderGeometry(metrics.upperChestHalfW * 0.70, metrics.upperChestHalfW * 0.70, 0.012, 24, 1, true),
+          topAccentMat
+        );
+        collar.position.set(0, topNeckY, -0.002 * fwdSign);
+        chestGroup.add(collar);
+      }
     }
-    if (hipsGroup) {
-      const belt = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.008, 10, 28), accMat);
-      belt.rotation.x = Math.PI / 2;
-      belt.scale.set(waistSurfaceHalfW + 0.004, waistSurfaceHalfD + 0.004, 1);
-      belt.position.set(0, skirtWaistTopY * 0.75, 0);
-      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.024, 0.007), goldMat);
-      buckle.position.set(0, skirtWaistTopY * 0.75, (waistSurfaceFrontZ + 0.004) * fwdSign);
-      hipsGroup.add(belt, buckle);
+    const targetWaist = spineGroup || hipsGroup;
+    if (targetWaist) {
+      const beltGeo = new THREE.CylinderGeometry(
+        waistSurfaceHalfW + 0.002,
+        waistSurfaceHalfW + 0.002,
+        0.018,
+        24,
+        1,
+        true
+      );
+      beltGeo.scale(1, 1, Math.min(0.92, (waistSurfaceHalfD + 0.002) / Math.max(0.06, waistSurfaceHalfW + 0.002)));
+      const belt = new THREE.Mesh(beltGeo, accMat);
+      belt.position.set(0, spineGroup ? 0 : skirtWaistTopY * 0.75, 0);
+      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.020, 0.004), goldMat);
+      buckle.position.set(0, spineGroup ? 0 : skirtWaistTopY * 0.75, (waistSurfaceFrontZ + 0.002) * fwdSign);
+      targetWaist.add(belt, buckle);
     }
   } else if (garmentStyle === 'sporty_tee_leggings') {
     addExposedSkinUnderlay({
@@ -3101,7 +3557,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       looseFactor: 0.98,
       fwdSign,
     });
-    const { chestGroup, hipsGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
+    const { chestGroup, topNeckY, usedSkinnedTorso } = addSculptedTorso({
       vrm,
       avatarRoot,
       metrics,
@@ -3122,17 +3578,12 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     }
 
     if (chestGroup && !usedSkinnedTorso) {
-      const collar = new THREE.Mesh(new THREE.TorusGeometry(metrics.upperChestHalfW * 0.68, 0.007, 10, 24), topAccentMat);
-      collar.rotation.x = Math.PI / 2;
+      const collar = new THREE.Mesh(
+        new THREE.CylinderGeometry(metrics.upperChestHalfW * 0.68, metrics.upperChestHalfW * 0.68, 0.010, 24, 1, true),
+        topAccentMat
+      );
       collar.position.set(0, topNeckY + 0.002, 0);
       chestGroup.add(collar);
-    }
-    if (hipsGroup && !usedSkinnedLeggings) {
-      const band = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.009, 10, 28), bottomAccentMat);
-      band.rotation.x = Math.PI / 2;
-      band.scale.set(metrics.spineHalfW + 0.016, metrics.spineHalfD + 0.016, 1);
-      band.position.set(0, skirtWaistTopY * 0.75, 0);
-      hipsGroup.add(band);
     }
   } else if (garmentStyle === 'kimono_yukata') {
     const {
@@ -3400,6 +3851,7 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
     });
     const {
       chestGroup,
+      spineGroup,
       hipsGroup,
       topNeckY,
       waistYInChest,
@@ -3413,40 +3865,53 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       metrics,
       topMat,
       hipsMat: topMat,
-      scaleX: 1.04,
-      scaleZ: 1.04,
-      necklineHeightFrac: 0.87,
-      bustBoost: 0.015,
+      scaleX: 1.02,
+      scaleZ: 0.90,
+      necklineHeightFrac: 0.88,
+      bustBoost: 0.012,
       fwdSign,
       skinnedZone: 'torso_long_sleeve',
-      skinnedInflate: 0.017,
+      skinnedInflate: 0.0055,
       pelvisCoveredByPants: usedSkinnedPants,
       closedOuterwear: true,
+      preferSkinnedBody: true,
     });
     // Bone-aligned slim tapered trench coat sleeves (zero jagged baggy saw-tooth shoulder/forearm clipping!)
-    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.06 });
+    addArmSleeves({ vrm, mat: topMat, cuffMat: topAccentMat, mode: 'full', looseFactor: 1.04 });
 
     if (chestGroup) {
-      // Flush lapels, double-breasted buttons & contoured waist belt constrained tightly to +4mm above garment surface!
-      const trimZ = chestSurfaceFrontZ + 0.004;
+      // Flush contoured lapels & double-breasted buttons constrained tightly to +1.5mm above garment surface
+      const trimZ = chestSurfaceFrontZ + 0.0015;
       for (const side of [-1, 1]) {
-        const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.135, 0.006), topAccentMat);
-        lapel.position.set(side * 0.036, topNeckY - 0.056, trimZ * fwdSign);
-        lapel.rotation.z = side * 0.24;
+        const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.115, 0.003), topAccentMat);
+        lapel.position.set(side * 0.030, topNeckY - 0.052, trimZ * fwdSign);
+        lapel.rotation.z = side * 0.20;
+        lapel.rotation.y = side * -0.10 * fwdSign;
         chestGroup.add(lapel);
         for (let b = 0; b < 3; b++) {
-          const btn = new THREE.Mesh(new THREE.SphereGeometry(0.0052, 10, 10), goldMat);
-          btn.position.set(side * 0.028, topNeckY - 0.072 - b * 0.044, (trimZ + 0.002) * fwdSign);
+          const btn = new THREE.Mesh(new THREE.SphereGeometry(0.0048, 10, 10), goldMat);
+          btn.position.set(side * 0.026, topNeckY - 0.068 - b * 0.040, (trimZ + 0.0015) * fwdSign);
           chestGroup.add(btn);
         }
       }
-      const belt = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.0085, 10, 28), accMat);
-      belt.rotation.x = Math.PI / 2;
-      belt.scale.set(waistSurfaceHalfW + 0.004, waistSurfaceHalfD + 0.004, 1);
-      belt.position.set(0, waistYInChest, 0);
-      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.024, 0.007), goldMat);
-      buckle.position.set(0, waistYInChest, (waistSurfaceFrontZ + 0.004) * fwdSign);
-      chestGroup.add(belt, buckle);
+    }
+    const targetWaist = spineGroup || chestGroup;
+    if (targetWaist) {
+      // Flush contoured trench coat belt constrained tightly to waist surface (ZERO floating gap!)
+      const beltGeo = new THREE.CylinderGeometry(
+        waistSurfaceHalfW + 0.002,
+        waistSurfaceHalfW + 0.002,
+        0.024,
+        24,
+        1,
+        true
+      );
+      beltGeo.scale(1, 1, Math.min(0.92, (waistSurfaceHalfD + 0.002) / Math.max(0.06, waistSurfaceHalfW + 0.002)));
+      const beltMesh = new THREE.Mesh(beltGeo, accMat);
+      beltMesh.position.set(0, spineGroup ? 0 : waistYInChest, 0);
+      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.022, 0.004), goldMat);
+      buckle.position.set(0, spineGroup ? 0 : waistYInChest, (waistSurfaceFrontZ + 0.0025) * fwdSign);
+      targetWaist.add(beltMesh, buckle);
     }
     if (hipsGroup) {
       // Raised trench coat tail overlapping waist smoothly + forward pitch drape during seated/leaning poses!
@@ -3590,6 +4055,8 @@ export interface GarmentFrameUpdateOptions {
   seatSurfaceWorldY?: number;
   /** Current positive forward torso lean pitch in radians (from AvatarPoseController) */
   torsoForwardLeanRad?: number;
+  /** Current forward thigh pitch in radians (left/right/max from AvatarPoseController) */
+  thighPitch?: { left: number; right: number; max: number };
 }
 
 const _lArmStart = new THREE.Vector3();
@@ -3600,6 +4067,14 @@ const _lSegA = new THREE.Vector3();
 const _lSegB = new THREE.Vector3();
 const _rSegA = new THREE.Vector3();
 const _rSegB = new THREE.Vector3();
+const _lThighStart = new THREE.Vector3();
+const _lThighEnd = new THREE.Vector3();
+const _rThighStart = new THREE.Vector3();
+const _rThighEnd = new THREE.Vector3();
+const _lThighSegA = new THREE.Vector3();
+const _lThighSegB = new THREE.Vector3();
+const _rThighSegA = new THREE.Vector3();
+const _rThighSegB = new THREE.Vector3();
 const _tmpInvMat = new THREE.Matrix4();
 const _tmpVert = new THREE.Vector3();
 const _tmpClosest = new THREE.Vector3();
@@ -3650,6 +4125,27 @@ export function updateProceduralGarmentSway(
       ru.getWorldPosition(_rArmStart);
       rl.getWorldPosition(_rArmEnd);
       hasArmSegments = true;
+    }
+  }
+
+  // Pre-fetch thigh world segments for thigh-collider deflection (zero per-frame heap allocations!)
+  let hasThighSegments = false;
+  let thighRadius = 0.075;
+  if (vrm?.humanoid) {
+    const luLeg = vrm.humanoid.getRawBoneNode('leftUpperLeg');
+    const llLeg = vrm.humanoid.getRawBoneNode('leftLowerLeg');
+    const ruLeg = vrm.humanoid.getRawBoneNode('rightUpperLeg');
+    const rlLeg = vrm.humanoid.getRawBoneNode('rightLowerLeg');
+    if (luLeg && llLeg && ruLeg && rlLeg) {
+      luLeg.getWorldPosition(_lThighStart);
+      llLeg.getWorldPosition(_lThighEnd);
+      ruLeg.getWorldPosition(_rThighStart);
+      rlLeg.getWorldPosition(_rThighEnd);
+      hasThighSegments = true;
+      const legLen = _lThighStart.distanceTo(_lThighEnd);
+      if (legLen > 0.15 && legLen < 0.8) {
+        thighRadius = THREE.MathUtils.clamp(legLen * 0.22, 0.055, 0.095);
+      }
     }
   }
 
@@ -3727,6 +4223,16 @@ export function updateProceduralGarmentSway(
       _tmpInvMat.copy(obj.matrixWorld).invert();
       const seatFloorY = seatSurfaceWorldY + 0.014;
 
+      if (hasThighSegments) {
+        _lThighSegA.copy(_lThighStart).applyMatrix4(_tmpInvMat);
+        _lThighSegB.copy(_lThighEnd).applyMatrix4(_tmpInvMat);
+        _rThighSegA.copy(_rThighStart).applyMatrix4(_tmpInvMat);
+        _rThighSegB.copy(_rThighEnd).applyMatrix4(_tmpInvMat);
+      }
+
+      const thighForwardPitch = options?.thighPitch?.max ?? 0;
+      const effectiveThighPitch = Math.max(s, Math.min(1.0, thighForwardPitch * 0.85));
+
       for (let i = 0; i < pos.count; i++) {
         const rx = rest[i * 3];
         const ry = rest[i * 3 + 1];
@@ -3744,13 +4250,36 @@ export function updateProceduralGarmentSway(
         let ny = ry;
         let nz = rz;
 
-        // Front & lateral hem flares gracefully forward and slightly outward over seated thighs/lap!
-        const lapForward = Math.min(0.24, h * 0.42) * t * frontWeight * s;
-        const lapLift = Math.min(0.16, h * 0.28) * tCurve * frontWeight * s;
-        const sideFlare = (0.045 * sideWeight + 0.025 * frontWeight) * t * s;
+        // Front & lateral hem flares gracefully forward and slightly outward over seated/walking thighs!
+        const lapForward = Math.min(0.24, h * 0.42) * t * frontWeight * effectiveThighPitch;
+        const lapLift = Math.min(0.16, h * 0.28) * tCurve * frontWeight * effectiveThighPitch;
+        const sideFlare = (0.045 * sideWeight + 0.025 * frontWeight) * t * effectiveThighPitch;
         nx += Math.sign(rx || 1) * sideFlare;
         ny += lapLift;
         nz += fwd * lapForward;
+
+        // Thigh-collider deflection: push skirt / gown / coat tail vertices outward past left & right upperLeg capsules
+        if (hasThighSegments && t > 0.06) {
+          _tmpVert.set(nx, ny, nz);
+          // Left thigh deflection
+          closestPointOnSegment(_tmpVert, _lThighSegA, _lThighSegB, _tmpClosest);
+          _tmpDiff.subVectors(_tmpVert, _tmpClosest);
+          let distL = _tmpDiff.length();
+          const clearThigh = thighRadius + 0.014;
+          if (distL < clearThigh && distL > 1e-5) {
+            _tmpVert.addScaledVector(_tmpDiff, ((clearThigh - distL) * 1.10) / distL);
+          }
+          // Right thigh deflection
+          closestPointOnSegment(_tmpVert, _rThighSegA, _rThighSegB, _tmpClosest);
+          _tmpDiff.subVectors(_tmpVert, _tmpClosest);
+          let distR = _tmpDiff.length();
+          if (distR < clearThigh && distR > 1e-5) {
+            _tmpVert.addScaledVector(_tmpDiff, ((clearThigh - distR) * 1.10) / distR);
+          }
+          nx = _tmpVert.x;
+          ny = _tmpVert.y;
+          nz = _tmpVert.z;
+        }
 
         // Posterior skirt pulls softly forward out of the chair backrest & cushions cleanly onto the seat!
         const backPullForward = Math.min(0.12, h * 0.22) * t * backWeight * s;

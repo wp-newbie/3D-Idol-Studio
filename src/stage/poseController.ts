@@ -204,6 +204,20 @@ export class AvatarPoseController {
     return THREE.MathUtils.clamp(spineFwd + chestFwd * 0.5, 0, 0.55);
   }
 
+  /**
+   * Returns current thigh forward pitch radians from `leftUpperLeg` and `rightUpperLeg`
+   * so skirts and coat tails can deflect forward/outward in walking, dining, and seated poses.
+   */
+  public getThighPitchRad(vrm: VRM | null): { left: number; right: number; max: number } {
+    if (!vrm?.humanoid) return { left: 0, right: 0, max: 0 };
+    const { legForwardSign } = getVrmBoneSigns(vrm);
+    const lThigh = vrm.humanoid.getNormalizedBoneNode('leftUpperLeg');
+    const rThigh = vrm.humanoid.getNormalizedBoneNode('rightUpperLeg');
+    const lPitch = lThigh ? lThigh.rotation.x * legForwardSign : 0;
+    const rPitch = rThigh ? rThigh.rotation.x * legForwardSign : 0;
+    return { left: lPitch, right: rPitch, max: Math.max(0, lPitch, rPitch) };
+  }
+
   public restoreStandingHips(vrm: VRM, dt: number): void {
     if (!this.hasBoundVrm) return;
     const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
