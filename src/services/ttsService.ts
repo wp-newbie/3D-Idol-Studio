@@ -357,7 +357,10 @@ class StudioVoiceEngine {
     };
 
     const apiKey = sanitizeApiKey(resolveEffectiveApiKey(params.settings));
-    const preferLocal = Boolean(params.settings.preferLocalAi) || apiKey.toLowerCase() === 'local';
+    const preferLocal =
+      Boolean(params.settings.preferLocalAi) ||
+      params.settings.enableGeminiCloud === false ||
+      apiKey.toLowerCase() === 'local';
 
     // 1. If Local AI is prioritized, use offline VOICEVOX immediately
     if (preferLocal) {

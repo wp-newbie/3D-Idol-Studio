@@ -102,6 +102,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen, settings.apiKey, settings.useBuiltInKey]);
 
   const handleRefreshLiveModels = async () => {
+    if (settings.enableGeminiCloud === false) return;
     const key = settings.useBuiltInKey
       ? getBuiltInDefaultApiKey()
       : sanitizeApiKey(draftKey || settings.apiKey);
@@ -174,7 +175,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Scrollable Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* Real API Error Alert */}
-          {lastApiError && (
+          {lastApiError && settings.enableGeminiCloud !== false && (
             <div className="flex items-start gap-2.5 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
               <div className="space-y-1">
@@ -197,7 +198,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
               <span
                 className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
-                  settings.preferLocalAi
+                  settings.enableGeminiCloud === false
+                    ? 'border-zinc-500/40 bg-zinc-600/20 text-zinc-300'
+                    : settings.preferLocalAi
                     ? 'border-purple-400/40 bg-purple-500/15 text-purple-200'
                     : connectionMode === 'live'
                     ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200'
@@ -206,7 +209,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : 'border-amber-400/35 bg-amber-500/15 text-amber-200'
                 }`}
               >
-                {settings.preferLocalAi
+                {settings.enableGeminiCloud === false
+                  ? '● Gemini Cloud Disabled (Offline)'
+                  : settings.preferLocalAi
                   ? '● Local Offline AI Active'
                   : connectionMode === 'live'
                   ? '● Live Gemini Connected'
@@ -217,6 +222,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4 space-y-3">
+              {/* Toggle: Enable / Disable Gemini API Cloud */}
+              <div className={`flex items-center justify-between rounded-xl border p-3.5 transition-all ${
+                settings.enableGeminiCloud !== false
+                  ? 'border-sky-500/35 bg-sky-950/20'
+                  : 'border-zinc-600/35 bg-zinc-900/30'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg font-bold text-sm ${
+                    settings.enableGeminiCloud !== false
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'bg-zinc-700/40 text-zinc-400'
+                  }`}>
+                    ☁️
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 font-semibold text-sky-100 text-[12px]">
+                      <span>Gemini API Cloud</span>
+                      <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-mono ${
+                        settings.enableGeminiCloud !== false
+                          ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-300'
+                          : 'border-zinc-500/40 bg-zinc-600/20 text-zinc-400'
+                      }`}>
+                        {settings.enableGeminiCloud !== false ? 'Cloud Online' : 'Cloud Disabled'}
+                      </span>
+                    </div>
+                    <div className="text-[10.5px] text-zinc-300/80 leading-snug">
+                      {settings.enableGeminiCloud !== false
+                        ? 'Connects to Google Gemini API (gemini-flash / gemini-pro / Gemini TTS). Toggle off to block all cloud calls.'
+                        : 'All Google Gemini Cloud API calls are blocked. Idol companion operates 100% locally with LM Studio and offline audio.'}
+                    </div>
+                  </div>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    checked={settings.enableGeminiCloud !== false}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      onUpdateSettings({ enableGeminiCloud: enabled });
+                      if (!enabled && onValidateApiKey) {
+                        void onValidateApiKey('local');
+                      }
+                    }}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-zinc-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-sky-500 peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+
               {/* Prioritize Local Offline AI Toggle */}
               <div className="flex items-center justify-between rounded-xl border border-purple-500/35 bg-purple-950/25 p-3.5">
                 <div className="flex items-center gap-2.5">
@@ -312,7 +366,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
               </div>
 
-              {settings.useBuiltInKey && builtInAvailable ? (
+              {settings.enableGeminiCloud === false ? (
+                <div className="flex items-center justify-between rounded-xl border border-zinc-700/50 bg-zinc-900/40 p-3.5 text-xs text-zinc-300">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-base">🛡️</span>
+                    <div>
+                      <div className="font-semibold text-zinc-200">Gemini Cloud API is Switched OFF</div>
+                      <div className="text-[10.5px] text-zinc-400">
+                        No cloud API key required. Requests stay local on your PC (LM Studio :1234 &amp; VOICEVOX :50021).
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ enableGeminiCloud: true })}
+                    className="rounded-lg border border-sky-400/40 bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/30 shrink-0"
+                  >
+                    Enable Cloud
+                  </button>
+                </div>
+              ) : settings.useBuiltInKey && builtInAvailable ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-400/35 bg-emerald-950/30 px-3.5 py-2.5">
                   <div className="flex items-center gap-2 text-xs text-emerald-100">
                     <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />

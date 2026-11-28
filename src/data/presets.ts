@@ -235,6 +235,8 @@ export function getAffinityTier(score: number): AffinityTierInfo {
 export const DEFAULT_SETTINGS: StudioSettings = {
   apiKey: typeof __ENV_GEMINI_API_KEY__ !== 'undefined' ? __ENV_GEMINI_API_KEY__ : '',
   useBuiltInKey: false,
+  enableGeminiCloud: true,
+  preferLocalAi: false,
   keyMode: 'auto',
   textModel: 'gemini-flash-latest',
   ttsModel: 'gemini-2.5-flash-preview-tts',

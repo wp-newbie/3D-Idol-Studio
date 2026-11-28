@@ -1486,6 +1486,7 @@ async function generatePersonaReplyOnce(params: {
     apiKey.toLowerCase() === 'ollama';
 
   const shouldTryLocal =
+    settings.enableGeminiCloud === false ||
     Boolean(settings.preferLocalAi) ||
     isLocalKey ||
     (!apiKey && (await isLocalLmStudioAvailable()));
@@ -1518,8 +1519,8 @@ async function generatePersonaReplyOnce(params: {
     }
   }
 
-  // Offline multi-response demo mode ONLY when no API key is configured
-  if (!apiKey) {
+  // Offline multi-response demo mode ONLY when no API key is configured or Gemini Cloud is disabled
+  if (!apiKey || settings.enableGeminiCloud === false) {
     const toolEvents = maybeRunOfflineDemoAutonomousTool(persona, userPrompt, toolExecutor);
     const effectivePrompt =
       hiddenSystemNotes.length > 0

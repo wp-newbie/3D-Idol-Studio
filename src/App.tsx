@@ -372,8 +372,9 @@ export const App: React.FC = () => {
       setVaultAccessories(accessories);
       setHasAiStudioBridge(resolvedKey.hasAiStudioBridge);
 
+      const isCloudDisabled = nextState.settings.enableGeminiCloud === false;
       const effectiveKey = resolveEffectiveApiKey(nextState.settings);
-      if (effectiveKey) {
+      if (effectiveKey && !isCloudDisabled) {
         setConnectionMode('live');
         setProviderStatus(
           usingBuiltIn
@@ -381,8 +382,12 @@ export const App: React.FC = () => {
             : `Live Gemini (${nextState.settings.textModel}) · key via ${resolvedKey.source}`
         );
       } else {
-        setConnectionMode('demo');
-        setProviderStatus('Demo Mode (multi-response offline pool — add key for Live Gemini)');
+        setConnectionMode(nextState.settings.preferLocalAi ? 'live' : 'demo');
+        setProviderStatus(
+          isCloudDisabled
+            ? 'Cloud Gemini Disabled · Local AI / Offline Active'
+            : 'Demo Mode (multi-response offline pool — add key for Live Gemini)'
+        );
       }
 
       if (!isStudioSetupComplete()) {
@@ -707,6 +712,12 @@ export const App: React.FC = () => {
       setProviderStatus(
         `Live Gemini (${patch.textModel || studioRef.current.settings.textModel}) · built-in default key`
       );
+    }
+    if (patch.enableGeminiCloud === false) {
+      hasAutoPromptedAuthRef.current = false;
+      setApiErrorToast(null);
+      setValidationMessage('Gemini Cloud API is disabled. Operating 100% offline with LM Studio.');
+      setProviderStatus('Cloud Gemini Disabled · Local AI / Offline Active');
     }
     if (patch.preferLocalAi === true) {
       hasAutoPromptedAuthRef.current = false;
@@ -4849,7 +4860,7 @@ export const App: React.FC = () => {
         }`}
     >
       {/* Real API Error Toast Banner */}
-      {apiErrorToast && !studio.settings.preferLocalAi && (
+      {apiErrorToast && !studio.settings.preferLocalAi && studio.settings.enableGeminiCloud !== false && (
         <div
           role="alert"
           className="fixed left-1/2 top-16 z-[60] flex max-w-2xl -translate-x-1/2 items-center gap-3 rounded-2xl border border-rose-500/50 bg-[#1a0b12]/95 px-4 py-2.5 text-xs text-rose-100 shadow-glass backdrop-blur-xl"

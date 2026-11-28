@@ -48,7 +48,11 @@ export function hasBuiltInDefaultApiKey(): boolean {
 export function resolveEffectiveApiKey(settings: {
   apiKey?: string;
   useBuiltInKey?: boolean;
+  enableGeminiCloud?: boolean;
 }): string {
+  if (settings.enableGeminiCloud === false) {
+    return '';
+  }
   if (settings.useBuiltInKey) {
     return getBuiltInDefaultApiKey();
   }

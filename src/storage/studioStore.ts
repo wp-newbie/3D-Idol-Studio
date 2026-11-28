@@ -212,6 +212,10 @@ export async function loadStudioState(): Promise<{
     ...DEFAULT_SETTINGS,
     ...chosen.settings,
     apiKey: chosen.settings?.apiKey || envKey,
+    enableGeminiCloud:
+      chosen.settings?.enableGeminiCloud !== undefined
+        ? chosen.settings.enableGeminiCloud
+        : true,
     textModel: migratedTextModel,
     ttsModel: migratedTtsModel,
   };

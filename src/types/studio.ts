@@ -546,6 +546,8 @@ export interface StudioSettings {
   apiKey: string;
   useBuiltInKey?: boolean;
   preferLocalAi?: boolean;
+  /** Toggle to enable or completely disable Google Gemini API Cloud (bypasses all cloud calls, billing, and cloud quota) */
+  enableGeminiCloud?: boolean;
   keyMode: KeyMode;
   textModel: string;
   ttsModel: string;
