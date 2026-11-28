@@ -2095,7 +2095,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           const wantsProceduralGarment = Boolean(
             activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
           );
-          const preserveForPreCulled = Boolean(wantsProceduralGarment && loadedCulling?.isPreCulled);
+          const isCulledModel = Boolean(
+            !loadedCulling ||
+            loadedCulling.isPreCulled ||
+            loadedCulling.hasCulledTorso ||
+            loadedCulling.hasCulledArms
+          );
+          const preserveForPreCulled = Boolean(wantsProceduralGarment && isCulledModel);
 
           applyOutfitModsToScene({
             root: modelRoot,
@@ -2455,7 +2461,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     const wantsProceduralGarment = Boolean(
       activeSlot.garmentStyle && activeSlot.garmentStyle !== 'default'
     );
-    const preserveForPreCulled = Boolean(wantsProceduralGarment && culling?.isPreCulled);
+    const isCulledModel = Boolean(
+      !culling ||
+      culling.isPreCulled ||
+      culling.hasCulledTorso ||
+      culling.hasCulledArms
+    );
+    const preserveForPreCulled = Boolean(wantsProceduralGarment && isCulledModel);
 
     applyOutfitModsToScene({
       root: avatarRoot,

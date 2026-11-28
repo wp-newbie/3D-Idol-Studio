@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { ClothingCategory, MaterialMod, MeshDescriptor } from '../types/studio';
 import { getTextureFromVault } from '../storage/modelVault';
+import { canSafelyHideNativeWardrobe } from './outfitIntegrityChecker';
 
 export const CLOTHING_CATEGORY_ORDER: ClothingCategory[] = [
   'Tops',
@@ -444,10 +445,14 @@ export function detectClothingMeshes(
 
 export function isBodySkinMaterial(matName: string): boolean {
   if (!matName) return false;
-  if (/_FACE\b|_HAIR\b|_CLOTH\b|_EYE\b|face|mouth|eye|brow|lash/i.test(matName)) {
+  if (
+    /_FACE\b|_HAIR\b|_CLOTH\b|_EYE\b|face|mouth|eye|brow|lash|hair|twintail|ponytail|bangs|cloth|top|shirt|bottom|pant|skirt|shoe|boot|sock|tie|ribbon|accessory/i.test(
+      matName
+    )
+  ) {
     return false;
   }
-  return /body.*skin|skin.*body|body_\d+_skin|^skin$|_skin\b|^body$/i.test(matName);
+  return /(?:^|[_\-\s.])(?:skin|body)(?:[_\-\s.\d()]|$)|_(?:skin|body)\b/i.test(matName);
 }
 
 const cyclingShortsTextureCache = new Map<string, THREE.CanvasTexture>();
@@ -750,6 +755,16 @@ export function applyOutfitModsToScene(params: {
   } = params;
   const loader = new THREE.TextureLoader();
 
+  const isCulledOrUnreplaced = Boolean(
+    cullingReport?.isPreCulled ||
+    cullingReport?.hasCulledTorso ||
+    cullingReport?.hasCulledArms ||
+    cullingReport?.hasCulledThighs ||
+    preserveNativeClothingForPreCulled ||
+    !cullingReport ||
+    !canSafelyHideNativeWardrobe(root, cullingReport)
+  );
+
   const applyTextureUrl = (
     cacheKey: string,
     dataUrl: string,
@@ -804,7 +819,7 @@ export function applyOutfitModsToScene(params: {
     // tops, bottoms, footwear, underwear, and accessories so zero native meshes peek through.
     // (NEVER hide a merged Body mesh containing skin, nor hide native clothing on pre-culled VRMs!)
     const origVisible = snapshotOriginalVisible(obj);
-    if (preserveNativeClothingForPreCulled) {
+    if (preserveNativeClothingForPreCulled || isCulledOrUnreplaced) {
       obj.visible = origVisible;
     } else if (hideNativeGarment && !isProtectedBodyOrHairMesh) {
       obj.visible = false;
@@ -854,22 +869,22 @@ export function applyOutfitModsToScene(params: {
         needsUpdate: boolean;
       };
 
-      if (hideNativeGarment && !preserveNativeClothingForPreCulled && isNativeOutfitSlot) {
+      if (hideNativeGarment && !isCulledOrUnreplaced && !preserveNativeClothingForPreCulled && isNativeOutfitSlot) {
         mat.visible = false;
         anyMat.transparent = true;
         anyMat.opacity = 0;
         anyMat.depthWrite = false;
         continue;
-      } else if (!mat.visible) {
+      } else if (!mat.visible || (isCulledOrUnreplaced && isNativeOutfitSlot)) {
         mat.visible = true;
         anyMat.transparent = false;
         anyMat.opacity = 1;
         anyMat.depthWrite = true;
       }
 
-      // On pre-culled legacy VRMs, fall back to clean material/texture recoloring over native clothing!
+      // On pre-culled legacy VRMs or unreplaced wardrobe, fall back to clean material/texture recoloring over native clothing!
       let effectiveMod: MaterialMod | undefined = mod;
-      if (preserveNativeClothingForPreCulled && !isProtectedCoreOrHair && fallbackRecolorPalette) {
+      if ((preserveNativeClothingForPreCulled || isCulledOrUnreplaced) && !isProtectedCoreOrHair && fallbackRecolorPalette) {
         if (matCategory === 'Tops' && (fallbackRecolorPalette.topTextureDataUrl || fallbackRecolorPalette.topHex)) {
           effectiveMod = fallbackRecolorPalette.topTextureDataUrl
             ? { textureDataUrl: fallbackRecolorPalette.topTextureDataUrl }
@@ -895,6 +910,7 @@ export function applyOutfitModsToScene(params: {
         if (isSkinMat) {
           const canAlphaMask =
             hideNativeGarment &&
+            !isCulledOrUnreplaced &&
             !preserveNativeClothingForPreCulled &&
             (!cullingReport || !cullingReport.isPreCulled) &&
             hasValidBodyUVs(obj);

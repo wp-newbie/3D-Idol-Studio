@@ -215,6 +215,7 @@ function attachGroup(parent: THREE.Object3D | null, name: string): THREE.Group |
   const g = new THREE.Group();
   g.name = name;
   g.userData[GARMENT_TAG] = true;
+  g.frustumCulled = false;
   parent.add(g);
   return g;
 }
@@ -448,7 +449,7 @@ function measureTorsoMetrics(vrm: VRM, avatarRoot: THREE.Object3D, fwdSign: numb
     for (const grp of groups) {
       const m = mats[grp.materialIndex ?? 0];
       const matName = `${m?.name || ''} ${obj.name || ''}`;
-      if (!SKIN_MAT_REGEX.test(matName) || /face/i.test(matName)) continue;
+      if (!isBodySkinMaterial(matName) || /face/i.test(matName)) continue;
 
       const end = grp.start + grp.count;
       for (let i = grp.start; i < end; i += 3) {
@@ -859,7 +860,17 @@ const EXCLUDE_NON_BODY_MAT_REGEX =
 // Pure skirt/bottom meshes are excluded from legs & torso, while Onepiece/Dress/Coat upper bodies ARE valid torso & sleeve sources!
 const PURE_SKIRT_ONLY_REGEX = /skirt|pleat/i;
 const SKIRT_OR_LOOSE_BOTTOM_REGEX = /skirt|pleat|dress|gown|onepiece|one_piece|coat|trench|cloak|cape/i;
-const SKIN_MAT_REGEX = /body.*skin|skin.*body|_skin\b|^body$/i;
+export function isBodySkinMaterial(matName: string): boolean {
+  if (!matName) return false;
+  if (
+    /_FACE\b|_HAIR\b|_CLOTH\b|_EYE\b|face|mouth|eye|brow|lash|hair|twintail|ponytail|bangs|cloth|top|shirt|bottom|pant|skirt|shoe|boot|sock|tie|ribbon|accessory/i.test(
+      matName
+    )
+  ) {
+    return false;
+  }
+  return /(?:^|[_\-\s.])(?:skin|body)(?:[_\-\s.\d()]|$)|_(?:skin|body)\b/i.test(matName);
+}
 const TOPS_MAT_REGEX =
   /top|shirt|blouse|sweater|hoodie|tee|blazer|jacket|inner|cloth|outfit|bodice|uniform|sailor|onepiece|one_piece|dress|gown|coat|trench|cardigan|bolero|vest|outer|costume|garment/i;
 const EXCLUDE_BONE_REGEX = /hair|skirt|ribbon|cape|tail|tie|ear|wing/i;
@@ -1093,7 +1104,7 @@ function inspectVrmBodySkinCoverage(
     for (const grp of groups) {
       const mat = mats[grp.materialIndex ?? 0];
       const matName = `${obj.name || ''} ${mat?.name || ''}`;
-      if (!SKIN_MAT_REGEX.test(matName) || /face/i.test(matName)) continue;
+      if (!isBodySkinMaterial(matName) || /face/i.test(matName)) continue;
 
       const end = grp.start + grp.count;
       for (let tri = grp.start; tri + 2 < end; tri += 3) {
@@ -1167,10 +1178,10 @@ export function inspectVrmBodySkinCulling(
 ): VrmBodyCullingReport {
   if (!vrm?.humanoid || !avatarRoot) {
     return {
-      isPreCulled: false,
-      hasCulledTorso: false,
-      hasCulledThighs: false,
-      hasCulledArms: false,
+      isPreCulled: true,
+      hasCulledTorso: true,
+      hasCulledThighs: true,
+      hasCulledArms: true,
     };
   }
 
@@ -1224,7 +1235,7 @@ export function inspectVrmBodySkinCulling(
     for (const grp of groups) {
       const mat = mats[grp.materialIndex ?? 0];
       const matName = `${obj.name || ''} ${mat?.name || ''}`;
-      if (!SKIN_MAT_REGEX.test(matName) || /face/i.test(matName)) continue;
+      if (!isBodySkinMaterial(matName) || /face/i.test(matName)) continue;
       hasAnyBodySkinMesh = true;
 
       const end = grp.start + grp.count;
@@ -1269,12 +1280,12 @@ export function inspectVrmBodySkinCulling(
   });
 
   if (!hasAnyBodySkinMesh) {
-    // Non-standard / primitive VRM without Body_SKIN material naming — keep normal procedural flow
+    // Missing body skin mesh -> strictly treat as pre-culled so native clothing is preserved!
     return {
-      isPreCulled: false,
-      hasCulledTorso: false,
-      hasCulledThighs: false,
-      hasCulledArms: false,
+      isPreCulled: true,
+      hasCulledTorso: true,
+      hasCulledThighs: true,
+      hasCulledArms: true,
     };
   }
 
@@ -1284,16 +1295,18 @@ export function inspectVrmBodySkinCulling(
     return n;
   };
   const hasCulledTorso =
-    torsoTris < 120 ||
+    torsoTris < 150 ||
     pop8(torsoUpperMask) < 6 ||
     pop8(torsoLowerMask) < 6 ||
     torsoMaxF - torsoMinF < 0.62;
   const hasCulledThighs =
     pelvisTris < 40 || thighTris < 60 || thighMaxF - thighMinF < 0.50 || thighMinF > 0.30;
-  const hasCulledArms = armTris < 50 || armMaxF - armMinF < 0.50 || armMinF > 0.32;
+  const hasCulledArms = armTris < 60 || armMaxF - armMinF < 0.50 || armMinF > 0.32;
+
+  const isPreCulled = hasCulledTorso || hasCulledThighs || hasCulledArms;
 
   return {
-    isPreCulled: hasCulledTorso || hasCulledThighs,
+    isPreCulled,
     hasCulledTorso,
     hasCulledThighs,
     hasCulledArms,
@@ -1914,7 +1927,7 @@ function buildBodyClonedSkinnedGarment(params: {
       const matName = `${m?.name || ''} ${src.name || ''}`;
       if (EXCLUDE_NON_BODY_MAT_REGEX.test(matName)) continue;
 
-      const isSkin = SKIN_MAT_REGEX.test(matName);
+      const isSkin = isBodySkinMaterial(matName);
       const isTops = TOPS_MAT_REGEX.test(matName);
       const isPureSkirt = PURE_SKIRT_ONLY_REGEX.test(matName);
       const isSkirtOrLoose = SKIRT_OR_LOOSE_BOTTOM_REGEX.test(matName);
@@ -3158,7 +3171,7 @@ function addSculptedTorso(params: {
     skinOnly: true,
     outCoverage: torsoCoverage,
   });
-  if (!closedOuterwear && !preferSkinnedBody && clonedTorsoTris < 80) {
+  if (!closedOuterwear && clonedTorsoTris < 80) {
     clonedTorsoTris = buildBodyClonedSkinnedGarment({
       vrm,
       avatarRoot,
@@ -4117,6 +4130,16 @@ export function syncProceduralGarmentToVrm(params: SyncGarmentParams): void {
       hipsGroup.add(pareo);
     }
   }
+
+  // Ensure every procedural garment mesh, skinned mesh, and bone group is NEVER frustum-culled
+  avatarRoot.traverse((obj) => {
+    if (obj.userData?.[GARMENT_TAG] || obj.userData?.__zeta_procedural_garment__) {
+      obj.frustumCulled = false;
+      if (obj instanceof THREE.Mesh) {
+        obj.frustumCulled = false;
+      }
+    }
+  });
 }
 
 export interface GarmentFrameUpdateOptions {

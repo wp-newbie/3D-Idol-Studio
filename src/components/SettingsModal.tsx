@@ -90,10 +90,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     settings.useBuiltInKey ? '' : sanitizeApiKey(settings.apiKey)
   );
   const [showKey, setShowKey] = useState(false);
+  const [errorDismissed, setErrorDismissed] = useState(false);
   const [liveTextModels, setLiveTextModels] = useState<string[]>([]);
   const [liveTtsModels, setLiveTtsModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const builtInAvailable = hasBuiltInDefaultApiKey();
+
+  useEffect(() => {
+    setErrorDismissed(false);
+  }, [lastApiError]);
 
   useEffect(() => {
     if (isOpen) {
@@ -175,17 +180,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Scrollable Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* Real API Error Alert */}
-          {lastApiError && settings.enableGeminiCloud !== false && (
-            <div className="flex items-start gap-2.5 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
-              <div className="space-y-1">
-                <div className="font-semibold text-rose-200">
-                  Gemini API Request Failed — Please Fix Key or Model
+          {lastApiError && settings.enableGeminiCloud !== false && !errorDismissed && (
+            <div className="flex items-start justify-between gap-2.5 rounded-2xl border border-rose-500/45 bg-rose-950/50 p-3.5 text-xs text-rose-100">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+                <div className="space-y-1">
+                  <div className="font-semibold text-rose-200">
+                    Gemini API Request Failed — Please Fix Key or Model
+                  </div>
+                  <p className="font-mono text-[11px] leading-snug text-rose-200/90">
+                    {lastApiError}
+                  </p>
                 </div>
-                <p className="font-mono text-[11px] leading-snug text-rose-200/90">
-                  {lastApiError}
-                </p>
               </div>
+              <button
+                type="button"
+                onClick={() => setErrorDismissed(true)}
+                className="rounded-lg p-1 text-rose-300 hover:bg-white/10"
+                title="Dismiss warning"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
 

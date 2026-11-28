@@ -5227,7 +5227,7 @@ export const App: React.FC = () => {
         vaultModels={vaultModels}
         personaCount={studio.personas.length}
         connectionMode={connectionMode}
-        lastApiError={apiErrorToast}
+        lastApiError={studio.settings.enableGeminiCloud !== false ? apiErrorToast : null}
         isValidatingKey={isValidatingKey}
         validationMessage={validationMessage}
         hasAiStudioBridge={hasAiStudioBridge}

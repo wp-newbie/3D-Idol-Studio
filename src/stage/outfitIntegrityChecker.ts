@@ -53,6 +53,46 @@ const PROTECTED_SKIN_HAIR_REGEX =
   /(^|[_\-\s.])(skin|body|face|head|eye|iris|sclera|cornea|brow|eyebrow|lash|eyelash|mouth|teeth|tooth|tongue|blush|hair|twintail|ponytail|ahoge|bangs)([_\-\s.\d()]|$)|_(skin|face|eye|brow|lash|mouth|teeth|hair)\b/i;
 
 /**
+ * Hard Safety Guard: Asserts that:
+ * 1. The VRM has confirmed complete, unculled base skin underneath (torso & upper arms intact), AND
+ * 2. A replacement procedural garment mesh is actively mounted in the scene with visible === true and valid geometry.
+ *
+ * If either condition is false, native clothing meshes and material slots MUST NEVER be hidden!
+ */
+export function canSafelyHideNativeWardrobe(
+  avatarRoot: THREE.Object3D | null,
+  cullingReport: VrmBodyCullingReport | null | undefined
+): boolean {
+  if (!avatarRoot) return false;
+  // Rule 1: Skin must be complete & unculled across torso, arms, and thighs
+  if (
+    !cullingReport ||
+    cullingReport.isPreCulled ||
+    cullingReport.hasCulledTorso ||
+    cullingReport.hasCulledArms
+  ) {
+    return false;
+  }
+  // Rule 2: A replacement procedural garment mesh must be actively mounted with visible geometry
+  let hasMountedProceduralMesh = false;
+  avatarRoot.traverse((obj) => {
+    if (
+      obj instanceof THREE.Mesh &&
+      (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+    ) {
+      if (
+        obj.visible &&
+        obj.geometry?.attributes?.position &&
+        obj.geometry.attributes.position.count > 30
+      ) {
+        hasMountedProceduralMesh = true;
+      }
+    }
+  });
+  return hasMountedProceduralMesh;
+}
+
+/**
  * Head-to-Toe 7-Zone Outfit Integrity Checker & Auto-Repair Pipeline:
  *
  * Actively audits and auto-repairs all wardrobe layers across 7 anatomical zones:
@@ -123,28 +163,64 @@ export function auditOutfitIntegrity(context: OutfitIntegrityContext): OutfitInt
     // 1. Coplanar / Dual-Outfit Conflict Resolution
     // -------------------------------------------------------------------------
     if (isProceduralActive) {
-      if (isPreCulled) {
-        // Pre-culled model: hide any overlapping procedural 3D meshes so native clothing can be cleanly recolored
+      const safeToHideNative = canSafelyHideNativeWardrobe(avatarRoot, cullingReport);
+      if (!safeToHideNative) {
+        // Pre-culled model OR no valid replacement procedural mesh active:
+        // Hard Safety Lock: Enforce native clothing visibility to prevent hollow torso/arms!
+        let nativeRestored = 0;
+        avatarRoot.traverse((obj) => {
+          if (
+            obj instanceof THREE.Mesh &&
+            !obj.userData?.__zeta_procedural_garment__ &&
+            !obj.userData?.__zeta_garment_rig__
+          ) {
+            if (!obj.visible) {
+              obj.visible = true;
+              nativeRestored++;
+            }
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of mats) {
+              if (!m) continue;
+              if (!m.visible) {
+                m.visible = true;
+                const anyM = m as unknown as { transparent?: boolean; opacity?: number; depthWrite?: boolean };
+                anyM.transparent = false;
+                anyM.opacity = 1;
+                anyM.depthWrite = true;
+                nativeRestored++;
+              }
+            }
+          }
+        });
+
+        // Also hide any partial procedural 3D meshes so native clothing recolor is clean
         let proceduralGarmentsHidden = 0;
         avatarRoot.traverse((obj) => {
-          if (obj instanceof THREE.Mesh && obj.userData?.__zeta_procedural_garment__) {
-            if (obj.visible) {
+          if (
+            obj instanceof THREE.Mesh &&
+            (obj.userData?.__zeta_procedural_garment__ || obj.userData?.__zeta_garment_rig__)
+          ) {
+            if (obj.visible && isPreCulled) {
               obj.visible = false;
               proceduralGarmentsHidden++;
             }
           }
         });
-        if (proceduralGarmentsHidden > 0) {
+
+        if (nativeRestored > 0) {
           fallbackTriggered = true;
-          repairsApplied.push(`Pre-culled VRM: hid ${proceduralGarmentsHidden} procedural 3D mesh(es) to avoid dual-outfit Z-fighting`);
+          repairsApplied.push(`Hard safety lock: restored ${nativeRestored} native clothing mesh/material slot(s) to guarantee solid torso & arms`);
+          warnings.push('Pre-culled skin or missing procedural mesh detected — preserved native wardrobe');
           repairedZonesSet.add('chestStomach');
+          repairedZonesSet.add('upperArms');
+          repairedZonesSet.add('shoulders');
           repairedZonesSet.add('hipsGlutes');
         }
       } else {
-        // Intact model: hide conflicting native clothing slots so they do not Z-fight or bleed through
+        // Intact model AND valid procedural mesh active: hide conflicting native clothing slots so they do not Z-fight
         let nativeSlotsHidden = 0;
         avatarRoot.traverse((obj) => {
-          if (obj instanceof THREE.Mesh && !obj.userData?.__zeta_procedural_garment__) {
+          if (obj instanceof THREE.Mesh && !obj.userData?.__zeta_procedural_garment__ && !obj.userData?.__zeta_garment_rig__) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const hasSkin = mats.some(
               (m) => m && PROTECTED_SKIN_HAIR_REGEX.test(m.name || obj.name)
